@@ -30,7 +30,7 @@ import { emailContextText } from "./shared/gmail.js";
 import { housesAwaitingAddress } from "./shared/mentioned-houses.js";
 import { showingContextLines } from "./shared/showing.js";
 import { accessFor, accessLines } from "./shared/deal-access.js";
-import { assetOf, assetPhrase, isRuralLot, kindHold, normalizeAsset } from "./shared/asset-type.js";
+import { assetOf, assetPhrase, isRuralLot, kindHold, normalizeAsset, isLuxuryLot } from "./shared/asset-type.js";
 import { pricedByHand } from "./shared/underwrite-model.js";
 import { buyerFacts } from "./shared/underwrite-checks.js";
 import { blastNote, pickedRehabLevel } from "./shared/blast-text.js";
@@ -628,8 +628,24 @@ export function investorFacingPrice({ offer, room = null, settings = {} }) {
 const reasonWords = (r) =>
   r?.code ? (r.note ? `${PASS_REASON_LABEL[r.code]} — "${String(r.note).slice(0, 140)}"` : PASS_REASON_LABEL[r.code]) : "";
 
+// The lot a builder asks about (shared/lot-finder.js BUILDER_PLAYBOOK): size,
+// zoning, year built, whether it's a teardown. From the offer's subject record.
+function lotFactsOf(offer = {}) {
+  const s = offer?.snapshot?.subjectInfo || offer?.draft?.subjectInfo || {};
+  const lot = Number(s.lotSqft) || Number(offer?.subjectLotSqft) || 0;
+  const parts = [
+    lot > 0 ? `${lot.toLocaleString("en-US")} sqft lot` : "",
+    s.zoning ? `zoned ${s.zoning}` : "",
+    Number(s.yearBuilt) > 0 ? `house built ${s.yearBuilt}, coming down` : "an older house on it, coming down",
+    offer?.calc?.underwrite?.assignAt > 0 ? `our price is the price (${fmtMoney(offer.calc.underwrite.assignAt)} to a builder)` : "",
+  ].filter(Boolean);
+  return parts.join(", ");
+}
+
 const dealLine = (d) => {
-  const money = [
+  const money = d.lot
+    ? [d.price ? `price ${fmtMoney(d.price)}${d.agreed ? " (agreed with them; hold it, do not reopen it)" : ""}` : "price not set yet", `a teardown lot: ${d.lot}`].join(", ")
+    : [
     d.price ? `buyer price ${fmtMoney(d.price)}${d.agreed ? " (agreed with them; hold it, do not reopen it)" : ""}` : "price not set yet",
     d.arv ? `ARV ${fmtMoney(d.arv)}` : "",
     d.repairs ? `est. repairs ${fmtMoney(d.repairs)}` : "",
@@ -742,7 +758,9 @@ export function buildInvestorContext({ investor = {}, deals = [], invites = [], 
       linkStatus: link ? investorStatus(link.status) : (blasted ? "blasted" : null), blasted,
       price: n.price, agreed: Boolean(n.agreed), arv: n.arv, repairs: n.repairs, invite: room ? inviteByRoom.get(room.id) || null : null,
       offerId: offer.id, reason: reasonWords(link?.reason), kind: assetPhrase(assetOf(offer)),
-      rehabLevel: pickedRehabLevel(offer), ownWords: blastNote(room?.snapshot?.headline || "", 140),
+      // A luxury lot (shared/asset-type.js): the builder reads the lot, never a rehab level.
+      lot: isLuxuryLot(offer) ? lotFactsOf(offer) : null,
+      rehabLevel: isLuxuryLot(offer) ? "" : pickedRehabLevel(offer), ownWords: blastNote(room?.snapshot?.headline || "", 140),
       // What buyers ask before they decide — septic, garage, the street, an
       // easement — from the record, so the bot answers instead of guessing.
       facts: buyerFacts(offer).facts,
@@ -791,6 +809,8 @@ export function buildInvestorContext({ investor = {}, deals = [], invites = [], 
 
   return {
     text, amounts: allowed, forbiddenAmounts,
+    // A builder in front of a lot: the investor-side bot wears the builder playbook.
+    lane: [...linked, ...matching].some((d) => d.lot) ? "builder" : "",
     summary: {
       linkedDeals: linked.length, matchingDeals: matching.length, goneDeals: gone.length, invites: invites.length,
       fields: fields.length, history: history.length, buyboxEmpty: !profile.includes("\n"),

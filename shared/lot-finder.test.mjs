@@ -188,3 +188,7 @@ test("a house inside an enabled pocket, big and old enough, belongs to the lane;
   assert.match(h, /inside the Clyde Hill pocket \(34,000 sqft lot, built 1962\)/);
   assert.match(lotHold(null), /a homeowner the lot finder texted/);
 });
+
+test("no owner text says cash: we fund with hard money (Matt, 2026-09-28)", () => {
+  for (const t of [...OPEN_TEXTS, ...FOLLOW_TEXTS]) assert.doesNotMatch(t, /\bcash\b/i, t);
+});

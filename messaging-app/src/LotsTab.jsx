@@ -11,7 +11,7 @@
 
 import React, { useCallback, useEffect, useState } from "react";
 import { Loader2, Plus, Sparkles, Trash2 } from "lucide-react";
-import { normalizeLotFinder, normalizePocket, OWNER_STATUSES } from "@shared/lot-finder.js";
+import { normalizeLotFinder, normalizePocket, OWNER_STATUSES, OWNER_PLAYBOOK, BUILDER_PLAYBOOK } from "@shared/lot-finder.js";
 import { getLotFinder, getLotOwners, getLotBuilders, setLotOwnerStatus, suggestLotPocket, runLotFinder, patchSettings } from "./api.js";
 import { BTN, BTN_PRIMARY, ErrorBar, Pill } from "./ui.jsx";
 
@@ -151,6 +151,25 @@ export default function LotsTab() {
           {check("dryRun", "Dry run", "Counts the parcels and says who it would trace and text. Spends and writes nothing.")}
           {check("autoSend", "Texts send themselves", `Off: every text waits in the outbox for your Send.${sw.ownerSms ? "" : " The broker also needs OWNER_SMS_ENABLED before any owner text goes on its own."}`)}
         </div>
+        <div className="mt-3 grid gap-2 sm:grid-cols-3">
+          <label className="text-xs font-semibold text-slate-600">When an owner writes back
+            <select className={INPUT} value={f.bot} onChange={(e) => set({ bot: e.target.value })}>
+              <option value="draft">The bot drafts the reply, you send it</option>
+              <option value="send">The bot answers on its own (agent auto-send rules apply)</option>
+              <option value="off">No draft: the thread is yours</option>
+            </select>
+          </label>
+        </div>
+        <details className="mt-3 rounded-lg border border-slate-200 p-3">
+          <summary className="cursor-pointer text-xs font-semibold text-slate-700">How the bot talks to owners and builders</summary>
+          <p className="mt-2 text-xs text-slate-500">The bot already knows the method: no condition questions, the price band and the eight percent openly, privacy and certainty, a couple of months after closing; to a builder, the lot and the envelope, never ARV or rehab. Add your own words here and they ride along with it.</p>
+          <label className="mt-2 block text-xs font-semibold text-slate-600">Your words for owners (blank = the default below)
+            <textarea className={INPUT} rows={4} value={f.ownerPlaybook} placeholder={OWNER_PLAYBOOK.slice(0, 220) + "…"} onChange={(e) => set({ ownerPlaybook: e.target.value })} />
+          </label>
+          <label className="mt-2 block text-xs font-semibold text-slate-600">Your words for builders (blank = the default below)
+            <textarea className={INPUT} rows={3} value={f.builderPlaybook} placeholder={BUILDER_PLAYBOOK.slice(0, 220) + "…"} onChange={(e) => set({ builderPlaybook: e.target.value })} />
+          </label>
+        </details>
         <div className="mt-3 grid gap-2 sm:grid-cols-3">
           {num("dailyNew", "Owners texted per day", 0, 200)}
           {num("traceDailyCap", "Skip-trace lookups per day (about 10¢ each)", 0, 500)}

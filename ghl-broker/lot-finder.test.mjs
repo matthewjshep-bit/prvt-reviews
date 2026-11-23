@@ -141,8 +141,17 @@ test("with OWNER_SMS_ENABLED on too, the first text schedules itself, and a repl
     assert.equal(d.status, "scheduled");
     assert.ok(d.sendAt);
   } finally { delete process.env.OUTREACH_IMPORTS_ENABLED; delete process.env.OWNER_SMS_ENABLED; }
-  assert.match(handsOffReason({ lotOwner: true }), /homeowner on a luxury lot — yours to call/);
+  // The bot answers an owner with the owner playbook (reply-agent.js); it only
+  // hands the thread off when Autopilot → Lots has the bot off for owners.
+  assert.equal(handsOffReason({ lotOwner: true, laneBotOff: false }), "");
+  assert.match(handsOffReason({ lotOwner: true, laneBotOff: true }), /the bot is off for owners/);
   assert.equal(handsOffReason({ lotOwner: false, gatekeeper: false }), "");
+  const { decideAutoSend } = await import("./reply-agent.js");
+  const ok = { ok: true, flags: [] };
+  const cfg = { enabled: true, parties: { agent: { autoSend: { enabled: true, intents: ["question"] } } }, autoSend: { channels: ["sms"] } };
+  assert.equal(decideAutoSend({ gate: ok, party: "agent", intent: "question", config: cfg, sendsEnabled: true, lane: "owner", laneBot: "draft" }).code, "owner_lane");
+  assert.equal(decideAutoSend({ gate: ok, party: "agent", intent: "question", config: cfg, sendsEnabled: true, lane: "owner", laneBot: "send" }).send, true);
+  assert.equal(decideAutoSend({ gate: ok, party: "agent", intent: "question", config: cfg, sendsEnabled: true }).send, true);
 });
 
 test("switched on, it runs once a weekday morning and writes the cursor before it runs", async () => {

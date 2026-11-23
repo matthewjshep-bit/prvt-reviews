@@ -904,3 +904,28 @@ test("a check-in about something open sees our last three texts and is told not 
   assert.match(ctx, /OUR LAST TEXTS TO THEM, newest first: 1\) 3 days ago: "Any thoughts on our number for Corvid\?"\. Don't repeat a sentence or the opening of these\./);
   assert.doesNotMatch(buildUserContext({ party: "agent", contact: { name: "Wren" }, outbound: { kind: "agent_pulse", reason: "general", ourTexts: [{ text: "x", daysAgo: 1 }] } }), /OUR LAST TEXTS TO THEM, newest first: 1\)/);
 });
+
+// The luxury teardown lane (shared/lot-finder.js, 2026-11-23): a homeowner on a
+// lot talks to the agent-side bot wearing the owner playbook, a builder to the
+// investor-side bot with the lot in front of it.
+test("an owner on a lot gets the owner playbook, never the listing-agent one: no condition questions, no 'other fixers', the lot and what they need", () => {
+  const sys = buildSystemPrompt({ config: null, party: "agent", channel: "sms", lane: "owner" });
+  assert.match(sys, /HOMEOWNER on a large lot/);
+  assert.match(sys, /NEVER ask about the roof/);
+  assert.match(sys, /staying put after closing/);
+  assert.match(sys, /MATH FOR AN OWNER/);
+  assert.doesNotMatch(sys, /LISTING AGENT on a property/);
+  assert.doesNotMatch(sys, /anything else that needs work/i);
+  assert.doesNotMatch(sys, /condition, what work it needs/);
+  const agent = buildSystemPrompt({ config: null, party: "agent", channel: "sms" });
+  assert.match(agent, /LISTING AGENT on a property/);
+  assert.doesNotMatch(agent, /HOMEOWNER on a large lot/);
+});
+
+test("a builder in front of a lot is told it's a lot: envelope, zoning, what it backs to, never ARV or rehab", () => {
+  const sys = buildSystemPrompt({ config: null, party: "investor", channel: "sms", lane: "builder" });
+  assert.match(sys, /THIS DEAL IS A LOT, NOT A HOUSE/);
+  assert.match(sys, /building envelope/);
+  assert.match(sys, /VERIFY THEY BUILD/);
+  assert.doesNotMatch(buildSystemPrompt({ config: null, party: "investor", channel: "sms" }), /THIS DEAL IS A LOT/);
+});

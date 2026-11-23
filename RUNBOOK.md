@@ -467,13 +467,31 @@ the numbers before switching a pocket on.
    `OWNER_SMS_ENABLED` is set; otherwise it waits in the outbox with the
    reason on the row.
 
-**Replies.** A contact tagged `lot-owner` / `lot-pocket-*` is never answered by
-the bot (`handsOffReason`: "a homeowner on a luxury lot — yours to call"),
-never classified as an agent, never forced to agent by the offer book. The
-inbound writes `lot_owner_replied`, which ends their texts, and the Desk shows
-`call_lot_owner_replied` (score 98): call now, then again; talk about the lot
-and what they need, never the roof. "Worth way more than that" is a reply,
-not a dead lead.
+**Replies — the bot knows the lane** (Matt, 2026-11-23: "act/work accordingly").
+A contact tagged `lot-owner` / `lot-pocket-*` talks to the agent-side bot
+wearing the **owner playbook** (party `agent`, `partySource lot_owner`, lane
+`owner`; `OWNER_PLAYBOOK` in `shared/lot-finder.js`, Matt's own words added
+from Autopilot → Lots): a homeowner, not an agent; we work with builders and
+say so; only the lot and what they need, never the roof or the kitchen; the
+price band and the eight percent openly, the Zestimate line, a counter is a
+number not a no; privacy, certainty, a couple of months after closing; no
+"cash", no assign/fee words, no "other fixers". The listing-agent blocks that
+don't fit are left out of the system prompt (`buildSystemPrompt({ lane })`),
+the range-only float and the "a person prices it" line are off for them, and
+the agent instructions (buy box, focus rule) are replaced. **The reply waits
+for Matt** (`decideAutoSend` code `owner_lane`) unless `lotFinder.bot` is
+`send`; `off` hands the thread off with no draft. Every inbound from one writes
+`lot_owner_replied`, which ends the finder's texts, and the Desk shows
+`call_lot_owner_replied` (score 98): call now, then again. "Worth way more
+than that" is a reply, not a dead lead.
+
+A **builder** in front of a luxury-lot deal talks to the investor-side bot with
+the **builder playbook** (lane `builder`, set when a deal in their context is a
+lot: `buildInvestorContext`): the deal line reads "a teardown lot: N sqft,
+zoned X, house built YYYY, coming down" instead of ARV and rehab; the pitch is
+the envelope of what they just built; vacant-lot, backs-to and street questions
+are answered from the record or handed to a person; assignment, agent fee,
+earnest and dates are a person's. The investor auto-send rules apply as usual.
 
 **Disposition.** A builder imported here is a buyer who builds in that city,
 so a luxury-lot deal promoted in the pocket reaches them through the normal

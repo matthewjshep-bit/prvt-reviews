@@ -58,6 +58,12 @@ export const LOT_FINDER_DEFAULTS = Object.freeze({
   dailyNew: 10,                  // owners texted per day, per location
   traceDailyCap: 25,             // skip-trace lookups per day (money)
   followUpDays: 1,
+  // The bot's part once an owner writes back: "draft" writes the reply for Matt
+  // to send; "send" lets the agent-side auto-send rules apply; "off" leaves
+  // the thread to Matt with no draft at all.
+  bot: "draft",
+  ownerPlaybook: "",     // empty = OWNER_PLAYBOOK
+  builderPlaybook: "",   // empty = BUILDER_PLAYBOOK
   pockets: [],
 });
 
@@ -94,6 +100,9 @@ export function normalizeLotFinder(raw) {
     dailyNew: int(r.dailyNew, D.dailyNew, 0, 200),
     traceDailyCap: int(r.traceDailyCap, D.traceDailyCap, 0, 500),
     followUpDays: int(r.followUpDays, D.followUpDays, 0, 14),
+    bot: ["draft", "send", "off"].includes(r.bot) ? r.bot : D.bot,
+    ownerPlaybook: String(r.ownerPlaybook || "").trim().slice(0, 4000),
+    builderPlaybook: String(r.builderPlaybook || "").trim().slice(0, 4000),
     pockets,
   };
 }
@@ -208,14 +217,14 @@ export const reachable = (phones = []) => phones.filter((p) => p.type === "mobil
 // nobody filled never sends (shared/voice.js LEFTOVER_RX), and the house rules
 // hold: no dollar sign, one question, no "following up" (voiceFlags).
 export const OPEN_TEXTS = [
-  "Hi {first}, Matt Shepherd here. I work with builders in Washington and I'm looking at lots in your neighborhood. Lots like yours at {street} have been going in the {lo} to {hi} range, cash, no agent fees. Would you ever consider selling?",
-  "{first}, this is Matt, a local investor who works with builders. Not here to waste your time. Comparable lots near {street} have sold {lo} to {hi}, cash, no commissions. Would you consider selling, now or down the road?",
-  "Hi {first}, Matt Shepherd. I buy lots for builders in your area and {street} is the kind they look for. Similar ones have gone for {lo} to {hi}, cash and no agent fees, you pick the closing date. Any interest in selling?",
-  "Hey {first}, Matt here. I work with home builders in Washington. Lots like yours at {street} have been bringing {lo} to {hi} lately, cash, no realtor fees, and you'd stay as long as you need after closing. Worth a chat?",
-  "{first}, Matt Shepherd, local investor. I'm looking for a lot in your neighborhood for a builder I work with and {street} caught my eye. Similar lots have sold {lo} to {hi}, cash, no agent fees, no showings. Would you consider it?",
-  "Hi {first}, Matt here, I work with developers in the Seattle area. Not trying to waste your time. Lots like yours at {street} are going {lo} to {hi}, cash, no commissions. Is selling something you'd ever consider?",
-  "Hi {first}, this is Matt Shepherd. I help builders find lots and yours at {street} is the kind they're after. Recent sales nearby ran {lo} to {hi}, cash, no agent fees, close when it suits you. Open to talking?",
-  "{first}, Matt Shepherd here, local investor working with builders. Comparable lots to {street} have brought {lo} to {hi} lately, cash, no realtor fees, and a couple of months after closing to move if you need it. Worth a conversation?",
+  "Hi {first}, Matt Shepherd here. I work with builders in Washington and I'm looking at lots in your neighborhood. Lots like yours at {street} have been going in the {lo} to {hi} range, no agent fees, no showings. Would you ever consider selling?",
+  "{first}, this is Matt, a local investor who works with builders. Not here to waste your time. Comparable lots near {street} have sold {lo} to {hi}, no agent fees, no showings. Would you consider selling, now or down the road?",
+  "Hi {first}, Matt Shepherd. I buy lots for builders in your area and {street} is the kind they look for. Similar ones have gone for {lo} to {hi}, no agent fees, and you pick the closing date. Any interest in selling?",
+  "Hey {first}, Matt here. I work with home builders in Washington. Lots like yours at {street} have been bringing {lo} to {hi} lately, no agent fees, and you'd stay as long as you need after closing. Worth a chat?",
+  "{first}, Matt Shepherd, local investor. I'm looking for a lot in your neighborhood for a builder I work with and {street} caught my eye. Similar lots have sold {lo} to {hi}, no agent fees, no showings. Would you consider it?",
+  "Hi {first}, Matt here, I work with developers in the Seattle area. Not trying to waste your time. Lots like yours at {street} are going {lo} to {hi}, no agent fees, no showings. Is selling something you'd ever consider?",
+  "Hi {first}, this is Matt Shepherd. I help builders find lots and yours at {street} is the kind they're after. Recent sales nearby ran {lo} to {hi}, no agent fees, close when it suits you. Open to talking?",
+  "{first}, Matt Shepherd here, local investor working with builders. Comparable lots to {street} have brought {lo} to {hi} lately, no agent fees, and a couple of months after closing to move if you need it. Worth a conversation?",
 ];
 
 export const FOLLOW_TEXTS = [
@@ -442,3 +451,34 @@ export function lotHold(pocket = null, { lotSqft = 0, yearBuilt = 0, why = "" } 
   const where = why || (pocket?.name ? `inside the ${pocket.name} pocket` : "a homeowner the lot finder texted");
   return `${LOT_HOLD_PREFIX} — ${where}${facts ? ` (${facts})` : ""}: a lot for a builder, priced by the lot on the Luxury page, never flip math`;
 }
+
+/* ---------- how the bot talks in this lane ---------- */
+
+// The owner-side playbook, in the method's words. The agent-side bot wears
+// this instead of the listing-agent one when the contact is a homeowner the
+// lot finder texted (reply-agent.js: party agent, lane owner). Editable in
+// Autopilot → Lots; this is the default.
+export const OWNER_PLAYBOOK =
+  "WHO YOU ARE TALKING TO: a HOMEOWNER, not an agent. They own an older house on a large lot in a neighborhood where builders tear down and build new. " +
+  "We texted them first. They may be curious, wary, or offended; they are never a lead to be worked. Warm, plain, short.\n" +
+  "WHAT WE ARE: investors who work with home builders. Be transparent: we buy the lot for the land, a builder we work with builds on it, and we make money on the deal. Never pretend to be the builder, a neighbor, or a buyer who will live there.\n" +
+  "WHAT MATTERS: only two things — the lot (size, where it sits, interior street or main road, corner) and what the seller needs (timing, where they are going next, whether they need the money from this house for the next one). " +
+  "NEVER ask about the roof, the furnace, the kitchen, the condition, repairs, or photos of the inside. The house is coming down; its condition is worth nothing to us and asking reads as a flipper.\n" +
+  "WHAT WE OFFER THEM: privacy (no listing, no sign, no showings, the neighbors never know), speed and certainty (a clean sale with no financing contingency, a date they choose), and staying put after closing for a couple of months if they need it to buy their next house — builders need that time for survey, permits and plans anyway.\n" +
+  "PRICE: talk about it openly and early. Use the comps nearby and the price band from our first text. If OUR OFFERS has a number for their house, that is our number — never above it. Say what a sale costs them the other way: listing with an agent runs about eight percent in commissions and closing, so our number nets them about the same as listing, with none of the hassle. " +
+  "If they say the Zestimate is higher or lower, say it prices the house, not the lot, and in a neighborhood like theirs the lot is the value. " +
+  "If they say it's worth way more, don't argue: ask what number they have in mind and what they'd need to see, and let a person decide. A number from them is a counter, not a no.\n" +
+  "THE GOAL: a short phone call with a person on our side about the lot and what they need. Ask for it once, lightly; never promise a call at a time.\n" +
+  "NEVER: say cash or all cash (we fund with a hard money loan), say assign, wholesale, spread, fee or end buyer, ask for a listing agreement, offer to walk the house, or send a link. One question per text. No dollar signs; money in k or M.";
+
+// The builder-side playbook. The investor-side bot adds this when the deal in
+// front of them is a lot (reply-agent.js: party investor, lane builder).
+export const BUILDER_PLAYBOOK =
+  "THIS DEAL IS A LOT, NOT A HOUSE. The buyer is a BUILDER who tears down and builds new. Talk like a land seller: lot size, zoning, what it backs onto and fronts, interior street or main road, utilities, whether the house is occupied and when it will be empty, our price. " +
+  "NEVER say ARV, rehab, fixer, cosmetic, gut, scope of work, or anything about the condition of the house: the house is coming down.\n" +
+  "THE PITCH: it fits the building envelope of what they just built nearby — say so when the record shows a recent build of theirs with a similar lot. Our price is the price; a builder pays about what the lot is worth and there is no fee talk from us. " +
+  "If they ask whether it's a vacant lot, say there is an older house on it that comes down. If they ask what it backs to or about the street, answer from the record if it's there; otherwise say you'll find out, with needsHuman set.\n" +
+  "VERIFY THEY BUILD: if their last deal nearby reads like a remodel rather than a ground-up build, ask lightly whether they built new on it. A builder who only remodels is not this deal's buyer.\n" +
+  "ASSIGNMENT, AGENT FEES, EARNEST, CLOSING DATE: a person's call — say you'll confirm today and set needsHuman. Never promise a timeline the deal record doesn't show.";
+
+const MAX_PLAYBOOK = 4000;
