@@ -192,3 +192,25 @@ test("a house inside an enabled pocket, big and old enough, belongs to the lane;
 test("no owner text says cash: we fund with hard money (Matt, 2026-09-28)", () => {
   for (const t of [...OPEN_TEXTS, ...FOLLOW_TEXTS]) assert.doesNotMatch(t, /\bcash\b/i, t);
 });
+
+test("a 1990s house, a condo with a unit number, or a house as big as the new builds is not a teardown for the band", () => {
+  const s = suggestPocket({
+    newBuilds: [{ price: 5000000, lotSqft: 12000, sqft: 5000 }, { price: 6000000, lotSqft: 17000, sqft: 6500 }, { price: 2800000, lotSqft: 1100, sqft: 650 }],
+    teardowns: [
+      { address: "1 Old Ln", price: 2040000, lotSqft: 8712, sqft: 1564, yearBuilt: 1967 },
+      { address: "2 Old Ln", price: 2690000, lotSqft: 7222, sqft: 2053, yearBuilt: 1951 },
+      { address: "3 Newer Ln", price: 4690000, lotSqft: 23522, sqft: 3842, yearBuilt: 1997 },
+      { address: "4 Big Old Ln", price: 6800000, lotSqft: 18731, sqft: 6283, yearBuilt: 1985 },
+      { address: "706 99th Ave NE #716", price: 2150000, lotSqft: 35284, sqft: 2250, yearBuilt: 1980 },
+    ],
+  });
+  assert.equal(s.exits, 2, "the condo isn't an exit");
+  assert.equal(s.lotSqftMin, 10800, "10% of the houses' lots, less a tenth");
+  assert.equal(s.teardowns, 0, "the two real teardowns sit on lots under the band; the rest aren't teardowns");
+  const wide = suggestPocket({ newBuilds: [{ price: 5000000, lotSqft: 7000, sqft: 5000 }, { price: 6000000, lotSqft: 17000, sqft: 6500 }],
+    teardowns: [{ address: "1 Old Ln", price: 2040000, lotSqft: 8712, sqft: 1564, yearBuilt: 1967 }, { address: "2 Old Ln", price: 2690000, lotSqft: 7222, sqft: 2053, yearBuilt: 1951 }, { address: "3 Newer Ln", price: 4690000, lotSqft: 12000, sqft: 3842, yearBuilt: 1997 }] });
+  assert.equal(wide.teardowns, 2);
+  assert.equal(wide.yearBuiltMax, 1970);
+  assert.equal(wide.bandLo, 2050000);
+  assert.equal(wide.bandHi, 2700000);
+});

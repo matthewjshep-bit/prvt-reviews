@@ -310,6 +310,12 @@ const median = (xs) => {
  * newest teardown that sold inside that band, rounded up to the decade; the
  * price band is the middle half of what those teardowns sold for.
  */
+// The newest a house can be and still read as a teardown (the method's own
+// cutoff was 1980; nothing after it came down), and how small it has to be
+// against the new builds (a 3,000 sqft house beside 5,000–7,000 sqft exits).
+export const TEARDOWN_YEAR_MAX = 1990;
+export const TEARDOWN_HOUSE_RATIO_SUGGEST = 0.65;
+
 export function suggestPocket({ newBuilds = [], teardowns = [], lotSqftMin = 0 } = {}) {
   // Houses only: a condo or a townhome in the results (1,100 sqft "lots",
   // 650 sqft units) is not a builder's exit and would drag the band down.
@@ -318,11 +324,23 @@ export function suggestPocket({ newBuilds = [], teardowns = [], lotSqftMin = 0 }
   const p10 = nbLots.length ? nbLots[Math.floor(0.1 * (nbLots.length - 1))] : 0;
   const lo = nbLots.length ? Math.round(p10 * 0.9) : lotSqftMin || 0;
   const hi = nbLots.length ? Math.round(Math.max(...nbLots) * 1.1) : 0;
-  const inBand = teardowns.filter((t) => num(t.price) > 0 && (!lo || !num(t.lotSqft) || (num(t.lotSqft) >= lo && (!hi || num(t.lotSqft) <= hi))));
+  // A teardown is an OLD house, small against the new builds, on a lot in the
+  // band, with no unit number (a condo is never a teardown). Clyde Hill's first
+  // scan (2026-11-23) counted 1990s and 2000s houses and a condo with a
+  // 267,000 sqft "lot" until this said so.
+  const nbSqft = houses.map((b) => num(b.sqft)).filter((s) => s > 0).sort((a, b) => a - b);
+  const typicalNew = nbSqft.length ? nbSqft[Math.floor(nbSqft.length / 2)] : 0;
+  const inBand = teardowns.filter((t) => num(t.price) > 0
+    && !/#/.test(String(t.address || ""))
+    && num(t.yearBuilt) > 1800 && num(t.yearBuilt) <= TEARDOWN_YEAR_MAX
+    && (!typicalNew || !num(t.sqft) || num(t.sqft) <= typicalNew * TEARDOWN_HOUSE_RATIO_SUGGEST)
+    && (!lo || !num(t.lotSqft) || (num(t.lotSqft) >= lo && (!hi || num(t.lotSqft) <= hi))));
   const years = inBand.map((t) => num(t.yearBuilt)).filter((y) => y > 1800);
-  const cutoff = years.length ? Math.ceil(Math.max(...years) / 10) * 10 : 0;
+  const cutoff = years.length ? Math.min(TEARDOWN_YEAR_MAX, Math.ceil(Math.max(...years) / 10) * 10) : 0;
   const prices = inBand.map((t) => num(t.price)).filter((p) => p > 0).sort((a, b) => a - b);
-  const q = (f) => (prices.length ? prices[Math.min(prices.length - 1, Math.floor(f * (prices.length - 1)))] : 0);
+  // The middle half of what the teardowns sold for; with only a few sales,
+  // the whole range (a middle half of two numbers is one number).
+  const q = (f) => (!prices.length ? 0 : prices.length < 4 ? (f < 0.5 ? prices[0] : prices[prices.length - 1]) : prices[Math.min(prices.length - 1, Math.floor(f * (prices.length - 1)))]);
   const round25 = (n) => Math.round(n / 25000) * 25000;
   return {
     yearBuiltMax: cutoff || null,

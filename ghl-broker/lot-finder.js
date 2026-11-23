@@ -38,7 +38,7 @@ import { citySlug } from "./shared/dispo-regions.js";
 import {
   normalizeLotFinder, pocketReady, propertySearchBody, ownerFromProperty, pickToTrace, traceLookupBody, phonesFromTrace, reachable,
   lotOwnerText, nextOwnerStep, lotOwnerTags, LOT_OWNER_EVENTS, LOT_OWNER_PARTY, SEQUENCE_EVENT_TYPES,
-  suggestPocket, builderFromNewBuild, builderTags,
+  suggestPocket, builderFromNewBuild, builderTags, TEARDOWN_YEAR_MAX,
 } from "./shared/lot-finder.js";
 
 export const CURSOR_NAME = "lotFinder";
@@ -118,7 +118,7 @@ export async function scanPocketZillow({ lat, lng, radiusMiles = 1, apifyToken, 
   const rowsOf = async (url, what) => (await search(url, SEARCH_LIMIT, apifyToken, what)).map(normalizeRow).filter((r) => r.price > 0);
   const [nb, old] = await Promise.all([
     rowsOf(soldSearchUrl({ lat, lng, radiusMiles, monthsBack: 36, builtMin: year - NEW_BUILD_YEARS, priceMin: 1000000 }), "Zillow new-build lookup"),
-    rowsOf(soldSearchUrl({ lat, lng, radiusMiles, monthsBack: 24, builtMax: year - 20 }), "Zillow teardown lookup"),
+    rowsOf(soldSearchUrl({ lat, lng, radiusMiles, monthsBack: 24, builtMax: TEARDOWN_YEAR_MAX }), "Zillow teardown lookup"),
   ]);
   // Two detail batches, not one: the lookup takes a capped list, and with the
   // new builds first the older houses fell off the end (Clyde Hill, 2026-11-23:
@@ -131,7 +131,7 @@ export async function scanPocketZillow({ lat, lng, radiusMiles = 1, apifyToken, 
   const factsFor = (r) => detail.get(streetKey(r.address)) || null;
   const newBuilds = mergeFacts(nb, detail).filter((r) => (r.yearBuilt || 0) >= year - NEW_BUILD_YEARS && r.price >= 1000000)
     .map((r) => ({ address: r.address, price: r.price, saleDate: r.saleDate, lotSqft: r.lotSqft || 0, sqft: r.sqft || 0, yearBuilt: r.yearBuilt || 0, facts: factsFor(r) }));
-  const teardowns = mergeFacts(old, detail).filter((r) => r.yearBuilt > 0 && r.yearBuilt <= year - 20)
+  const teardowns = mergeFacts(old, detail).filter((r) => r.yearBuilt > 0 && r.yearBuilt <= TEARDOWN_YEAR_MAX)
     .map((r) => ({ address: r.address, price: r.price, saleDate: r.saleDate, lotSqft: r.lotSqft || 0, sqft: r.sqft || 0, yearBuilt: r.yearBuilt }));
   const suggest = suggestPocket({ newBuilds, teardowns });
   const debug = { newRows: nb.length, oldRows: old.length, oldWithYear: mergeFacts(old, detail).filter((r) => r.yearBuilt > 0).length, newBuilds: newBuilds.length, teardowns: teardowns.length };
