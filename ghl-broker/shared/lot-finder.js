@@ -311,8 +311,12 @@ const median = (xs) => {
  * price band is the middle half of what those teardowns sold for.
  */
 export function suggestPocket({ newBuilds = [], teardowns = [], lotSqftMin = 0 } = {}) {
-  const nbLots = newBuilds.map((b) => num(b.lotSqft)).filter((l) => l > 0);
-  const lo = nbLots.length ? Math.round(Math.min(...nbLots) * 0.9) : lotSqftMin || 0;
+  // Houses only: a condo or a townhome in the results (1,100 sqft "lots",
+  // 650 sqft units) is not a builder's exit and would drag the band down.
+  const houses = newBuilds.filter((b) => num(b.lotSqft) >= 3000 && (!num(b.sqft) || num(b.sqft) >= 1500));
+  const nbLots = houses.map((b) => num(b.lotSqft)).sort((a, b) => a - b);
+  const p10 = nbLots.length ? nbLots[Math.floor(0.1 * (nbLots.length - 1))] : 0;
+  const lo = nbLots.length ? Math.round(p10 * 0.9) : lotSqftMin || 0;
   const hi = nbLots.length ? Math.round(Math.max(...nbLots) * 1.1) : 0;
   const inBand = teardowns.filter((t) => num(t.price) > 0 && (!lo || !num(t.lotSqft) || (num(t.lotSqft) >= lo && (!hi || num(t.lotSqft) <= hi))));
   const years = inBand.map((t) => num(t.yearBuilt)).filter((y) => y > 1800);
@@ -325,9 +329,9 @@ export function suggestPocket({ newBuilds = [], teardowns = [], lotSqftMin = 0 }
     lotSqftMin: lo || null, lotSqftMax: hi || null,
     lotValue: Math.round(median(prices)) || null,
     bandLo: round25(q(0.25)) || null, bandHi: round25(q(0.75)) || null,
-    teardowns: inBand.length, exits: newBuilds.length,
-    exitLo: Math.round(Math.min(...newBuilds.map((b) => num(b.price)).filter((p) => p > 0))) || null,
-    exitHi: Math.round(Math.max(...newBuilds.map((b) => num(b.price)).filter((p) => p > 0))) || null,
+    teardowns: inBand.length, exits: houses.length,
+    exitLo: Math.round(Math.min(...houses.map((b) => num(b.price)).filter((p) => p > 0))) || null,
+    exitHi: Math.round(Math.max(...houses.map((b) => num(b.price)).filter((p) => p > 0))) || null,
   };
 }
 

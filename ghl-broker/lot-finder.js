@@ -120,14 +120,22 @@ export async function scanPocketZillow({ lat, lng, radiusMiles = 1, apifyToken, 
     rowsOf(soldSearchUrl({ lat, lng, radiusMiles, monthsBack: 36, builtMin: year - NEW_BUILD_YEARS, priceMin: 1000000 }), "Zillow new-build lookup"),
     rowsOf(soldSearchUrl({ lat, lng, radiusMiles, monthsBack: 24, builtMax: year - 20 }), "Zillow teardown lookup"),
   ]);
-  const detail = await facts([...nb, ...old].map((r) => r.address), apifyToken).catch(() => new Map());
+  // Two detail batches, not one: the lookup takes a capped list, and with the
+  // new builds first the older houses fell off the end (Clyde Hill, 2026-11-23:
+  // 40 new builds, 0 teardowns).
+  const [detailNew, detailOld] = await Promise.all([
+    facts(nb.map((r) => r.address), apifyToken).catch(() => new Map()),
+    facts(old.map((r) => r.address), apifyToken).catch(() => new Map()),
+  ]);
+  const detail = new Map([...detailNew, ...detailOld]);
   const factsFor = (r) => detail.get(streetKey(r.address)) || null;
   const newBuilds = mergeFacts(nb, detail).filter((r) => (r.yearBuilt || 0) >= year - NEW_BUILD_YEARS && r.price >= 1000000)
     .map((r) => ({ address: r.address, price: r.price, saleDate: r.saleDate, lotSqft: r.lotSqft || 0, sqft: r.sqft || 0, yearBuilt: r.yearBuilt || 0, facts: factsFor(r) }));
   const teardowns = mergeFacts(old, detail).filter((r) => r.yearBuilt > 0 && r.yearBuilt <= year - 20)
     .map((r) => ({ address: r.address, price: r.price, saleDate: r.saleDate, lotSqft: r.lotSqft || 0, sqft: r.sqft || 0, yearBuilt: r.yearBuilt }));
   const suggest = suggestPocket({ newBuilds, teardowns });
-  return { newBuilds, teardowns: teardowns.filter((t) => !suggest.lotSqftMin || t.lotSqft >= suggest.lotSqftMin), suggest };
+  const debug = { newRows: nb.length, oldRows: old.length, oldWithYear: mergeFacts(old, detail).filter((r) => r.yearBuilt > 0).length, newBuilds: newBuilds.length, teardowns: teardowns.length };
+  return { newBuilds, teardowns: teardowns.filter((t) => !suggest.lotSqftMin || t.lotSqft >= suggest.lotSqftMin), suggest, debug };
 }
 
 /* ---------- 2. the cell numbers ---------- */
