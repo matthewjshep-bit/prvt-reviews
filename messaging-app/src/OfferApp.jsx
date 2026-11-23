@@ -121,10 +121,11 @@ const NAV =
         { view: "activity", label: "Activity" },
         { view: "lessons", label: "Lessons" },
       ]
+    // Offers first: the page opens on the lane's offers (Matt, 2026-11-23).
     : APP_MODE === "luxury"
     ? [
-        { view: "lots", label: "Lots" },
         { view: "history", label: "Offers" },
+        { view: "lots", label: "Lots" },
         { view: "deals", label: "Deals" },
       ]
     : APP_MODE === "deals"
