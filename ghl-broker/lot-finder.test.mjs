@@ -275,3 +275,24 @@ test("a first text drafted while the switches were off schedules itself once the
     assert.ok(s.sendAt);
   } finally { delete process.env.OUTREACH_IMPORTS_ENABLED; delete process.env.OWNER_SMS_ENABLED; }
 });
+
+test("a lot owner's first text the carrier blocked goes once more in another clean variant, and never a third time", async () => {
+  const { queueLotOwnerRetry } = await import("./delivery-watch.js");
+  await store.upsertLotOwners("L12", [{ ownerKey: "rapi:9", pocketId: "clyde-hill", doc: { first: "Pat", last: "Example", house: { street: "9 Lakeview Ln", city: "Clyde Hill", state: "WA" }, person: true } }]);
+  await store.setLotOwner("L12", "rapi:9", { status: "imported", contactId: "c-9" });
+  const first = await store.createReplyDraft({ locationId: "L12", contactId: "c-9", contactName: "Pat Example", status: "sent", channel: "sms", jobId: null, inbound: "",
+    outbound: { kind: "lot_owner_open", step: "open", ownerKey: "rapi:9", pocketId: "clyde-hill", address: "9 Lakeview Ln" }, reply: "the text that bounced", sentText: "the text that bounced", intent: "lot_owner_open",
+    confidence: "high", needsHuman: false, humanReason: "", summary: "", propertyAddress: "9 Lakeview Ln", counterAmount: null, autoSendable: true, flags: [], party: "owner", partySource: "lot-finder",
+    matchedTags: { agent: [], investor: [] }, contextSummary: {}, offersInContext: 0, autoSend: { decided: false, reason: "" }, humanActive: null, actions: [], supersededIds: [], warnings: [], noteOnAutoSend: false, promptVersion: 1, autoSent: false, updatedAt: new Date(T0).toISOString() });
+  const saved = ON({ traceDailyCap: 0, dailyNew: 0, autoSend: true });
+  const r = await queueLotOwnerRetry({ store, locationId: "L12", saved, draft: first, now: T0 + 7200000, sendsEnabled: true });
+  assert.equal(r.queued, true);
+  assert.equal(r.scheduled, false, "the first waited for Matt's Send, so this one does");
+  const d = await store.getReplyDraft(r.draftId);
+  assert.equal(d.outbound.kind, "lot_owner_open");
+  assert.equal(d.outbound.retryOf, first.id);
+  assert.ok(d.reply.includes("9 Lakeview Ln") && d.reply.includes("Clyde Hill") && d.reply !== "the text that bounced", d.reply);
+  assert.doesNotMatch(d.reply, /investor/i);
+  const again = await queueLotOwnerRetry({ store, locationId: "L12", saved, draft: first, now: T0 + 9000000, sendsEnabled: true });
+  assert.match(again.skipped, /already retried once/);
+});

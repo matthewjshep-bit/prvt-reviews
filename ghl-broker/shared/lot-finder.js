@@ -30,7 +30,10 @@ export const LOT_OWNER_EVENTS = { queued: "lot_owner_queued", sent: "lot_owner_s
 // Anything that means they're talking to us, Matt is, or they don't want to
 // hear from us: the machine stops.
 export const STOP_TYPES = [LOT_OWNER_EVENTS.replied, "call_summary", "call_booked", "hand_reply", "unsubscribed", "drive_stopped"];
-export const SEQUENCE_EVENT_TYPES = ["import", LOT_OWNER_EVENTS.queued, LOT_OWNER_EVENTS.sent, ...STOP_TYPES];
+// A send the carrier bounced (shared/delivery.js send_failed) doesn't count as
+// the first text going: the follow-up clock waits for the retry.
+export const SEND_FAILED_TYPE = "send_failed";
+export const SEQUENCE_EVENT_TYPES = ["import", LOT_OWNER_EVENTS.queued, LOT_OWNER_EVENTS.sent, SEND_FAILED_TYPE, ...STOP_TYPES];
 export const OWNER_STATUSES = ["new", "tracing", "traced", "no_phone", "imported", "skipped", "do_not_contact"];
 export const MAX_POCKETS = 12;
 export const TEXT_MAX = 300;   // two segments is fine (the method's own texts run long)
@@ -288,7 +291,8 @@ export function nextOwnerStep({ events = [], followUpDays = 1, now = Date.now() 
   const stop = evs.find((e) => STOP_TYPES.includes(e.type) && at(e) >= at(imported));
   if (stop) return { stop: stop.type === "unsubscribed" ? "they opted out" : stop.type === "drive_stopped" ? "you stopped the bot on them" : "they answered — yours to call" };
   const queued = (step) => evs.filter((e) => e.type === LOT_OWNER_EVENTS.queued && e.data?.step === step);
-  const sent = (step) => evs.filter((e) => e.type === LOT_OWNER_EVENTS.sent && e.data?.step === step);
+  const failed = new Set(evs.filter((e) => e.type === SEND_FAILED_TYPE).map((e) => e.data?.draftId).filter(Boolean));
+  const sent = (step) => evs.filter((e) => e.type === LOT_OWNER_EVENTS.sent && e.data?.step === step && !failed.has(e.data?.draftId));
   if (!queued("open").length) return { step: "open", why: "first text" };
   const opened = sent("open")[0];
   if (!opened) return { step: null, why: "the first text hasn't gone yet" };

@@ -476,7 +476,14 @@ the numbers before switching a pocket on.
    one follow-up `followUpDays` after the first actually went
    (`lot_owner_sent`, never the draft); then nothing (`nextOwnerStep`). House
    rules hold: no dollar sign, one question, no "following up"; a text that
-   trips `voiceFlags` waits with the reason. A draft **schedules itself only
+   trips `voiceFlags` waits with the reason. Never "investor" and never
+   "local investor" (the first 49, 2026-11-23: every text with that phrase
+   was carrier-blocked, 15 of 16; every text without it delivered, 31 of 31);
+   `carrierFlags` holds any lot text with a we-buy-houses word. **A first text
+   the carrier blocked goes once more** in another clean variant
+   (`delivery-watch.js queueLotOwnerRetry`, claimed once per owner, never the
+   variant that bounced), scheduled the way the lane sends; the follow-up
+   clock runs from the retry's send, not the bounced one. A draft **schedules itself only
    when** `autoSend` is on, `CARD_SENDS_ENABLED` is set **and**
    `OWNER_SMS_ENABLED` is set; otherwise it waits in the outbox with the
    reason on the row.
