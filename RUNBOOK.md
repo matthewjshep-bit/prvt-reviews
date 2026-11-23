@@ -480,6 +480,14 @@ and each trace costs; a dry run spends nothing.
 **Logs and results** carry counts and keys (`rapi:<id>`, `nb:<slug>`), never a
 name, a phone or an address.
 
+**Its own page in GHL** (Matt, 2026-11-23: "keep track of Luxury separately"):
+add a Custom Menu Link to `https://<site>/luxury?location_id={{location.id}}`.
+It shows Lots (the finder), Offers and Deals narrowed to luxury lots
+(`isLuxuryLot`), and its New Offer starts on the lot analyzer. The Lots tab
+stays on Autopilot too. In GHL itself the tags segment the lane — `lot-owner`,
+`lot-pocket-*`, `builder`, `dispo-source-builder-exits` — for smart lists; a
+separate GHL pipeline waits until Matt creates one there, as with gatekeepers.
+
 ## Step 3 — messaging-app (frontend)
 
 Netlify auto-builds from `main` via the root `netlify.toml`. The API base
@@ -6755,6 +6763,7 @@ sent it, so it still comes back at once.
 |---|---|---|
 | Autopilot | `https://<site>/autopilot?location_id={{location.id}}` | Overview · Agents · Investors · Advanced settings |
 | Reports | `https://<site>/reports?location_id={{location.id}}` | Flow · Line · Follow-up · Activity · Lessons |
+| Luxury | `https://<site>/luxury?location_id={{location.id}}` | Lots · Offers (luxury lots only) · Deals (luxury lots only); New Offer starts as a luxury lot |
 
 Cross-app links go through `messaging-app/src/links.js`.
 

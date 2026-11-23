@@ -841,7 +841,7 @@ export default function NewOffer(props) {
   );
 }
 
-function OfferEditor({ settings, initialContactId, initialAddress = "", restore, onSettingsSaved, onOpenOffer, onOfferSaved, onDeal, openedNote = "", onSwap }) {
+function OfferEditor({ settings, initialContactId, initialAddress = "", restore, onSettingsSaved, onOpenOffer, onOfferSaved, onDeal, openedNote = "", onSwap, startLane = "" }) {
   // `restore` reopens a saved draft or an existing offer. Both carry a full
   // form snapshot (drafts in .draft, created offers in .snapshot) so the
   // comps workspace and rehab scope come back exactly as they were; very old
@@ -961,7 +961,9 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
   // what Zillow said on the subject record. Kept in the workspace so a draft
   // reopens on it; a pick already saved on the offer is the starting point.
   const [assetPick, setAssetPick] = useState(() => snap?.assetPick
-    || (fromOffer?.asset?.by === "you" ? { type: fromOffer.asset.type, land: fromOffer.asset.land || "", ...(fromOffer.asset.lane ? { lane: fromOffer.asset.lane } : {}) } : null));
+    || (fromOffer?.asset?.by === "you" ? { type: fromOffer.asset.type, land: fromOffer.asset.land || "", ...(fromOffer.asset.lane ? { lane: fromOffer.asset.lane } : {}) } : null)
+    // A new offer on the Luxury page starts as a luxury lot (OfferApp.jsx startLane).
+    || (!restore && startLane === "luxury" ? { type: "sfr", land: "", lane: "luxury" } : null));
   const zillowAsset = assetFromHomeType(subjectInfo?.homeType);
   const assetType = assetPick?.type || zillowAsset || "";
   // Which way it's priced (shared/underwrite-model.js): comps for a house,
@@ -970,7 +972,8 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
   // stays on comps until you switch it.
   const [uwModel, setUwModel] = useState(() => {
     const m = snap?.model || fromOffer?.calc?.model;
-    return m === "income" || m === "land" || m === "lot" ? m : "comps";
+    if (m === "income" || m === "land" || m === "lot") return m;
+    return !restore && startLane === "luxury" ? "lot" : "comps";
   });
   // The luxury teardown lane (shared/asset-type.js): a single-family house
   // priced by the lot (shared/lot-underwrite.js). Rides on the asset pick.

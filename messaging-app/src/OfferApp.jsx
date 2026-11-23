@@ -34,6 +34,7 @@ import AutopilotView from "./AutopilotView.jsx";
 import AgentsTab from "./AgentsTab.jsx";
 import GatekeepersTab from "./GatekeepersTab.jsx";
 import LotsTab from "./LotsTab.jsx";
+import { isLuxuryLot } from "@shared/asset-type.js";
 import OverviewTab from "./OverviewTab.jsx";
 import InvestorsTab from "./InvestorsTab.jsx";
 import LessonsTab from "./LessonsTab.jsx";
@@ -71,6 +72,9 @@ const APP_MODE = (() => {
     if (/^\/autopilot(\/|$)/.test(window.location.pathname)) return "autopilot";
     if (/^\/reports(\/|$)/.test(window.location.pathname)) return "reports";
     if (/^\/deals(\/|$)/.test(window.location.pathname)) return "deals";
+    // The luxury teardown lane, on its own page (Matt, 2026-11-23: "keep
+    // track of Luxury separately"): the lot finder, the lot offers, the lot deals.
+    if (/^\/luxury(\/|$)/.test(window.location.pathname)) return "luxury";
     if (/^\/dispo(\/|$)/.test(window.location.pathname)) return "dispo";
     // The companion window beside GHL (CompanionView.jsx).
     if (/^\/contact(\/|$)/.test(window.location.pathname)) return "companion";
@@ -113,6 +117,12 @@ const NAV =
         { view: "activity", label: "Activity" },
         { view: "lessons", label: "Lessons" },
       ]
+    : APP_MODE === "luxury"
+    ? [
+        { view: "lots", label: "Lots" },
+        { view: "history", label: "Offers" },
+        { view: "deals", label: "Deals" },
+      ]
     : APP_MODE === "deals"
     ? [{ view: "deals", label: "Deals" }]
     : APP_MODE === "companion"
@@ -128,6 +138,7 @@ const APP_TITLE =
   : APP_MODE === "autopilot" ? "Autopilot"
   : APP_MODE === "reports" ? "Reports"
   : APP_MODE === "deals" ? "Deals"
+  : APP_MODE === "luxury" ? "Luxury"
   : APP_MODE === "dispo" ? "Dispositions"
   : APP_MODE === "companion" ? "Companion"
   : "Offer Generator";
@@ -314,7 +325,7 @@ export default function OfferApp() {
           >
             <PanelRight size={15} aria-hidden="true" /> <span className="hidden sm:inline">Companion</span>
           </button>
-          {APP_MODE === "offers" && (
+          {(APP_MODE === "offers" || APP_MODE === "luxury") && (
             <button
               type="button"
               onClick={() => { setEditing(null); setView("new"); }}
@@ -353,15 +364,18 @@ export default function OfferApp() {
             // saved row, which is what the Offer details popout reads.
             onOfferSaved={(o) => setEditing((cur) => (cur && cur.id === o.id ? o : cur))}
             onDeal={() => setView("deals")}
+            // On the Luxury page a new offer starts as a luxury lot, priced by the lot.
+            startLane={APP_MODE === "luxury" ? "luxury" : ""}
           />
         )}
         {view === "history" && (
           <OffersHistory onEdit={(o) => { setEditing(o); setView("new"); }}
             onNew={(contactId) => { setEditing(null); setInitialContactId(contactId); setFormNonce((n) => n + 1); setView("new"); }}
-            onDeal={() => setView("deals")} settings={settings} />
+            onDeal={() => setView("deals")} settings={settings}
+            only={APP_MODE === "luxury" ? isLuxuryLot : null} />
         )}
         {view === "deals" && (
-          <DealsView settings={settings}
+          <DealsView settings={settings} only={APP_MODE === "luxury" ? isLuxuryLot : null}
             onEdit={APP_MODE === "deals"
               ? (o) => window.open(offerEditorUrl(o.id), "_blank")
               : (o) => { setEditing(o); setView("new"); }} />
