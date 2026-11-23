@@ -23,9 +23,10 @@ test("the finder ships off, dry, with texts waiting for Matt, and the settings c
   assert.deepEqual(normalizeLotFinder(once), once);
 });
 
-test("a pocket is ready only with a center and a price band to say", () => {
+test("a pocket is ready with a center and a name; the price band is for the reply", () => {
   assert.equal(pocketReady(pocket), true);
-  assert.equal(pocketReady({ ...pocket, bandLo: 0 }), false);
+  assert.equal(pocketReady({ ...pocket, bandLo: 0 }), true, "the band is for the reply, not the first text");
+  assert.equal(pocketReady({ ...pocket, name: "", address: "" }), false, "the text names the neighborhood");
   assert.equal(pocketReady({ ...pocket, lat: 0 }), false);
   assert.equal(pocketReady({ ...pocket, enabled: false }), false);
 });
@@ -84,21 +85,21 @@ test("only a cell that isn't on a do-not-call list, from someone who isn't a lit
   assert.deepEqual(phonesFromTrace({ hit: false }), []);
 });
 
-test("every first text names the street and the price band, with no blank left over, and drops the greeting when there's no first name", () => {
+test("every first text names the neighborhood and the street with no number and no blank left over, and drops the greeting when there's no first name", () => {
   for (let i = 0; i < OPEN_TEXTS.length; i++) {
-    const t = lotOwnerText({ step: "open", variant: i, first: "Pat", street: "9 Lakeview Ln, Clyde Hill, WA 98004", bandLo: 1900000, bandHi: 2300000 });
+    const t = lotOwnerText({ step: "open", variant: i, first: "Pat", street: "9 Lakeview Ln, Clyde Hill, WA 98004", pocket: "Clyde Hill" });
     assert.ok(t.includes("9 Lakeview Ln"), t);
-    assert.ok(t.includes("1.9M") && t.includes("2.3M"), t);
-    assert.doesNotMatch(t, /\$/, "no dollar signs in a text");
+    assert.ok(t.includes("Clyde Hill"), t);
     assert.ok(t.includes("Pat"), t);
-    assert.doesNotMatch(t, /[{}]/);
+    assert.doesNotMatch(t, /[{}$]/);
+    assert.doesNotMatch(t, /\d\.\d+M|\d+k\b/, "no number in the first text (Matt, 2026-11-23)");
     assert.ok(t.length <= 300, `${t.length} chars`);
+    assert.equal((t.match(/\?/g) || []).length, 1, "one question");
   }
-  const noName = lotOwnerText({ step: "open", variant: 1, first: "", street: "9 Lakeview Ln", bandLo: 950000, bandHi: 1200000 });
+  const noName = lotOwnerText({ step: "open", variant: 1, first: "", street: "9 Lakeview Ln", pocket: "Clyde Hill" });
   assert.doesNotMatch(noName, /[{}]/);
-  assert.match(noName, /^This is Matt/);
-  assert.ok(noName.includes("950k") && noName.includes("1.2M"));
-  assert.equal(lotOwnerText({ step: "open", first: "Pat", street: "9 Lakeview Ln", bandLo: 0, bandHi: 0 }), "", "no band, no text");
+  assert.match(noName, /^Hi, this is Matt/);
+  assert.equal(lotOwnerText({ step: "open", first: "Pat", street: "9 Lakeview Ln", pocket: "" }), "", "no neighborhood, no text");
   for (let i = 0; i < FOLLOW_TEXTS.length; i++) {
     const f = lotOwnerText({ step: "follow", variant: i, first: "Pat", street: "9 Lakeview Ln" });
     assert.doesNotMatch(f, /[{}]/);

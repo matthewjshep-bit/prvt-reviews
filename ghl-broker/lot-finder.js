@@ -350,7 +350,7 @@ export async function runLotFinder({ client, locationId, saved = {}, store = def
     const next = nextOwnerStep({ events, followUpDays: f.followUpDays, now });
     if (!next.step) { out.rows.push({ ownerKey: row.ownerKey, waiting: next.stop || next.why }); continue; }
     const d = row.doc || {};
-    const text = lotOwnerText({ step: next.step, variant: variantOf(row.ownerKey), first: d.first, street: d.house?.street, bandLo: pocket.bandLo, bandHi: pocket.bandHi });
+    const text = lotOwnerText({ step: next.step, variant: variantOf(row.ownerKey), first: d.first, street: d.house?.street, pocket: pocket.name, bandLo: pocket.bandLo, bandHi: pocket.bandHi });
     if (!text) { out.texts.skipped++; out.rows.push({ ownerKey: row.ownerKey, skipped: "nothing to say: no street or no band" }); continue; }
     if (dryRun) { out.texts.would++; out.rows.push({ ownerKey: row.ownerKey, would: next.step }); continue; }
 

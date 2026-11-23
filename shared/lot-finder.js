@@ -107,9 +107,9 @@ export function normalizeLotFinder(raw) {
   };
 }
 
-/** A pocket is ready when it has a center and a price band to say. */
+/** A pocket is ready when it has a center and a name to say (the price band is for the reply). */
 export function pocketReady(p) {
-  return Boolean(p && p.enabled !== false && p.lat && p.lng && p.bandLo > 0 && p.bandHi >= p.bandLo);
+  return Boolean(p && p.enabled !== false && p.lat && p.lng && (p.name || p.address));
 }
 
 /* ---------- the parcels ---------- */
@@ -217,14 +217,14 @@ export const reachable = (phones = []) => phones.filter((p) => p.type === "mobil
 // nobody filled never sends (shared/voice.js LEFTOVER_RX), and the house rules
 // hold: no dollar sign, one question, no "following up" (voiceFlags).
 export const OPEN_TEXTS = [
-  "Hi {first}, Matt Shepherd here. I work with builders in Washington and I'm looking at lots in your neighborhood. Lots like yours at {street} have been going in the {lo} to {hi} range, no agent fees, no showings. Would you ever consider selling?",
-  "{first}, this is Matt, a local investor who works with builders. Not here to waste your time. Comparable lots near {street} have sold {lo} to {hi}, no agent fees, no showings. Would you consider selling, now or down the road?",
-  "Hi {first}, Matt Shepherd. I buy lots for builders in your area and {street} is the kind they look for. Similar ones have gone for {lo} to {hi}, no agent fees, and you pick the closing date. Any interest in selling?",
-  "Hey {first}, Matt here. I work with home builders in Washington. Lots like yours at {street} have been bringing {lo} to {hi} lately, no agent fees, and you'd stay as long as you need after closing. Worth a chat?",
-  "{first}, Matt Shepherd, local investor. I'm looking for a lot in your neighborhood for a builder I work with and {street} caught my eye. Similar lots have sold {lo} to {hi}, no agent fees, no showings. Would you consider it?",
-  "Hi {first}, Matt here, I work with developers in the Seattle area. Not trying to waste your time. Lots like yours at {street} are going {lo} to {hi}, no agent fees, no showings. Is selling something you'd ever consider?",
-  "Hi {first}, this is Matt Shepherd. I help builders find lots and yours at {street} is the kind they're after. Recent sales nearby ran {lo} to {hi}, no agent fees, close when it suits you. Open to talking?",
-  "{first}, Matt Shepherd here, local investor working with builders. Comparable lots to {street} have brought {lo} to {hi} lately, no agent fees, and a couple of months after closing to move if you need it. Worth a conversation?",
+  "Hey {first}, Matt Shepherd here. I'm an investor and work with builders building new construction homes in {pocket}. Reaching out to see if you'd ever consider selling {street}. Open to a quick conversation about what we might be able to offer?",
+  "Hi {first}, this is Matt, a local investor. I work with builders putting up new homes in {pocket} and {street} is the kind of lot they look for. Would you ever consider selling it?",
+  "{first}, Matt Shepherd here. I work with the builders doing the new construction around {pocket}. Not here to waste your time: is selling {street} something you'd ever think about?",
+  "Hey {first}, Matt here, local investor working with builders in {pocket}. If you've ever thought about selling {street}, I'd like a quick conversation about what we could offer. Worth a chat?",
+  "Hi {first}, Matt Shepherd, investor working with new construction builders in {pocket}. Reaching out about {street}: would you consider selling, now or down the road?",
+  "{first}, this is Matt. I work with builders building new homes in {pocket} and I'm looking for a lot nearby. Any chance you'd consider selling {street}?",
+  "Hi {first}, Matt Shepherd here. I'm a local investor and I work with the builders behind the new construction in {pocket}. Would you be open to a conversation about selling {street}?",
+  "Hey {first}, Matt here. I work with builders doing new construction in {pocket} and {street} caught my eye. Would you ever consider selling, and if so could we talk about what we might offer?",
 ];
 
 export const FOLLOW_TEXTS = [
@@ -244,14 +244,16 @@ const kWords = (n) => {
  * "" when a blank has nothing to fill it (no street, no band). A missing first
  * name drops the greeting rather than leaving a hole.
  */
-export function lotOwnerText({ step = "open", variant = 0, first = "", street = "", bandLo = 0, bandHi = 0 } = {}) {
+export function lotOwnerText({ step = "open", variant = 0, first = "", street = "", pocket = "", bandLo = 0, bandHi = 0 } = {}) {
   const pool = step === "follow" ? FOLLOW_TEXTS : OPEN_TEXTS;
   const t = pool[Math.abs(Math.round(variant)) % pool.length];
   const st = clean(street).split(",")[0];
   if (!st) return "";
-  if (step !== "follow" && !(bandLo > 0 && bandHi >= bandLo)) return "";
+  // The pocket's name is the neighborhood in the text; no name, no text.
+  const pk = clean(pocket).replace(/\s+pocket$/i, "");
+  if (step !== "follow" && !pk) return "";
   const f = clean(first).split(" ")[0];
-  let out = t.replace(/\{street\}/g, st).replace(/\{lo\}/g, kWords(bandLo)).replace(/\{hi\}/g, kWords(bandHi));
+  let out = t.replace(/\{street\}/g, st).replace(/\{pocket\}/g, pk).replace(/\{lo\}/g, kWords(bandLo)).replace(/\{hi\}/g, kWords(bandHi));
   out = f ? out.replace(/\{first\}/g, f) : out.replace(/^\{first\},\s*/, "").replace(/^(Hi|Hey) \{first\},\s*/, "$1, ").replace(/\{first\}/g, "");
   out = out.replace(/^Hi, (this|Matt)/, "Hi, $1").replace(/^([a-z])/, (m) => m.toUpperCase());
   return out.slice(0, TEXT_MAX);
@@ -488,7 +490,7 @@ export const OWNER_PLAYBOOK =
   "WHAT MATTERS: only two things — the lot (size, where it sits, interior street or main road, corner) and what the seller needs (timing, where they are going next, whether they need the money from this house for the next one). " +
   "NEVER ask about the roof, the furnace, the kitchen, the condition, repairs, or photos of the inside. The house is coming down; its condition is worth nothing to us and asking reads as a flipper.\n" +
   "WHAT WE OFFER THEM: privacy (no listing, no sign, no showings, the neighbors never know), speed and certainty (a clean sale with no financing contingency, a date they choose), and staying put after closing for a couple of months if they need it to buy their next house — builders need that time for survey, permits and plans anyway.\n" +
-  "PRICE: talk about it openly and early. Use the comps nearby and the price band from our first text. If OUR OFFERS has a number for their house, that is our number — never above it. Say what a sale costs them the other way: listing with an agent runs about eight percent in commissions and closing, so our number nets them about the same as listing, with none of the hassle. " +
+  "PRICE: talk about it openly and early, with the comps for a lot THEIR size (the pocket's sold teardowns), never one band for the whole neighborhood. If OUR OFFERS has a number for their house, that is our number — never above it. Say what a sale costs them the other way: listing with an agent runs about eight percent in commissions and closing, so our number nets them about the same as listing, with none of the hassle. " +
   "If they say the Zestimate is higher or lower, say it prices the house, not the lot, and in a neighborhood like theirs the lot is the value. " +
   "If they say it's worth way more, don't argue: ask what number they have in mind and what they'd need to see, and let a person decide. A number from them is a counter, not a no.\n" +
   "THE GOAL: a short phone call with a person on our side about the lot and what they need. Ask for it once, lightly; never promise a call at a time.\n" +
