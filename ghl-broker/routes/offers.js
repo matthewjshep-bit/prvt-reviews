@@ -162,9 +162,10 @@ import { syncAgentCard } from "../tier-check.js";
 import { startCallIntake, listCallJobs } from "../call-intake.js";
 import { dealToQuery } from "../dispo.js";
 import { normalizeBuybox, buyboxIsEmpty, matchBuybox } from "../shared/buybox.js";
-import { normalizeAsset, assetFromSnapshot, assetOf, assetLabel } from "../shared/asset-type.js";
+import { normalizeAsset, assetFromSnapshot, assetOf, assetLabel, goesToBuilders } from "../shared/asset-type.js";
 import { DEAL_SENT_TYPES, sentTo } from "../shared/buyer-score.js";
 import { buildUnderwriteCalc, underwriteModel } from "../shared/underwrite-model.js";
+import { luxuryLaneFor } from "../auto-underwrite.js";
 import { recordEvent, recordEvents, learnFacts, ensureProfile } from "../contact-record.js";
 import { FACT_KEYS, eventFromLedgerLine, parseHistoryLine, ledgerEventType, propertyDossier } from "../shared/contact-record.js";
 import { issueDataroomInvite } from "../dataroom.js";
@@ -881,7 +882,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // characters; PUT keeps the stored value wherever the form sent a blank.
   // `?reveal=1` returns them only for a location that has a location key
   // configured (and therefore presented one to get this far).
-  const SECRET_FIELDS = ["aiApiKey", "apifyToken", "brickedApiKey", "compsApiKey", "rentcastApiKey", "googleApiKey", "captureToken", "githubToken", "slackBotToken"];
+  const SECRET_FIELDS = ["aiApiKey", "apifyToken", "brickedApiKey", "compsApiKey", "rentcastApiKey", "googleApiKey", "captureToken", "githubToken", "slackBotToken", "tracerfyApiKey"];
   const locationHasKey = (locationId) => {
     try { return Boolean(JSON.parse(process.env.GHL_LOCATION_KEYS || "{}")[locationId]); } catch { return false; }
   };
@@ -933,7 +934,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // chart saving one field would otherwise carry its copy of everything
   // else over a Setup form saved in between — or the form over the chart.
   // Arrays replace; objects merge. Only these sections, never conversationAi.
-  const PATCHABLE = ["outreachAutopilot", "dispoAutopilot"];
+  const PATCHABLE = ["outreachAutopilot", "dispoAutopilot", "lotFinder"];
   const isPlain = (v) => v && typeof v === "object" && !Array.isArray(v);
   const mergeInto = (base, patch) => {
     const out = isPlain(base) ? { ...base } : {};
@@ -2361,7 +2362,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // what Zillow said on this underwrite. Stored, not only derived, because
     // the lean list rows never carry the snapshot it is read from.
     const picked = body.asset ? normalizeAsset({ ...body.asset, by: "you", at: new Date().toISOString() }) : null;
-    const asset = picked
+    let asset = picked
       || (existing?.asset?.by === "you" ? normalizeAsset(existing.asset) : null)
       || assetFromSnapshot({ snapshot })
       || normalizeAsset(existing?.asset);
@@ -2381,6 +2382,16 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
 
     // 2. Calculate.
     const saved = await store.getOfferSettings(locationId);
+    // The luxury lane (shared/lot-finder.js, 2026-11-23): an offer on a homeowner
+    // the lot finder texted, or on a house inside one of the pockets, carries
+    // the lane whoever made it, so the Luxury page lists every one. The lane
+    // only ever goes onto a house (normalizeAsset keeps it for sfr alone).
+    if (!asset?.lane && (!asset || asset.type === "sfr")) {
+      const info = snapshot?.subjectInfo || {};
+      const sub = snapshot?.comps?.result?.subject || snapshot?.subject || {};
+      const lane = luxuryLaneFor({ saved, contact, lat: sub.lat, lng: sub.lng, lotSqft: info.lotSqft, yearBuilt: info.yearBuilt });
+      if (lane) asset = normalizeAsset({ ...(asset || { type: "sfr", by: "underwrite" }), lane: "luxury", at: new Date().toISOString() });
+    }
     // An income or land offer (shared/underwrite-model.js) is priced by its
     // own engine from the deal the editor sent; a house by comps, as always.
     // A revision that names no model — "Re-quote at N", a counter applied
@@ -2523,7 +2534,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       scope,
       snapshot,
       calc,
-      // How it was priced: "income" or "land", absent for comps. On the lean
+      // How it was priced: "income", "land" or "lot", absent for comps. On the lean
       // row so the machines that re-price houses can see to leave it alone.
       underwriteModel: model === "comps" ? undefined : model,
       // What the buyer-view checks did to this offer, compact for lean rows
@@ -3634,7 +3645,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const m = await dispoDeps.matchForDeal(locationId, offer, { exclude: "blasted" });
       // Each pick carries how to reach them (a text, or an email with no phone).
       const picked = m.results || [];
-      const where = m.target?.asset?.type === "manufactured" ? "who buy mobile homes" : m.target?.asset?.type === "land" ? "who build" : "who buy in the area";
+      const where = m.target?.asset?.type === "manufactured" ? "who buy mobile homes" : goesToBuilders(m.target?.asset) ? "who build" : "who buy in the area";
       if (!picked.length) { console.log(`auto-blast: no buyers fit ${offer.address} (nobody ${where} is left)`); return; }
       // The deal is minted before its fee is typed in (7034 S K St went out
       // at the default 30k fee four seconds after promote). The first text
@@ -4329,7 +4340,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const type = String(req.body?.type || "").trim();
       const before = { ...offer };
       if (type) {
-        const picked = normalizeAsset({ type, land: req.body?.land, by: "you", at: ts });
+        const picked = normalizeAsset({ type, land: req.body?.land, lane: req.body?.lane, by: "you", at: ts });
         if (!picked) return res.status(400).json({ error: "type must be sfr, multi_family, manufactured, commercial or land" });
         offer.asset = picked;
       } else {

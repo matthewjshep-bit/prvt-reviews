@@ -7,6 +7,7 @@
 // who knows they are an investor. Pure.
 
 import { INTENTS, INTENT_GLOSS, PARTY_LABEL, CONFIDENCES, PASS_REASONS, PASS_REASON_GLOSS, DEAL_SIGNALS, writeUpTermsText, CONVERSATION_AI_DEFAULTS } from "./shared/conversation-ai.js";
+import { OWNER_PLAYBOOK, BUILDER_PLAYBOOK } from "./shared/lot-finder.js";
 import { BUYER_AGENT_RULE } from "./shared/partner-terms.js";
 import { heldInPlainWords } from "./shared/held-underwrites.js";
 import { RSVP_SIGNALS } from "./shared/showing.js";
@@ -26,6 +27,9 @@ const LENGTH_RULE = {
 };
 
 const WHO = {
+  owner:
+    "The person texting you is a HOMEOWNER on a large lot in a neighborhood where builders tear down and build new. We texted them first, " +
+    "about buying their lot for a builder we work with. There is no agent. They care about privacy, a fair number, certainty, and their own timing.",
   agent:
     "The person texting you is the LISTING AGENT on a property you have made, or may make, a cash offer on. " +
     "They represent the seller. They care about a clean close, a serious buyer, and not wasting their time.",
@@ -289,9 +293,15 @@ const CLOSING =
 /**
  * buildSystemPrompt({ config, party, channel }) → string
  */
-export function buildSystemPrompt({ config, party = "agent", channel = "sms" } = {}) {
+export function buildSystemPrompt({ config, party = "agent", channel = "sms", lane = "" } = {}) {
   const persona = config?.persona || {};
   const playbook = config?.parties?.[party] || {};
+  // The luxury teardown lane (shared/lot-finder.js): a homeowner on a lot talks
+  // to the agent-side bot wearing the owner playbook; a builder talks to the
+  // investor-side bot with the lot in front of it. The blocks below that only
+  // make sense for a listing agent on a flip are left out for an owner.
+  const owner = party === "agent" && lane === "owner";
+  const builder = party === "investor" && lane === "builder";
   const who = persona.name ? persona.name : "a real-estate investor";
   const role = persona.role ? ` — ${persona.role}` : " (a cash buyer who makes offers on listed homes and sells the deals to other investors)";
   const medium = channel === "email" ? "email replies" : "text-message replies";
@@ -299,8 +309,10 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
 
   parts.push(
     `You write ${medium} as ${who}${role}. You are answering in the first person, as that person. ` +
-    `${WHO[party] || WHO.unknown}`
+    `${owner ? WHO.owner : WHO[party] || WHO.unknown}`
   );
+  if (owner) parts.push(OWNER_PLAYBOOK);
+  if (builder) parts.push(BUILDER_PLAYBOOK);
 
   const style = config?.style || {};
   const voice = [
@@ -354,13 +366,18 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
     "if it were yesterday, and never anything that would read as surveillance or as a script."
   );
   if (CONTINUITY[party]) parts.push(CONTINUITY[party]);
-  if (party === "agent") parts.push(OFF_MARKET_AGENT, AGENT_BROUGHT, NEXT_ONE_AGENT);
+  if (party === "agent" && !owner) parts.push(OFF_MARKET_AGENT, AGENT_BROUGHT, NEXT_ONE_AGENT);
   parts.push(COMMITMENTS[party] || COMMITMENTS.unknown);
   // The bot never books, asks for or promises a call (Matt, 2026-11-10,
   // shared/call-words.js). The calendar's BOOKING block that used to be here
   // is retired with it; the gate behind this rule is callWordsFlags.
   parts.push(NO_CALL_RULE);
-  if (party === "agent") {
+  if (owner) {
+    parts.push(
+      "MATH FOR AN OWNER: our number is what the lot is worth to a builder, less what it would cost them to sell the other way (about eight percent: two commissions and closing). " +
+      "Say that plainly when asked, in k or M with no dollar signs, from the figures in OUR OFFERS; never a figure for what a builder pays us or what we make."
+    );
+  } else if (party === "agent") {
     parts.push(playbook.showMath
       // Matt, 2026-09-17: show our work. 2026-10-07: "we usually use the
       // 70-75% ARV − rehab number, but I want them to know what we base it
@@ -452,13 +469,15 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
       "yours to settle: answer the terms you have, and say you will confirm the rest today, with needsHuman set."
     );
   }
-  if (party === "agent") {
+  if (party === "agent" && !owner) {
     // Matt, 2026-11-04: we work with buyer's agents — the agent who brings us
     // a deal often represents us. An offer to represent us was held for him
     // as "partner terms"; it's a yes, and the bot gives it (shared/partner-terms.js).
     parts.push(BUYER_AGENT_RULE);
   }
-  if (party === "agent") {
+  if (owner) {
+    parts.push("WE PASSED: when the offer book marks their lot \"we passed on it\", we walked away from it. Say so once, warmly and plainly, never chase it, never restate a number, and never ask them for other houses.");
+  } else if (party === "agent") {
     // Matt, 2026-09-22 (Joseph Brazen, Medina): an offer marked "we passed"
     // is our decision to walk. The bot had been asking whether the seller
     // would come closer and promising a number by the afternoon.
@@ -521,7 +540,12 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
       "and zeros when there is nothing new. Never restate what is already known."
     );
   }
-  if (party === "agent") {
+  if (owner) {
+    parts.push(
+      "DETAILS: anything NEW the owner tells you goes under `propertyDetails` — the lot (size, corner, main road, what it backs to), what they need to get (dollars), their timeline, " +
+      "whether they live there and where they're going next. Never condition, never repairs: those are not asked and not filed. Ask for ONE missing thing per reply, the lot or the timing first."
+    );
+  } else if (party === "agent") {
     parts.push(
       "DETAILS: anything NEW the agent tells you about the property in this message goes under `propertyDetails` — " +
       "condition, what work it needs, what the seller needs to get (dollars), the seller's timeline, whether it's " +

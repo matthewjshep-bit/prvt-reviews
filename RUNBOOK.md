@@ -354,6 +354,170 @@ boot. Tables from the pre-overhaul card-studio era are left untouched; the file
 ends with a commented `drop` block to run manually when that history is no
 longer needed.
 
+## Luxury lots — a teardown priced for a builder (2026-11-23)
+
+The fourth way to price an offer, beside comps, income and land
+(`shared/underwrite-model.js`). In a high-end pocket builders buy old houses on
+big lots, tear them down and build $3M+ homes. Lots are scarce, so a builder
+pays close to full value off-market. The seller would pay about 8% to list. We
+offer the lot value less that, so they net the same with no showings, and a
+builder takes the contract at about the lot value. The spread is the seller's
+avoided selling costs.
+
+- **Pick it:** the editor's Property type row has a **Luxury lot** toggle on
+  Single family (the Deals modal has the same checkbox). It sets
+  `asset.lane = "luxury"` on the offer and prices by the `lot` model
+  (`shared/lot-underwrite.js`). Still a single-family house to every feed, so
+  the lane is on the asset, not a type of its own.
+- **The math:** lot value = the median sold price of the teardowns you enter
+  (same pocket, lot in the band, built before the cutoff). Offer = lot value ×
+  (1 − selling costs). A builder's agent fee, when there is one, comes out of
+  the spread, not the offer. A spread under the minimum ($75k default) doesn't
+  price; lower the minimum or pass.
+- **Warnings, not blocks:** a house big or new enough that a remodel might
+  compete, a lot outside the comps' band, a main road or corner, already
+  listed with price cuts.
+- **The letter** shows lot value and the selling costs the seller keeps, never
+  the spread or the assign price. The float, SendModal and agent page show no
+  math on it (`offerMath` is null), as for land.
+- **Buyers:** a luxury lot goes to the buyers who build, like land
+  (`goesToBuilders` in `shared/asset-type.js`): a buy box that says land, or
+  the new-construction tag. The blast text reads "teardown lot" with the lot
+  and the year built, no ARV or rehab. The pre-contract check warns when the
+  price is above the lot value.
+- **Hand-priced**, so the counter band, the requote and the auto-underwrite
+  leave it alone (`pricedByHand`). Nothing sends on its own. Washington: REET
+  is the seller's either way and creates no spread; the 8% is commission plus
+  non-REET closing.
+
+Built the same day: the lot finder below (pockets, parcels, skip trace, owner
+texts behind `OWNER_SMS_ENABLED`, and the builders who buy there).
+
+**Every luxury offer runs through the Luxury page** (Matt, 2026-11-23). A house
+belongs to the lane when its contact is a homeowner the lot finder texted
+(tag `lot-owner` / `lot-pocket-*`), or when it sits inside an enabled pocket,
+big and old enough (`pocketFor` in `shared/lot-finder.js`; `luxuryLaneFor` in
+`ghl-broker/auto-underwrite.js`). Then:
+- the auto-underwrite holds it before comps or a photo scan are bought, with a
+  `luxury lot — …` reason (`lotHold`) and the lane stamped on the draft, so no
+  flip math ever runs on it, not even a fill run;
+- the nightly held sweep leaves it as yours (`triageHeldUnderwrite` → `yours`):
+  never passed, never a read asked of the agent;
+- any save of an offer on such a house (the editor, a re-quote) stamps
+  `asset.lane = "luxury"` whoever made it, so the Luxury page's Offers and
+  Deals list every one and the lot analyzer opens it.
+
+## The lot finder — parcels → skip trace → owner texts, and the builders who buy there (2026-11-23)
+
+Autopilot → **Lots**. The luxury teardown lane's front end, on the Gatekeepers
+pattern: its own tables, its own tags, a daily job gated like the conversation
+audit, drafts that wait for Matt, and a reply the bot never answers. Matt:
+"automate this entire thing from finding properties to skiptrace to sending
+text", on the acquisition side and the disposition side. Rules in
+`shared/lot-finder.js`; the day in `ghl-broker/lot-finder.js`; API
+`/api/lot-finder` (`routes/lot-finder.js`); settings in `settings.lotFinder`
+(saved through PATCH `/api/offers/settings`).
+
+**A pocket** is a circle around an address: lots at least `lotSqftMin` (10,000 sqft to
+start; Suggest sets the real band off the builders' lots), built before `yearBuiltMax` (1980), owned `yearsOwnedMin` years (5),
+and the price band the first text names (`bandLo`–`bandHi`). **Suggest from
+Zillow** fills it from two sold searches through the Apify scraper
+(`scanPocketZillow`): the new builds that sold nearby (built in the last 3
+years, over $1M: the builders' exits, with their lots) and the older houses
+that sold in the same box; the lot band is the new builds' lots, the cutoff
+the newest teardown that sold inside it rounded up to the decade, the price
+band the middle half of what those teardowns went for (`suggestPocket`). Check
+the numbers before switching a pocket on.
+
+**Each weekday at 10am** (`maybeRunLotFinder`, cursor `lotFinder`, stale retry,
+4 tries), for every pocket that's on:
+
+1. **Parcels** (weekly per pocket, cursor `lotFinderPulls`): the property-data
+   API's PropertySearch (the comps key, `compsApiKey`) with
+   `property_type SFR, year_built_max, lot_size_min, years_owned_min` inside
+   the circle → `lot_owners` rows (owner of record, mailing address, year
+   built, lot, last sale). A re-pull never undoes a trace or an import.
+2. **Builders** (weekly, same pass, needs the Apify token): the new builds
+   that sold → `lot_builders` rows: the exit price and date, the lot, the lot
+   buy before it off the page's sale history (`salesFromDetail`: the sale a
+   year or more earlier and well under the exit), the builder the description
+   names (`builderName`) and the listing agent on the page (`zillowAgentFrom`).
+3. **Skip trace** (`traceDailyCap` a day, default 25, never on a dry run):
+   Tracerfy's instant lookup (`TRACERFY_API_KEY`, or `tracerfyApiKey` in
+   Settings; about 5 credits = 10¢ a hit, a miss free), a person by name, an
+   entity by the address. Kept: cells only, not on a do-not-call list, from
+   someone who isn't a litigator (`reachable`). Everything else is
+   `no_phone` with the reason.
+4. **Into GHL** (`dailyNew` owners a day): tags `lot-owner`,
+   `lot-pocket-<id>`; the builders tagged `investor`, `builder`,
+   `dispo-type-new-construction`, `dispo-source-builder-exits`,
+   `lot-pocket-<id>` and `dispo-city-<city>`, reached through the listing
+   agent until someone finds the builder's own number (the method's P1/P2;
+   P3, the LLC, is the county's and a skip trace's, by hand). Someone already
+   in GHL as an agent or a buyer is left as they are. Dry unless
+   `OUTREACH_IMPORTS_ENABLED`, like every import.
+5. **Texts**: the first text names the street and the price band in the
+   method's shape (eight variants, `OPEN_TEXTS`: who we are, the address,
+   respect for their time, the band, cash and no agent fees, one soft ask);
+   one follow-up `followUpDays` after the first actually went
+   (`lot_owner_sent`, never the draft); then nothing (`nextOwnerStep`). House
+   rules hold: no dollar sign, one question, no "following up"; a text that
+   trips `voiceFlags` waits with the reason. A draft **schedules itself only
+   when** `autoSend` is on, `CARD_SENDS_ENABLED` is set **and**
+   `OWNER_SMS_ENABLED` is set; otherwise it waits in the outbox with the
+   reason on the row.
+
+**Replies — the bot knows the lane** (Matt, 2026-11-23: "act/work accordingly").
+A contact tagged `lot-owner` / `lot-pocket-*` talks to the agent-side bot
+wearing the **owner playbook** (party `agent`, `partySource lot_owner`, lane
+`owner`; `OWNER_PLAYBOOK` in `shared/lot-finder.js`, Matt's own words added
+from Autopilot → Lots): a homeowner, not an agent; we work with builders and
+say so; only the lot and what they need, never the roof or the kitchen; the
+price band and the eight percent openly, the Zestimate line, a counter is a
+number not a no; privacy, certainty, a couple of months after closing; no
+"cash", no assign/fee words, no "other fixers". The listing-agent blocks that
+don't fit are left out of the system prompt (`buildSystemPrompt({ lane })`),
+the range-only float and the "a person prices it" line are off for them, and
+the agent instructions (buy box, focus rule) are replaced. **The reply waits
+for Matt** (`decideAutoSend` code `owner_lane`) unless `lotFinder.bot` is
+`send`; `off` hands the thread off with no draft. Every inbound from one writes
+`lot_owner_replied`, which ends the finder's texts, and the Desk shows
+`call_lot_owner_replied` (score 98): call now, then again. "Worth way more
+than that" is a reply, not a dead lead.
+
+A **builder** in front of a luxury-lot deal talks to the investor-side bot with
+the **builder playbook** (lane `builder`, set when a deal in their context is a
+lot: `buildInvestorContext`): the deal line reads "a teardown lot: N sqft,
+zoned X, house built YYYY, coming down" instead of ARV and rehab; the pitch is
+the envelope of what they just built; vacant-lot, backs-to and street questions
+are answered from the record or handed to a person; assignment, agent fee,
+earnest and dates are a person's. The investor auto-send rules apply as usual.
+
+**Disposition.** A builder imported here is a buyer who builds in that city,
+so a luxury-lot deal promoted in the pocket reaches them through the normal
+blast (`goesToBuilders`, `buyerTypeFit`, `pickDealBuyers`). The method's
+opener for a hand text is `builderOpener`: "saw you sold X for Y, looks like
+the lot ran Z, off-market lot of similar size a few blocks away at W, want the
+package?"
+
+**Switches, all off:** `lotFinder.enabled`, `lotFinder.dryRun` (true), `lotFinder.autoSend`,
+`OWNER_SMS_ENABLED`. **Washington:** RCW 19.190.060 limits unsolicited
+commercial texts to WA cell phones ($500 a message). Whether a "would you
+sell?" text is commercial hasn't had an attorney's answer; `OWNER_SMS_ENABLED`
+is where that decision lives, and it is Matt's. **Money:** each parcel pull
+and each trace costs; a dry run spends nothing.
+
+**Logs and results** carry counts and keys (`rapi:<id>`, `nb:<slug>`), never a
+name, a phone or an address.
+
+**Its own page in GHL** (Matt, 2026-11-23: "keep track of Luxury separately"):
+add a Custom Menu Link to `https://<site>/luxury?location_id={{location.id}}`.
+It shows Lots (the finder), Offers and Deals narrowed to luxury lots
+(`isLuxuryLot`), and its New Offer starts on the lot analyzer. The Lots tab
+stays on Autopilot too. In GHL itself the tags segment the lane — `lot-owner`,
+`lot-pocket-*`, `builder`, `dispo-source-builder-exits` — for smart lists; a
+separate GHL pipeline waits until Matt creates one there, as with gatekeepers.
+
 ## Step 3 — messaging-app (frontend)
 
 Netlify auto-builds from `main` via the root `netlify.toml`. The API base
@@ -6629,6 +6793,9 @@ sent it, so it still comes back at once.
 |---|---|---|
 | Autopilot | `https://<site>/autopilot?location_id={{location.id}}` | Overview · Agents · Investors · Advanced settings |
 | Reports | `https://<site>/reports?location_id={{location.id}}` | Flow · Line · Follow-up · Activity · Lessons |
+| Luxury | `https://<site>/luxury?location_id={{location.id}}` | Lots · Offers (luxury lots only) · Deals (luxury lots only); New Offer starts as a luxury lot |
+
+The Offer Generator's own Offers and Deals tabs leave luxury lots out: that page is the agent-outreach book, the Luxury page is the lane's. `/deals` on its own shows every kind.
 
 Cross-app links go through `messaging-app/src/links.js`.
 

@@ -58,6 +58,13 @@ export default function DealKind({ offer, onUpdated }) {
             </button>
           ))}
         </div>
+        {saved?.type === "sfr" && (
+          <label className="flex items-center gap-2 text-xs text-slate-700">
+            <input type="checkbox" disabled={busy} checked={saved.lane === "luxury"}
+              onChange={(e) => save({ type: "sfr", land: "", lane: e.target.checked ? "luxury" : "" })} />
+            Luxury lot — a teardown for builders, priced by the lot
+          </label>
+        )}
         {saved?.type === "manufactured" && (
           <div>
             <span className="mb-1 block text-xs text-slate-500">Land</span>
@@ -75,6 +82,7 @@ export default function DealKind({ offer, onUpdated }) {
           {!saved ? "Not set, and Zillow didn't say. Pick one so the deal reaches the right buyers."
             : saved.by === "underwrite" ? "From Zillow. Pick one to make it yours."
             : saved.type === "manufactured" ? "Goes only to buyers who said they buy mobile homes."
+            : saved.lane === "luxury" ? "Goes to the buyers who build, like land."
             : "Yours. Waves and the blast text go by it."}
         </p>
         {note && <p className="text-xs font-medium text-amber-800" role="status">{note}</p>}

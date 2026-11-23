@@ -3,13 +3,15 @@
 
 // underwrite-model.js — which way an offer was priced, and the calc it makes.
 //
-// Three ways to price a property (Matt, 2026-10-18):
+// Four ways to price a property (Matt, 2026-10-18; lot added 2026-11-23):
 //   comps  — a house: comps → ARV, less the work and our costs (offer-calc.js).
 //            Every offer made before this file existed is a comps offer.
 //   income — multi-family or commercial: NOI and return tests (income-underwrite.js).
 //   land   — $/acre or $/lot from sold land, less site work (land-underwrite.js).
+//   lot    — a teardown on a big lot in a builders' pocket: what builders pay
+//            for the lot, less the seller's selling costs (lot-underwrite.js).
 //
-// An income or land offer is priced by hand. Everything the machine does to
+// An income, land or lot offer is priced by hand. Everything the machine does to
 // a comps offer on its own — re-quoting off the agent's ARV, the counter
 // band, a fresh auto-underwrite — reruns flip math, so it stays off these:
 // underwriteModel() is the one question every one of those asks.
@@ -23,20 +25,32 @@
 import { effectiveSettings } from "./offer-calc.js";
 import { underwriteIncome, INCOME_KINDS, TEST_LABELS } from "./income-underwrite.js";
 import { underwriteLand } from "./land-underwrite.js";
+import { underwriteLot } from "./lot-underwrite.js";
 
-export const UNDERWRITE_MODELS = ["comps", "income", "land"];
+export const UNDERWRITE_MODELS = ["comps", "income", "land", "lot"];
 
-const asModel = (v) => (v === "income" || v === "land" ? v : "");
+const asModel = (v) => (v === "income" || v === "land" || v === "lot" ? v : "");
 
-/** modelForAsset("multi_family") → "income"; "land" → "land"; anything else → "comps". */
+/**
+ * modelForAsset("multi_family") → "income"; "land" → "land"; anything else → "comps".
+ * A luxury lot is still a single-family house by every feed, so its model
+ * ("lot") is never read off the type: the person picks it (NewOffer.jsx), or
+ * the lane on the asset says it (modelForLane).
+ */
 export function modelForAsset(type) {
   if (type === "multi_family" || type === "commercial") return "income";
   if (type === "land") return "land";
   return "comps";
 }
 
+/** modelForLane({ type, lane }) → "lot" for a luxury lot, else modelForAsset(type). */
+export function modelForLane(asset) {
+  if (asset?.lane === "luxury") return "lot";
+  return modelForAsset(asset?.type);
+}
+
 /**
- * underwriteModel(offerOrSnapshot) → "comps" | "income" | "land"
+ * underwriteModel(offerOrSnapshot) → "comps" | "income" | "land" | "lot"
  *
  * The offer's own field first (lean list rows carry it). A priced offer is
  * whatever its calc says — the workspace autosaves while you try the other
@@ -51,7 +65,7 @@ export function underwriteModel(x) {
   return asModel(x.draft?.model) || asModel(x.snapshot?.model) || asModel(x.model) || "comps";
 }
 
-/** pricedByHand(offer) → true for an income or land offer (no machine re-pricing). */
+/** pricedByHand(offer) → true for an income, land or lot offer (no machine re-pricing). */
 export const pricedByHand = (offer) => underwriteModel(offer) !== "comps";
 
 const fail = (msg) => Object.assign(new Error(msg), { http: 400 });
@@ -62,12 +76,13 @@ const num = (v) => {
 
 /**
  * runUnderwrite(model, deal) → the engine's answer for that model:
- *   income → underwriteIncome(deal), land → underwriteLand(deal).
+ *   income → underwriteIncome(deal), land → underwriteLand(deal), lot → underwriteLot(deal).
  */
 export function runUnderwrite(model, deal) {
   if (model === "income") return underwriteIncome(deal);
   if (model === "land") return underwriteLand(deal);
-  return { ok: false, errors: ["not an income or land offer"], deal };
+  if (model === "lot") return underwriteLot(deal);
+  return { ok: false, errors: ["not an income, land or lot offer"], deal };
 }
 
 /**
@@ -80,7 +95,7 @@ export function runUnderwrite(model, deal) {
  */
 export function buildUnderwriteCalc({ model, deal = {}, inputs = {}, settings = {} } = {}) {
   const m = asModel(model);
-  if (!m) throw fail("underwrite model must be income or land");
+  if (!m) throw fail("underwrite model must be income, land or lot");
   const asking = num(inputs.askingPrice) || num(deal.askingPrice);
   const run = runUnderwrite(m, { ...deal, askingPrice: asking });
   if (!run.ok) throw fail(run.errors.join(" "));
@@ -97,6 +112,22 @@ export function buildUnderwriteCalc({ model, deal = {}, inputs = {}, settings = 
         marketCap: run.deal.marketCap,
         size: r.inPlace.size,
         sizeLabel: run.sizeLabel,
+      }
+    : m === "lot"
+    ? {
+        // The seller's letter reads lotValue and sellingCosts (incomeMath). The
+        // spread and the assign price are ours: the editor shows them, the
+        // letter never does.
+        kind: "lot",
+        lotValue: Math.round(r.lotValue),
+        sellingCostPct: run.deal.sellingCostPct,
+        sellingCosts: Math.round(r.sellingCosts),
+        assignAt: Math.round(r.assignAt),
+        agentFee: Math.round(r.agentFee),
+        spread: Math.round(r.spread),
+        comps: r.comps,
+        screens: run.deal.screens,
+        warnings: r.warnings,
       }
     : {
         kind: "land",
@@ -149,6 +180,9 @@ const pct2 = (v) => `${(v * 100).toFixed(2)}%`;
  * Income: the in-place NOI and the cap rate it makes at our price, so NOI ÷
  * cap = the price printed. Never our return targets. Land: the value from
  * sold land, the site work, and what's left for holding, risk and resale.
+ * Lot: what the lot is worth to a builder and the selling costs the seller
+ * keeps by not listing — never the spread or the assign price, because this
+ * letter is the seller's.
  */
 export function incomeMath(calc) {
   const u = calc?.underwrite;
@@ -170,6 +204,17 @@ export function incomeMath(calc) {
     if (u.siteTotal > 0) rows.push({ key: "site", label: "Site work", amount: u.siteTotal, sign: "−" });
     const left = u.value - (u.siteTotal || 0) - total;
     if (left > 0) rows.push({ key: "margin", label: "Holding, risk & resale", amount: left, sign: "−" });
+    return { total, rows };
+  }
+  if (calc.model === "lot") {
+    if (!(u.lotValue > 0)) return null;
+    const pct = Math.round((u.sellingCostPct || 0) * 1000) / 10;
+    const rows = [
+      { key: "arv", label: `Lot value, ${u.comps} sold teardown${u.comps === 1 ? "" : "s"} nearby`, amount: u.lotValue, sign: "+" },
+      { key: "selling", label: `Selling costs you keep by not listing (${pct}%)`, amount: u.sellingCosts || 0, sign: "−" },
+    ];
+    const left = u.lotValue - (u.sellingCosts || 0) - total;
+    if (left > 0) rows.push({ key: "margin", label: "Held back for the unknowns", amount: left, sign: "−" });
     return { total, rows };
   }
   return null;

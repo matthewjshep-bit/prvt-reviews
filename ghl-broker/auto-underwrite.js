@@ -38,6 +38,8 @@ import { gradeComps } from "./comps-grade.js";
 import { recordError } from "./app-errors.js";
 import { fetchZillowPhotos, fetchListingPhotos, fetchZillowFacts, MAX_FACT_LOOKUPS, scanRehabFromPhotos, anthropicErrorToHttp } from "./rehab-scan.js";
 import { kindHold, ruralHold } from "./shared/asset-type.js";
+import { normalizeLotFinder, pocketFor, lotHold, LOT_OWNER_TAG_PATTERNS } from "./shared/lot-finder.js";
+import { matchTagPatterns } from "./conversation-party.js";
 import { deriveArv, timeTrend, SIZE_TOLERANCE_PCT } from "./shared/arv.js";
 import { scoreComp, similarity, inPool, compareByMatch, milesBetween, markRenovatedByPrice, PRICE_PROXY_MIN_POOL } from "./shared/comp-match.js";
 import { seedRoomCounts, applyScanSuggestion, priceScope } from "./shared/rehab-scope.js";
@@ -1914,6 +1916,27 @@ async function runUnderwrite(job, ctx) {
   // Rural (shared/asset-type.js ruralHold). Matt, 2026-10-08: two acres or
   // more is harder to comp and our buyers don't want it. Held at the same
   // point, and the held sweep passes it and tells the agent (held-underwrites.js).
+  // The luxury teardown lane (shared/lot-finder.js, 2026-11-23): a house inside
+  // one of Matt's pockets, or any house a homeowner the lot finder texted brings
+  // up, is a lot for a builder. Held here, before comps and the photo scan, with
+  // the lane stamped on the draft so it shows on the Luxury page; flip math
+  // never runs on it and the held sweep never passes it. Every run, even a
+  // fill run: there is no flip number to fill.
+  const lanePocket = luxuryLaneFor({ saved, contact, lat: resolved?.lat, lng: resolved?.lng, lotSqft: facts?.lotSqft, yearBuilt: facts?.yearBuilt });
+  if (lanePocket) {
+    job.lane = "luxury";
+    const subjectOnly = {
+      lat: resolved?.lat ?? null, lng: resolved?.lng ?? null,
+      beds: facts?.beds ?? null, baths: facts?.baths ?? null, sqft: facts?.sqft ?? null, yearBuilt: facts?.yearBuilt ?? null,
+      lotSqft: facts?.lotSqft ?? null, homeType: facts?.homeType ?? null, units: facts?.units ?? null,
+      stories: null, subdivision: null, material: null,
+    };
+    got.subject = subjectOnly;
+    return finishHeld(job, ctx, { extraction, held: [lotHold(lanePocket.pocket, { lotSqft: facts?.lotSqft, yearBuilt: facts?.yearBuilt, why: lanePocket.why })], partial: {
+      compsData: null, subject: subjectOnly, subjectSqft: Number(facts?.sqft) || 0, grades: {}, rehabbed: null, arv: null, rehabState: null, scope: [], repairs: null,
+    } });
+  }
+
   const kindHeld = job.fill || job.anyKind ? "" : kindHold(facts?.homeType, saved?.focusKinds) || ruralHold(facts?.lotSqft);
   if (kindHeld) {
     const subjectOnly = {
@@ -2958,6 +2981,25 @@ async function leadFor(job, ctx, address, events = null) {
   } catch { return null; }
 }
 
+/**
+ * luxuryLaneFor({ saved, contact, lat, lng, lotSqft, yearBuilt }) → { pocket, why } | null
+ *
+ * The house belongs to the luxury lane when its contact is a homeowner the lot
+ * finder texted (tag lot-owner / lot-pocket-*), or when it sits inside one of
+ * the enabled pockets, big and old enough (shared/lot-finder.js pocketFor).
+ */
+export function luxuryLaneFor({ saved = {}, contact = null, lat = null, lng = null, lotSqft = 0, yearBuilt = 0 } = {}) {
+  const f = normalizeLotFinder(saved?.lotFinder);
+  const tags = Array.isArray(contact?.tags) ? contact.tags : [];
+  if (matchTagPatterns(tags, LOT_OWNER_TAG_PATTERNS).length) {
+    const tag = tags.map(String).find((t) => /^lot-pocket-/i.test(t));
+    const pocket = tag ? f.pockets.find((p) => `lot-pocket-${p.id}` === tag.toLowerCase()) || null : null;
+    return { pocket, why: pocket ? `a homeowner the lot finder texted, inside the ${pocket.name} pocket` : "a homeowner the lot finder texted" };
+  }
+  const pocket = pocketFor({ lat, lng, lotSqft, yearBuilt }, f.pockets);
+  return pocket ? { pocket, why: "" } : null;
+}
+
 async function saveDraft(job, ctx, { extraction, held, partial, cleared = false }) {
   const { locationId, store } = ctx;
   // A held house the agent brought still goes to the Desk as a call
@@ -2984,6 +3026,8 @@ async function saveDraft(job, ctx, { extraction, held, partial, cleared = false 
     checks: summarizeChecks(draft),
     autoUnderwrite: { ...auditTrail(job, extraction, { ok: cleared, held }), held, ...(lead ? { leadSource: lead.source } : {}) },
     ...(offSignal ? { offMarket: { ...offSignal, by: "machine", at: new Date().toISOString() } } : {}),
+    // The luxury lane on the draft (shared/asset-type.js): the Luxury page lists it, the lot analyzer opens it.
+    ...(job.lane === "luxury" ? { asset: { type: "sfr", land: "", lane: "luxury", by: "underwrite", at: new Date().toISOString() } } : {}),
     updatedAt: new Date().toISOString(),
   };
   const prior = await draftToWriteOver(job, ctx, record.address);

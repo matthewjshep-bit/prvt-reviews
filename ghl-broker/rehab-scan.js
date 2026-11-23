@@ -336,6 +336,19 @@ const FACTS_CACHE_MAX = 2000;
 const factsCache = new Map();
 export function _resetFactsCache() { factsCache.clear(); }
 
+/** salesFromDetail(item) → [{ date, price }] — the page's "Sold" events, newest first. */
+export function salesFromDetail(item = {}) {
+  const history = Array.isArray(item?.priceHistory) ? item.priceHistory : [];
+  const out = [];
+  for (const h of history) {
+    if (!/\bsold\b/i.test(String(h?.event || ""))) continue;
+    const price = Number(h?.price) || 0;
+    const date = h?.date ? String(h.date).slice(0, 10) : (Number.isFinite(Number(h?.time)) ? new Date(Number(h.time)).toISOString().slice(0, 10) : "");
+    if (price > 0) out.push({ date, price });
+  }
+  return out.sort((a, b) => String(b.date).localeCompare(String(a.date)));
+}
+
 function factsFromDetail(item) {
   const house = houseFactsFromDetail(item);
   return {
@@ -350,6 +363,12 @@ function factsFromDetail(item) {
     lastSoldDate: item.dateSold ? new Date(item.dateSold).toISOString().slice(0, 10) : null,
     // The listing's own words, for the comp's finish (shared/comp-match.js remodelSignal).
     description: String(item.description || "").slice(0, 800) || null,
+    // Every sale on the page, newest first (the lot finder reads a new
+    // build's exit and the lot buy before it: shared/lot-finder.js
+    // builderFromNewBuild), and the listing agent on the page.
+    sales: salesFromDetail(item),
+    agent: zillowAgentFrom(item),
+    brokerage: String(item?.attributionInfo?.brokerageName || "").trim().slice(0, 80) || null,
     // The comp's garage, so a no-garage subject is measured against comps
     // that have one (shared/arv-checks.js compParity) — known only when the
     // detail row says.

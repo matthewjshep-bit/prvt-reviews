@@ -22,7 +22,7 @@ import { TALK_EVENT_TYPES, isTalkEvent } from "./talked-to.js";
 import { matchBuybox, ownWords, ownWordsRefuse } from "./buybox.js";
 import { isBlockedBuyer } from "./buyer-pulse.js";
 import { sameStreet } from "./us-address.js";
-import { normalizeAsset, buyerTypeFit } from "./asset-type.js";
+import { normalizeAsset, buyerTypeFit, goesToBuilders } from "./asset-type.js";
 
 export const TIERS = { vip: "VIP", active: "Active", cold: "Cold" };
 // VIP: committed on a deal before, or scores at least this. Active: 40+, or replied in the last 3 months.
@@ -92,7 +92,8 @@ export function dealTarget({ city = "", zip = "", state = "", priceMin = null, p
   const slug = citySlug(city);
   const mid = priceMin != null && priceMax != null ? (priceMin + priceMax) / 2 : priceMax ?? priceMin ?? null;
   const kind = normalizeAsset(asset);
-  const strategy = kind?.type === "manufactured" ? "mobile-home" : kind?.type === "land" || rehabAppetite === "full_gut" ? "new-construction" : "flip";
+  // Land, and a luxury teardown lot, are a builder's (shared/asset-type.js goesToBuilders).
+  const strategy = kind?.type === "manufactured" ? "mobile-home" : goesToBuilders(kind) || rehabAppetite === "full_gut" ? "new-construction" : "flip";
   const st = String(state || "").trim().toUpperCase();
   return { city: slug, zip: /^\d{5}$/.test(String(zip || "")) ? String(zip) : "", state: st, region: slug ? regionFor(city, st || "WA") : null, price: mid, strategy, asset: kind,
     // A house to fix (a kind that isn't land, or a rehab number on it), land,
@@ -100,7 +101,7 @@ export function dealTarget({ city = "", zip = "", state = "", priceMin = null, p
     // A full gut abstains: it's the house read as a builder's (the strategy
     // above), and it may come down, so "land and teardowns, no rehabs" or
     // "ground-up only" doesn't take a builder off it.
-    rehabDeal: kind?.type === "land" ? false : rehabAppetite === "full_gut" ? null : kind || rehabAppetite ? true : null,
+    rehabDeal: goesToBuilders(kind) ? false : rehabAppetite === "full_gut" ? null : kind || rehabAppetite ? true : null,
     // What the buy box can rule in or out beyond place and price.
     box: { propertyTypes: propertyTypes || [], rehabAppetite: rehabAppetite || null, lotMin: lotMin ?? null },
     // What a buyer's own dealbreakers can refuse (buyerDealbreakers): the
@@ -139,7 +140,7 @@ const SITE_NO = { busy_road: "busy streets", backs_commercial: "commercial next 
 /** isManufacturedTarget(target) → true for a mobile home deal, whose waves go by who buys them, not by city. */
 export const isManufacturedTarget = (t) => t?.asset?.type === "manufactured";
 /** isLandTarget(target) → true for land, whose waves go to the buyers who build. */
-export const isLandTarget = (t) => t?.asset?.type === "land";
+export const isLandTarget = (t) => goesToBuilders(t?.asset);
 
 // A buyer spoken for elsewhere (committed or soft-committed on another live
 // deal). A buyer only weighing another deal is NOT: the hottest buyers are
@@ -216,7 +217,7 @@ export function rankForDeal(i = {}, t = {}, { now = Date.now() } = {}) {
   const fit = buyerTypeFit(i, t.asset);
   let type = 0;
   if (fit.refuses) { type = -30; reasons.push(`won't take it (${fit.reason})`); }
-  else if (fit.wants && (t.asset?.type === "manufactured" || t.asset?.type === "land")) { type = 30; reasons.push(fit.reason); }
+  else if (fit.wants && (t.asset?.type === "manufactured" || goesToBuilders(t.asset))) { type = 30; reasons.push(fit.reason); }
   // Whether we know where they buy at all — a mobile home buyer with no area
   // on file is still a buyer; one whose areas are all elsewhere is not.
   const areaKnown = Boolean(mk.cities?.length || mk.regions?.length || rawAreas.length);

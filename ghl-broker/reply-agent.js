@@ -97,6 +97,7 @@ import { findOrCreateCustomFieldByKey, updateContact } from "./ghl.js";
 import { matchTagPatterns } from "./conversation-party.js";
 import { GATEKEEPER_TAG_PATTERNS } from "./shared/gatekeeper.js";
 import { GATEKEEPER_OUT_KINDS } from "./shared/gatekeeper-sequence.js";
+import { LOT_OWNER_TAG_PATTERNS, LOT_OWNER_OUT_KINDS, LOT_OWNER_EVENTS, LOT_OWNER_PARTY, normalizeLotFinder } from "./shared/lot-finder.js";
 import { anthropicErrorToHttp } from "./rehab-scan.js";
 import { expandListingLinks } from "./listing-links.js";
 import { inboundPhotoUrls, readPhotoAddresses, expandPhotoAddresses, bodyImageUrls } from "./photo-addresses.js";
@@ -338,7 +339,7 @@ export async function draftReply({
       ? `OUR OFFERS TO THIS AGENT (newest first — the only numbers you may quote):\n${offers.text}`
       : "",
   };
-  const system = buildSystemPrompt({ config: cfg, party, channel });
+  const system = buildSystemPrompt({ config: cfg, party, channel, lane: ctx.lane || "" });
   const user = buildUserContext({ party, contact, signer, instructions, context: ctx, underwriting, transcript, message, outbound, inboundKind, call, companyContact, fix });
   const intents = outbound ? [outbound.kind] : (INTENTS[party] || INTENTS.agent);
   const params = draftParams({ model: REPLY_MODEL, system, user, schema: schemaFor(party, { outbound, booking: Boolean(booking) }), effort: draftEffort(outbound) });
@@ -1353,7 +1354,10 @@ export function humanActiveLine(h) {
  * draft and shown on the row, so "why didn't it send itself?" is answered
  * before it is asked.
  */
-export function decideAutoSend({ gate, party = "agent", intent = "other", channel = "sms", config, sendsEnabled = false, humanActive = null, hold = null }) {
+export function decideAutoSend({ gate, party = "agent", intent = "other", channel = "sms", config, sendsEnabled = false, humanActive = null, hold = null, lane = "", laneBot = "draft" }) {
+  // A homeowner on a luxury lot (shared/lot-finder.js): the bot writes the
+  // reply, and it waits for Matt unless Autopilot → Lots says the bot may send.
+  if (lane === "owner" && laneBot !== "send") return { send: false, code: "owner_lane", reason: "an owner's reply waits for you (Autopilot → Lots: the bot drafts, you send)" };
   // You stopped the bot on them (shared/bot-hold.js): their text gets a
   // draft, and the draft waits for you. First, so nothing below — the gates
   // passing, a guard, the audit — reads as "it could have gone".
@@ -1390,7 +1394,7 @@ export function decideAutoSend({ gate, party = "agent", intent = "other", channe
 // has the thread right now. So is `bot_stopped`: you stopped the bot on them,
 // and a check-in clock, a kept-scheduled reply or an audit release would each
 // be the machine texting them anyway.
-export const HELD_FOR_A_PERSON = new Set(["gates", "never_auto", "guard_failed", "not_allowlisted", "stale_number", "in_range"]);
+export const HELD_FOR_A_PERSON = new Set(["gates", "never_auto", "guard_failed", "not_allowlisted", "stale_number", "in_range", "owner_lane"]);
 
 // The nightly audit's loosening (Matt, 2026-09-16: "fire where it can"). A
 // draft the money guard passed, that the model didn't flag for a person,
@@ -2347,6 +2351,9 @@ export function handsOffReason(a) {
   // starts an agent's or a buyer's text to one; their own sequence is
   // gatekeeper-sweep.js.
   if (a?.gatekeeper) return "a gatekeeper (estate attorney, title or escrow) — yours to answer";
+  // A homeowner the lot finder texted (shared/lot-finder.js): the method's
+  // next step is a call, and the bot has no owner playbook. Yours.
+  if (a?.lotOwner && a?.laneBotOff) return "a homeowner on a luxury lot — the bot is off for owners (Autopilot → Lots); yours to call";
   if (a?.dealHold) {
     return a.dealHold.role === "buyer"
       ? `they are a buyer on your live deal at ${a.dealHold.address} — you are working them yourself`
@@ -2621,6 +2628,13 @@ export async function assembleConversation({
   // Never placed by their words or our offer book: an attorney who sends a
   // house is still an attorney (handsOffReason holds them for Matt).
   const gatekeeper = !fakeParty && matchTagPatterns(tags, GATEKEEPER_TAG_PATTERNS).length > 0;
+  const lotOwner = !fakeParty && matchTagPatterns(tags, LOT_OWNER_TAG_PATTERNS).length > 0;
+  // The luxury teardown lane (shared/lot-finder.js): a homeowner the lot finder
+  // texted talks to the agent-side bot wearing the owner playbook — party
+  // agent, lane owner — unless Matt has the bot off for owners.
+  const lotFinder = normalizeLotFinder(saved?.lotFinder);
+  const laneBotOff = lotOwner && lotFinder.bot === "off";
+  if (lotOwner) { party = "agent"; partySource = "lot_owner"; }
 
   // The real thread when there is a contact, and after it whatever the test
   // window typed — so a test on a real contact is "their conversation so far,
@@ -2663,7 +2677,7 @@ export async function assembleConversation({
   // words. On a confident read the party's first plain tag is stamped on
   // the contact (as an auto action, recorded on the draft) so the next text
   // is routed by tags like everyone else's.
-  if (party === "unknown" && !gatekeeper && config.routing.unknown === "classify" && aiApiKey && !light && String(message || "").trim()) {
+  if (party === "unknown" && !gatekeeper && !lotOwner && config.routing.unknown === "classify" && aiApiKey && !light && String(message || "").trim()) {
     try {
       const c = await classify({ contact: { name, tags }, transcript, message, aiApiKey });
       classified = c;
@@ -2679,7 +2693,7 @@ export async function assembleConversation({
   // A contact we've written an offer to is an agent, whatever their tags say.
   // Mike Renard (9314 Canyon Rd #54) had a live counter in our book and every
   // text he sent sat as "an unknown contact never auto-sends".
-  if (party === "unknown" && !gatekeeper && contactId && !fakeParty && typeof store?.listOffers === "function") {
+  if (party === "unknown" && !gatekeeper && !lotOwner && contactId && !fakeParty && typeof store?.listOffers === "function") {
     const theirs = await store.listOffers(locationId, { contactId, limit: 1, lean: true }).catch(() => []);
     if ((theirs || []).some((o) => o && o.contactId === contactId)) {
       party = "agent";
@@ -2701,8 +2715,11 @@ export async function assembleConversation({
     /* an opt-out needs the party and nothing else */
   } else if (party === "agent") {
     context = await loadAgentContext({ store, locationId, contactId, custom, now, showMath: Boolean(config.parties.agent?.showMath), transcript: real, focusKinds: saved?.focusKinds,
-      highStakes: config.parties.agent?.realmCheck?.highStakes, mattPrices: underwriteMode(saved) !== "full",
+      // An owner on a lot: no range-only float, no "a person prices it" line — the
+      // first text already named the band, and the lot offer is the number.
+      highStakes: lotOwner ? null : config.parties.agent?.realmCheck?.highStakes, mattPrices: lotOwner ? false : underwriteMode(saved) !== "full",
       engineMode: underwriteMode(saved) === "engine" });
+    if (lotOwner) context = { ...context, lane: "owner" };
     // The write-up terms' earnest money is a number the bot may say.
     if (config.writeUp?.earnestMoney) context = { ...context, amounts: [...new Set([...context.amounts, Math.round(config.writeUp.earnestMoney)])] };
     // The post-mortem digest rides along only when the switch is on AND a
@@ -2726,8 +2743,13 @@ export async function assembleConversation({
   // 2026-10-01, so a condo or a mobile home gets a plain no, not a promise —
   // except a house we chose to price anyway, which is named.
   // What we buy, said one fixed way (buyBoxRule, the 2026-11-09 audit: 50 threads got a made-up buy box).
-  const instructions = party === "agent" ? [base, AGENT_GOAL_RULE, buyBoxRule(saved), AGENT_PAPER_RULE, CLARIFY_RULE, AGENT_HONESTY_RULE, PROMISE_RULE, agentFocusRule(saved?.focusKinds, { pricedAnyway: context.pricedOutsideFocus || [] })].filter(Boolean).join("\n")
-    : party === "investor" ? [base, CLARIFY_RULE].filter(Boolean).join("\n") : base;
+  // The owner lane drops the agent instructions (fixers, the buy box, the focus
+  // rule): the owner playbook is the system prompt's, and Matt's own words for
+  // owners, when he has written any, ride here. A builder keeps the investor
+  // instructions plus Matt's words for builders.
+  const instructions = party === "agent" && context.lane === "owner" ? [lotFinder.ownerPlaybook, AGENT_PAPER_RULE, CLARIFY_RULE, AGENT_HONESTY_RULE, PROMISE_RULE].filter(Boolean).join("\n")
+    : party === "agent" ? [base, AGENT_GOAL_RULE, buyBoxRule(saved), AGENT_PAPER_RULE, CLARIFY_RULE, AGENT_HONESTY_RULE, PROMISE_RULE, agentFocusRule(saved?.focusKinds, { pricedAnyway: context.pricedOutsideFocus || [] })].filter(Boolean).join("\n")
+    : party === "investor" ? [base, CLARIFY_RULE, context.lane === "builder" ? lotFinder.builderPlaybook : ""].filter(Boolean).join("\n") : base;
   const signer = config.persona.name || saved?.company?.signer || saved?.company?.name || "";
   // Ours to hand out when asked — an agent who asks "what's your email?" got
   // "I'll text it over shortly" until 2026-09-12, because we never sent it.
@@ -2739,7 +2761,7 @@ export async function assembleConversation({
     : null;
 
   return {
-    config, party, partySource, matchedTags: resolved.matched, classified, stampTag, botOff, dnd, dealHold, humanActive, hold, gatekeeper, optedOut,
+    config, party, partySource, matchedTags: resolved.matched, classified, stampTag, botOff, dnd, dealHold, humanActive, hold, gatekeeper, lotOwner, laneBotOff, lane: context?.lane || "", laneBot: lotFinder.bot, optedOut,
     playbook, contact, contactName: name, tags, custom, transcript, context, underwriting, instructions, signer, companyContact,
   };
 }
@@ -4857,7 +4879,7 @@ async function runProactive(job, ctx) {
       return;
     }
   }
-  let auto = decideAutoSend({ gate, party, intent: kind, channel: "sms", config, sendsEnabled, humanActive: a.humanActive, hold: a.hold });
+  let auto = decideAutoSend({ gate, party, intent: kind, channel: "sms", config, sendsEnabled, humanActive: a.humanActive, hold: a.hold, lane: a.lane, laneBot: a.laneBot });
   auto = releaseForAudit({ auto, gate, draft, deps });
   // A caller whose own switch is off (held-underwrites.js: the pass on a
   // house we owed them a number on, heldTriage.passOnRetire) wants the draft
@@ -5148,6 +5170,14 @@ async function runReply(job, ctx) {
     at: new Date(now).toISOString(), source: "conversation", ref: job.id, dedupeKey: `reply_held:${job.id}`, data: { reason: String(reason).slice(0, 200) },
   }).catch(() => {});
 
+  // A homeowner on a lot answered: the finder stops writing to them, and the
+  // Desk says call now (shared/call-list.js call_lot_owner_replied) — whether
+  // the bot drafts a reply below or Matt has it off for owners.
+  if (a.lotOwner) {
+    await recordEvent({ store, locationId, contactId: job.contactId, party: LOT_OWNER_PARTY, type: LOT_OWNER_EVENTS.replied,
+      at: new Date(now).toISOString(), source: "conversation", ref: job.id, dedupeKey: `${LOT_OWNER_EVENTS.replied}:${job.id}`,
+      data: { channel: job.channel || "sms", call: Boolean(isCall) } }).catch(() => {});
+  }
   const handsOff = handsOffReason(a);
   if (handsOff) {
     // Either the operator tagged them off, or we are mid-deal with them. No
@@ -6073,7 +6103,7 @@ async function runReply(job, ctx) {
     job.intent = draft.intent;
     gate = gateFor(draft);
   }
-  let base = decideAutoSend({ gate, party, intent: draft.intent, channel: job.channel, config, sendsEnabled, humanActive: a.humanActive, hold: a.hold });
+  let base = decideAutoSend({ gate, party, intent: draft.intent, channel: job.channel, config, sendsEnabled, humanActive: a.humanActive, hold: a.hold, lane: a.lane, laneBot: a.laneBot });
   // The text after a call is its own allowlist slot on top of the intent's:
   // a question asked on the phone still needs "text after a call" ticked.
   if (isCall && base.send && !(config.parties?.[party]?.autoSend?.intents || []).includes("call_followup")) {
@@ -6094,7 +6124,7 @@ async function runReply(job, ctx) {
     const c = await confirmBookedSlot({ draft, guard, evaluate: bookingFor, redraft: (fix) => deps.draft({ ...replyArgs, fix }) });
     if (c.draft !== draft) {
       draft = c.draft; guard = c.guard; gate = gateFor(draft);
-      base = decideAutoSend({ gate, party, intent: draft.intent, channel: job.channel, config, sendsEnabled, humanActive: a.humanActive, hold: a.hold });
+      base = decideAutoSend({ gate, party, intent: draft.intent, channel: job.channel, config, sendsEnabled, humanActive: a.humanActive, hold: a.hold, lane: a.lane, laneBot: a.laneBot });
       if (isCall && base.send && !(config.parties?.[party]?.autoSend?.intents || []).includes("call_followup")) {
         base = { send: false, code: "not_allowlisted", reason: "text after a call is not on the auto-send list" };
       }
@@ -8466,6 +8496,15 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       store, locationId, contactId: d.contactId, party: "gatekeeper", type: "gatekeeper_sent", at: ts, address: d.outbound.address || "",
       source: "conversation", ref: d.id, dedupeKey: `gatekeeper_sent:${d.id}`,
       data: { draftId: d.id, step: d.outbound.step || "", hookKey: d.outbound.hookKey || null, channel: d.channel === "email" ? "email" : "sms", auto: Boolean(auto), edited: Boolean(updated.edited) },
+    }).catch(() => {});
+  }
+  // A lot owner's text went: the follow-up clock (shared/lot-finder.js
+  // nextOwnerStep) runs from here, not the draft.
+  if (LOT_OWNER_OUT_KINDS.includes(d.outbound?.kind)) {
+    await recordEvent({
+      store, locationId, contactId: d.contactId, party: LOT_OWNER_PARTY, type: LOT_OWNER_EVENTS.sent, at: ts, address: d.outbound.address || "",
+      source: "conversation", ref: d.id, dedupeKey: `${LOT_OWNER_EVENTS.sent}:${d.id}`,
+      data: { draftId: d.id, step: d.outbound.step || "", pocketId: d.outbound.pocketId || null, auto: Boolean(auto), edited: Boolean(updated.edited) },
     }).catch(() => {});
   }
   if (d.outbound?.kind === "outreach_open") {

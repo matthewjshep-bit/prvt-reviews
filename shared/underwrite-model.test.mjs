@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildUnderwriteCalc, incomeMath, modelForAsset, pricedByHand, underwriteModel } from "./underwrite-model.js";
+import { buildUnderwriteCalc, incomeMath, modelForAsset, modelForLane, pricedByHand, underwriteModel } from "./underwrite-model.js";
+import { sampleLotDeal } from "./lot-underwrite.js";
 import { sampleIncomeDeal } from "./income-underwrite.js";
 import { sampleLandDeal, underwriteLand } from "./land-underwrite.js";
 import { offerMath } from "./offer-breakdown.js";
@@ -81,4 +82,25 @@ test("land with no comps or no acreage asks for them instead of pricing", () => 
   assert.equal(r.ok, false);
   assert.ok(r.errors.some((e) => /acres/.test(e)));
   assert.ok(r.errors.some((e) => /comp/.test(e)));
+});
+
+test("a luxury lot is priced by the lot, by hand, and its letter shows lot value less the seller's selling costs — never the spread", () => {
+  assert.equal(modelForLane({ type: "sfr", lane: "luxury" }), "lot");
+  assert.equal(modelForLane({ type: "sfr" }), "comps");
+  assert.equal(modelForLane({ type: "land" }), "land");
+  assert.equal(underwriteModel({ underwriteModel: "lot" }), "lot");
+  assert.equal(pricedByHand({ calc: { model: "lot" } }), true, "the machine never re-quotes a lot offer");
+  const calc = buildUnderwriteCalc({ model: "lot", deal: sampleLotDeal(), inputs: { address: "1 Lot Ln", askingPrice: "1,250,000" } });
+  assert.equal(calc.model, "lot");
+  assert.equal(calc.inputs.arv, 0);
+  assert.equal(calc.offers.cash.amount, 1196000);
+  assert.equal(calc.underwrite.lotValue, 1300000);
+  assert.equal(calc.underwrite.spread, 104000);
+  assert.equal(offerMath({ calc }), null);
+  const m = incomeMath(calc);
+  assert.equal(m.total, 1196000);
+  assert.deepEqual(m.rows.map((r) => r.key), ["arv", "selling"]);
+  assert.match(m.rows[0].label, /5 sold teardowns/);
+  assert.equal(m.rows[1].amount, 104000);
+  assert.ok(!JSON.stringify(m).match(/spread|assign|builder/i), "the seller's letter never names the spread or the assign price");
 });

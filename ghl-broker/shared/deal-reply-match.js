@@ -17,6 +17,8 @@
 //
 // Pure.
 
+import { goesToBuilders } from "./asset-type.js";
+
 const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
 
 /** sentDeal(offer, contactId) → true when this buyer was sent the deal or is on it. */
@@ -70,7 +72,7 @@ function dealFigures(offer = {}) {
 }
 const near = (a, b, pct = 0.12) => a > 0 && b > 0 && Math.abs(a - b) <= b * pct;
 
-const isLand = (offer) => offer?.asset?.type === "land";
+const isLand = (offer) => goesToBuilders(offer?.asset);
 const LAND_WORDS = /\b(?:land|lot|dirt|build(?:er|ing)?|townhomes?|townhouses?|d?adus?|zon(?:ed|ing)|units?|new construction|teardown)\b/i;
 const HOUSE_WORDS = /\b(?:lath|plaster|studs|kitchen|baths?|bathroom|basement|roof|siding|floors?|rehab|remodel|reno|walked it|walk(?:ed)? through)\b/i;
 

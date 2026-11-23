@@ -465,9 +465,9 @@ export const deleteOffer = (id) =>
 export const HOT_ON = "__hot_on";
 export const HOT_OFF = "__hot_off";
 // The kind of house (shared/asset-type.js) on an offer or its deal: { type,
-// land? }, type "" to go back to what Zillow said. Returns { offer, asset }.
-export const setOfferAsset = (id, { type = "", land = "" } = {}) =>
-  post(`/api/offers/${encodeURIComponent(id)}/asset`, { type, land }, "PATCH");
+// land?, lane? }, type "" to go back to what Zillow said. Returns { offer, asset }.
+export const setOfferAsset = (id, { type = "", land = "", lane = "" } = {}) =>
+  post(`/api/offers/${encodeURIComponent(id)}/asset`, { type, land, ...(lane ? { lane } : {}) }, "PATCH");
 
 // "Current" is the third axis: which row on a house is the number we're
 // working from (shared/current-offer.js). Same menu, same { offer } back.
@@ -904,3 +904,13 @@ export const setGatekeeperStatus = (gkKey, status) => post(`/api/gatekeepers/${e
 export const importGatekeepers = (gkKeys, { dryRun = true } = {}) => post(`/api/gatekeepers/import`, { gkKeys, dryRun });
 export const getGatekeeperSweep = () => fetch(`${API_BASE}/api/gatekeepers/sweep?${locq()}`).then(j);
 export const runGatekeeperSweep = ({ dryRun = true } = {}) => post(`/api/gatekeepers/sweep/run`, { dryRun, wait: true });
+
+/* ---------- the lot finder (luxury teardown lane: parcels → skip trace → owner texts) ---------- */
+export const getLotFinder = () => fetch(`${API_BASE}/api/lot-finder?${locq()}`).then(j);
+export const getLotOwners = ({ pocketId = "", status = "", limit = 500 } = {}) =>
+  fetch(`${API_BASE}/api/lot-finder/owners?${locq()}${pocketId ? `&pocketId=${encodeURIComponent(pocketId)}` : ""}${status ? `&status=${encodeURIComponent(status)}` : ""}&limit=${limit}`).then(j);
+export const setLotOwnerStatus = (ownerKey, status) => post(`/api/lot-finder/owners/${encodeURIComponent(ownerKey)}/status`, { status });
+export const suggestLotPocket = (address, radiusMiles) => post(`/api/lot-finder/suggest`, { address, radiusMiles });
+export const runLotFinder = ({ dryRun = true } = {}) => post(`/api/lot-finder/run`, { dryRun, wait: true });
+export const getLotBuilders = ({ pocketId = "", limit = 500 } = {}) =>
+  fetch(`${API_BASE}/api/lot-finder/builders?${locq()}${pocketId ? `&pocketId=${encodeURIComponent(pocketId)}` : ""}&limit=${limit}`).then(j);

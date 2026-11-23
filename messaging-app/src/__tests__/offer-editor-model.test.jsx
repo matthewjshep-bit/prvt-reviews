@@ -41,3 +41,11 @@ test("an older multi-family offer priced by comps stays on comps until it's swit
   expect(html).toContain("Underwrite by income");
   expect(html).not.toContain("Income offer");
 });
+
+test("a new offer on the Luxury page starts as a luxury lot, priced by the lot", async () => {
+  const NewOffer = await editor();
+  const html = renderToStaticMarkup(<NewOffer settings={{}} startLane="luxury" />);
+  expect(html).toContain("Priced by lot value");
+  expect(html).toContain("Sold teardowns nearby");
+  expect(html).not.toContain("After-repair value");
+});

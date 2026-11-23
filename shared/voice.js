@@ -123,7 +123,7 @@ export const COLD_SMS_MAX = 160;
 export const CHECK_IN_EMAIL_BODY_MAX = 120;
 
 // Kinds the machine starts to someone who has never written back.
-export const COLD_KINDS = new Set(["outreach_open", "outreach_nudge", "day_two", "cold_ladder", "agent_checkin_cold", "agent_listing_cold"]);
+export const COLD_KINDS = new Set(["outreach_open", "outreach_nudge", "day_two", "cold_ladder", "agent_checkin_cold", "agent_listing_cold", "lot_owner_follow"]);
 // Check-ins and nudges: a short text with one ask.
 export const CHECK_IN_KINDS = new Set(["agent_pulse", "agent_checkin", "agent_listing", "checkin_due", "buyer_pulse", "passed_checkin",
   "address_chase", "offer_nudge", "blast_nudge", "dataroom_nudge"]);

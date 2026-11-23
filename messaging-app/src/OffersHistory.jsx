@@ -141,7 +141,9 @@ function byHouse(list) {
   return [...houses.values()].flatMap((rows) => rows.map((o, i) => [o, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(([o]) => o));
 }
 
-export default function OffersHistory({ onEdit, onNew = null, onDeal, settings: appSettings = null }) {
+// `only`: a predicate that narrows the book to one lane (the Luxury page
+// shows luxury lots alone; shared/asset-type.js isLuxuryLot).
+export default function OffersHistory({ onEdit, onNew = null, onDeal, settings: appSettings = null, only = null }) {
   const [offers, setOffers] = useState(null);
   // The split: the offer open beside the rail, and the rail's rows — the
   // table's order, frozen when it opened (re-frozen when the filter, search or
@@ -449,7 +451,7 @@ export default function OffersHistory({ onEdit, onNew = null, onDeal, settings: 
 
   // Every row told whether it is its house's current offer. Derived here, not
   // stored, so a status change or a pin patched into `offers` re-reads.
-  const book = annotateCurrent(offers);
+  const book = annotateCurrent(typeof only === "function" ? offers.filter(only) : offers);
   const needle = q.trim().toLowerCase();
   const searched = !needle
     ? book

@@ -555,3 +555,17 @@ test("a skeleton's ask says you're running the numbers yourself", async () => {
   const { heldInPlainWords } = await import("./held-underwrites.js");
   assert.match(heldInPlainWords(SKELETON), /you're running the numbers yourself/);
 });
+
+// Matt, 2026-11-23: a luxury lot is a lot for a builder, priced by the lot on
+// the Luxury page by a person. The machine never passes it, not after a day,
+// not at the 7pm check, and never asks the agent for a read.
+test("a luxury lot is left as yours: never passed by the sweep, never a read asked", async () => {
+  const { triageHeldUnderwrite, heldOnTheMachine } = await import("./held-underwrites.js");
+  const now = Date.parse("2026-11-30T20:00:00Z");
+  const offer = { id: "lx1", address: "9 Lakeview Ln, Clyde Hill, WA 98004", contactId: "a1", status: "draft", createdAt: "2026-11-24T19:00:00Z",
+    autoUnderwrite: { finishedAt: "2026-11-24T19:00:00Z", held: ["luxury lot — inside the Clyde Hill pocket (34,000 sqft lot, built 1962): a lot for a builder, priced by the lot on the Luxury page, never flip math"] } };
+  const t = triageHeldUnderwrite({ offer, now });
+  assert.equal(t.action, "yours");
+  assert.match(t.reason, /^luxury lot/);
+  assert.match(heldOnTheMachine(offer, { now }).what, /waits for you on the Luxury page/);
+});

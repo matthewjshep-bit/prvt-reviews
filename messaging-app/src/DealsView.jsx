@@ -1069,7 +1069,8 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
   );
 }
 
-export default function DealsView({ settings, onEdit }) {
+// `only`: a predicate that narrows the deals to one lane (the Luxury page).
+export default function DealsView({ settings, onEdit, only = null }) {
   const [deals, setDeals] = useState(null);
   const [error, setError] = useState("");
   const [selectedId, setSelectedId] = useState(() => {
@@ -1112,7 +1113,7 @@ export default function DealsView({ settings, onEdit }) {
   const fell = deals.filter((o) => o.deal.stage === "fell_through");
   const potentialFees = active.reduce((s, o) => s + (Number(o.deal.assignmentFee) || 0), 0);
   const isSfr = (o) => normalizeAsset(o.asset)?.type === "sfr";
-  const shown = (showTerminal ? deals : active).filter((o) => !sfrOnly || isSfr(o));
+  const shown = (showTerminal ? deals : active).filter((o) => (typeof only !== "function" || only(o)) && (!sfrOnly || isSfr(o)));
   const selected = selectedId ? deals.find((o) => o.id === selectedId) : null;
 
   const kpis = [
