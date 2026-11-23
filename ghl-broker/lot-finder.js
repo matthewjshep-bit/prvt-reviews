@@ -337,6 +337,7 @@ export async function runLotFinder({ client, locationId, saved = {}, store = def
   // 4. The texts, for everyone in GHL.
   const optOutTags = optOutTagsOf(config);
   const schedule = !dryRun && f.autoSend && sendsEnabled && OWNER_SMS_ENABLED() && config.enabled;
+  out.texts.refreshed = 0;
   const imported = await store.listLotOwners(locationId, { status: "imported", limit: 5000 });
   for (const row of imported) {
     const pocket = byPocket.get(row.pocketId);
@@ -348,8 +349,19 @@ export async function runLotFinder({ client, locationId, saved = {}, store = def
     const off = await optedOutFor({ store, locationId, contactId: row.contactId, contact, events, optOutTags }).catch(() => null);
     if (off || smsUnsubscribed(contact)) { out.rows.push({ ownerKey: row.ownerKey, waiting: off ? optedOutReason(off) : "SMS is off for them in GHL" }); continue; }
     const next = nextOwnerStep({ events, followUpDays: f.followUpDays, now });
-    if (!next.step) { out.rows.push({ ownerKey: row.ownerKey, waiting: next.stop || next.why }); continue; }
     const d = row.doc || {};
+    // A first text still sitting unsent carries the CURRENT words: the wording
+    // changed after the first ten were drafted (Matt, 2026-11-23), and a draft
+    // nobody has sent yet is still ours to rewrite.
+    if (!next.step && /hasn't gone yet/.test(next.why || "") && !dryRun) {
+      const fresh = lotOwnerText({ step: "open", variant: variantOf(row.ownerKey), first: d.first, street: d.house?.street, pocket: pocket.name, bandLo: pocket.bandLo, bandHi: pocket.bandHi });
+      const open = (await store.listReplyDrafts(locationId, { contactId: row.contactId, status: "draft", limit: 10 }).catch(() => [])).find((x) => x.outbound?.kind === "lot_owner_open");
+      if (fresh && open && open.reply !== fresh) {
+        await store.updateReplyDraft(open.id, { ...open, reply: fresh, updatedAt: iso(now) });
+        out.texts.refreshed++;
+      }
+    }
+    if (!next.step) { out.rows.push({ ownerKey: row.ownerKey, waiting: next.stop || next.why }); continue; }
     const text = lotOwnerText({ step: next.step, variant: variantOf(row.ownerKey), first: d.first, street: d.house?.street, pocket: pocket.name, bandLo: pocket.bandLo, bandHi: pocket.bandHi });
     if (!text) { out.texts.skipped++; out.rows.push({ ownerKey: row.ownerKey, skipped: "nothing to say: no street or no band" }); continue; }
     if (dryRun) { out.texts.would++; out.rows.push({ ownerKey: row.ownerKey, would: next.step }); continue; }
