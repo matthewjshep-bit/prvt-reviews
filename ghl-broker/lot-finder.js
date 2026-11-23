@@ -33,7 +33,7 @@ import { workHour, isWorkday } from "./outreach-sweep.js";
 import { ranThisDay, pacificDay } from "./daily-gate.js";
 import { voiceFlags } from "./shared/voice.js";
 import { soldSearchUrl, searchRows, normalizeRow, mergeFacts, streetKey } from "./comps-zillow.js";
-import { fetchZillowFacts } from "./rehab-scan.js";
+import { fetchZillowFacts, MAX_FACT_LOOKUPS } from "./rehab-scan.js";
 import { citySlug } from "./shared/dispo-regions.js";
 import {
   normalizeLotFinder, pocketReady, propertySearchBody, ownerFromProperty, pickToTrace, traceLookupBody, phonesFromTrace, reachable,
@@ -123,10 +123,19 @@ export async function scanPocketZillow({ lat, lng, radiusMiles = 1, apifyToken, 
   // Two detail batches, not one: the lookup takes a capped list, and with the
   // new builds first the older houses fell off the end (Clyde Hill, 2026-11-23:
   // 40 new builds, 0 teardowns).
-  const [detailNew, detailOld] = await Promise.all([
-    facts(nb.map((r) => r.address), apifyToken).catch(() => new Map()),
-    facts(old.map((r) => r.address), apifyToken).catch(() => new Map()),
-  ]);
+  // The lookup takes MAX_FACT_LOOKUPS addresses a call (25): a 75-row search
+  // goes in three calls, not one with two-thirds dropped (Clyde Hill, second
+  // scan: 22 new builds seen of 42).
+  const chunked = async (rows) => {
+    const out = new Map();
+    const addrs = rows.map((r) => r.address);
+    for (let i = 0; i < addrs.length; i += MAX_FACT_LOOKUPS) {
+      const part = await facts(addrs.slice(i, i + MAX_FACT_LOOKUPS), apifyToken).catch(() => new Map());
+      for (const [k, v] of part) out.set(k, v);
+    }
+    return out;
+  };
+  const [detailNew, detailOld] = await Promise.all([chunked(nb), chunked(old)]);
   const detail = new Map([...detailNew, ...detailOld]);
   const factsFor = (r) => detail.get(streetKey(r.address)) || null;
   const newBuilds = mergeFacts(nb, detail).filter((r) => (r.yearBuilt || 0) >= year - NEW_BUILD_YEARS && r.price >= 1000000)
