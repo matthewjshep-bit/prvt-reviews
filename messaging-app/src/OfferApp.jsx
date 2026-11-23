@@ -33,6 +33,7 @@ import FollowUpView from "./FollowUpView.jsx";
 import AutopilotView from "./AutopilotView.jsx";
 import AgentsTab from "./AgentsTab.jsx";
 import GatekeepersTab from "./GatekeepersTab.jsx";
+import LotsTab from "./LotsTab.jsx";
 import OverviewTab from "./OverviewTab.jsx";
 import InvestorsTab from "./InvestorsTab.jsx";
 import LessonsTab from "./LessonsTab.jsx";
@@ -100,6 +101,7 @@ const NAV =
         { view: "overview", label: "Overview" },
         { view: "agents", label: "Agents" },
         { view: "gatekeepers", label: "Gatekeepers" },
+        { view: "lots", label: "Lots" },
         { view: "investors", label: "Investors" },
         { view: "advanced", label: "Advanced settings" },
       ]
@@ -373,6 +375,7 @@ export default function OfferApp() {
         )}
         {view === "agents" && <AgentsTab settings={settings} onSettingsSaved={(s) => setSettings(s)} />}
         {view === "gatekeepers" && <GatekeepersTab />}
+        {view === "lots" && <LotsTab />}
         {view === "investors" && <InvestorsTab settings={settings} onSettingsSaved={(s) => setSettings(s)} />}
         {view === "lessons" && <LessonsTab onSettingsSaved={(s) => setSettings(s)} />}
         {view === "flow" && <FlowView />}

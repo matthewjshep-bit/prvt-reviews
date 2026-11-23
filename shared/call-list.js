@@ -123,6 +123,9 @@ export const CALL_KINDS = [
   // officer answered our note; or our email went a couple of days ago and
   // nothing came back — the call is the next touch (shared/gatekeeper-sequence.js).
   { key: "call_gatekeeper_replied", label: "A gatekeeper answered" },
+  // The lot finder (2026-11-23): a homeowner on a luxury lot wrote back. The
+  // bot never answers one; the method says call now, then again.
+  { key: "call_lot_owner_replied", label: "A lot owner answered" },
   { key: "call_gatekeeper", label: "Gatekeeper: call after the email" },
   // A buyer on a deal under contract waiting on us (2026-11-09, desk.buyerCalls).
   { key: "call_buyer_live_deal", label: "A buyer on a live deal is waiting on us" },
@@ -132,7 +135,7 @@ export const CALL_KINDS = [
   { key: "email_check",      label: "An email they texted, to check" },
 ];
 // They called you: ring back first — they reached out.
-const BASE = { call_missed: 105, call_hot: 100, call_brought: 95, call_counter: 90, call_gap: 85, call_first_reply: 70, call_quiet: 60, call_phone_only: 55, call_turnkey_week: 50, call_investor: 45, call_partner: 30, call_partner_terms: 80, call_gatekeeper_replied: 97, call_gatekeeper: 65,
+const BASE = { call_missed: 105, call_hot: 100, call_brought: 95, call_counter: 90, call_gap: 85, call_first_reply: 70, call_quiet: 60, call_phone_only: 55, call_turnkey_week: 50, call_investor: 45, call_partner: 30, call_partner_terms: 80, call_gatekeeper_replied: 97, call_gatekeeper: 65, call_lot_owner_replied: 98,
   call_buyer_live_deal: 98 };
 // A gatekeeper's answer stays a call this long; the post-email call this long
 // after the email (then the monthly check-in is the next touch).
@@ -633,6 +636,28 @@ export function callList({
         why: `emailed ${gk.callAfterDays === 1 ? "yesterday" : `${Math.max(1, Math.floor((now - sentAt) / DAY_MS))} days ago`}${about ? ` about ${about}` : ""}, no answer`,
         goal: "Call to put a voice to the email: one estate or closing, a written number as their floor, and whether there are others.",
         opener: `Hi ${first(name)}, Matt Shepherd. I sent you a note${about ? ` about ${about}` : ""} and figured a quick call was easier.` });
+    }
+  }
+
+  /* 5zz. The lot finder (2026-11-23). A homeowner on a luxury lot answered
+   * our text: call them now, then again. The bot holds every reply from one,
+   * so this row is the only thing that answers them. Only the lot and what
+   * they need matter on the call, never the condition of the house. */
+  {
+    const lotEvents = (events || []).filter((e) => e?.contactId && (e.type === "lot_owner_replied" || e.type === "lot_owner_sent"));
+    for (const [c, list] of groupBy(lotEvents, (e) => e.contactId)) {
+      if (taken.has(c) || unsubscribed.has(c)) continue;
+      const sorted = [...list].sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")));
+      const replied = sorted.find((e) => e.type === "lot_owner_replied");
+      if (!replied || now - (ms(replied.at) ?? 0) > GATEKEEPER_REPLIED_DAYS * DAY_MS) continue;
+      const text = sorted.find((e) => e.type === "lot_owner_sent" && e.address) || sorted.find((e) => e.type === "lot_owner_sent");
+      const about = text?.address ? street(text.address) : "";
+      const name = nameOf(c, offersBy, draftsBy);
+      add("call_lot_owner_replied", { contactId: c, contactName: name, since: replied.at, address: text?.address || "",
+        why: `answered our text${about ? ` about ${about}` : ""} — call now, then again`,
+        goal: "A homeowner on a luxury lot wrote back. Call twice if the first doesn't connect. Talk about the lot and what they need (timing, the next house), never the roof or the kitchen. Comps and the price band openly; a couple of months' post-closing occupancy is a lever.",
+        opener: `Hi ${first(name)}, it's Matt Shepherd, thanks for getting back to me${about ? ` about ${about}` : ""}.`,
+        agePenaltyFrom: ms(replied.at) });
     }
   }
 

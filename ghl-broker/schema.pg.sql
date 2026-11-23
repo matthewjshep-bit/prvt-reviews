@@ -548,3 +548,24 @@ create table if not exists gatekeeper_hooks (
   unique (location_id, hook_key)
 );
 create index if not exists gatekeeper_hooks_gk_idx on gatekeeper_hooks (location_id, gk_key);
+
+-- Lot owners (2026-11-23): the luxury teardown lane's front end
+-- (ghl-broker/lot-finder.js). One row per parcel the finder pulled for a
+-- pocket: the owner of record and the house in doc, then the phones the
+-- skip trace found. owner_key is the property-data API's id ("rapi:<id>").
+-- Lifecycle in columns, so a weekly re-pull never undoes a trace or an import.
+create table if not exists lot_owners (
+  id           uuid primary key,
+  location_id  text not null,
+  owner_key    text not null,
+  pocket_id    text not null,
+  status       text not null default 'new',   -- 'new' | 'tracing' | 'traced' | 'no_phone' | 'imported' | 'skipped' | 'do_not_contact'
+  contact_id   text,
+  imported_at  timestamptz,
+  first_seen   timestamptz not null default now(),
+  last_seen    timestamptz not null default now(),
+  doc          jsonb not null,
+  unique (location_id, owner_key)
+);
+create index if not exists lot_owners_loc_idx on lot_owners (location_id, pocket_id, status);
+create index if not exists lot_owners_contact_idx on lot_owners (location_id, contact_id);

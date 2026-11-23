@@ -1060,7 +1060,7 @@ export const MACHINE_STARTED_KINDS = new Set([
   "outreach_open", "outreach_nudge", "outreach_email", "checkin_email", "take_check", "realm_check", "offer_nudge", "counter_nudge", "take_ask", "kind_pass", "pass_note",
   "hot_push", "passed_checkin", "promise_due", "price_drop", "checkin_due", "address_chase",
   "blast_nudge", "dataroom_nudge", "deal_followup", "buyer_pulse", "agent_pulse", "showing_reminder", "showing_followup", "second_look",
-  "gatekeeper_email", "gatekeeper_text", "gatekeeper_checkin"]);
+  "gatekeeper_email", "gatekeeper_text", "gatekeeper_checkin", "lot_owner_open", "lot_owner_follow"]);
 
 // A draft that answers something they sent. Reply rows carry no outbound
 // kind — a photo-only text has an empty `inbound`, so the kind decides.

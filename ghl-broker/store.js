@@ -1294,6 +1294,56 @@ const pgStore = {
     return rows;
   },
 
+  /* ---- lot owners (the luxury teardown lane, ghl-broker/lot-finder.js) ---- */
+  // Lifecycle in columns, the parcel and the phones in doc; a weekly re-pull
+  // never undoes a trace or an import.
+  async upsertLotOwners(locationId, rows) {
+    let created = 0;
+    let updated = 0;
+    for (const r of rows) {
+      const { rows: out } = await query(
+        `insert into lot_owners (id, location_id, owner_key, pocket_id, doc)
+         values ($1,$2,$3,$4,$5)
+         on conflict (location_id, owner_key)
+         do update set pocket_id = excluded.pocket_id, doc = lot_owners.doc || excluded.doc, last_seen = now()
+         returning (xmax = 0) as created`,
+        [uuid(), locationId, r.ownerKey, r.pocketId, r.doc]
+      );
+      if (out[0]?.created) created++;
+      else updated++;
+    }
+    return { created, updated };
+  },
+  async listLotOwners(locationId, { pocketId = null, status = null, limit = 5000 } = {}) {
+    const { rows } = await query(
+      `select owner_key as "ownerKey", pocket_id as "pocketId", status, contact_id as "contactId", imported_at as "importedAt",
+              first_seen as "firstSeen", last_seen as "lastSeen", doc
+       from lot_owners
+       where location_id = $1 and ($2::text is null or pocket_id = $2) and ($3::text is null or status = $3)
+       order by first_seen asc limit $4`,
+      [locationId, pocketId, status, limit]
+    );
+    return rows;
+  },
+  async getLotOwner(locationId, ownerKey) {
+    const { rows } = await query(
+      `select owner_key as "ownerKey", pocket_id as "pocketId", status, contact_id as "contactId", imported_at as "importedAt",
+              first_seen as "firstSeen", last_seen as "lastSeen", doc
+       from lot_owners where location_id = $1 and owner_key = $2`,
+      [locationId, ownerKey]
+    );
+    return rows[0] || null;
+  },
+  async setLotOwner(locationId, ownerKey, { status, contactId, importedAt, doc } = {}) {
+    const { rowCount } = await query(
+      `update lot_owners set status = coalesce($3, status), contact_id = coalesce($4, contact_id),
+              imported_at = coalesce($5, imported_at), doc = coalesce($6, doc)
+       where location_id = $1 and owner_key = $2`,
+      [locationId, ownerKey, status || null, contactId || null, importedAt || null, doc || null]
+    );
+    return rowCount > 0;
+  },
+
   /* ---- contact record (the app's own memory of a person) ---- */
   // Person-scoped and permanent: nothing re-syncs over these rows and the
   // investor prune never sees them. See schema.pg.sql for the shapes.
@@ -1759,6 +1809,7 @@ const fileStore = (() => {
       data.threadReads = data.threadReads || {};
       data.gatekeepers = data.gatekeepers || {};
       data.gatekeeperHooks = data.gatekeeperHooks || {};
+      data.lotOwners = data.lotOwners || {};
       data.jobCursors = data.jobCursors || {};
       data.replyDrafts = data.replyDrafts || {};
       data.appErrors = data.appErrors || {};
@@ -2669,6 +2720,51 @@ const fileStore = (() => {
         .filter((h) => h.locationId === locationId && (!gkKey || h.gkKey === gkKey))
         .sort((a, b) => String(b.firstSeen).localeCompare(String(a.firstSeen)))
         .slice(0, limit);
+    },
+
+    /* ---- lot owners ---- */
+    async upsertLotOwners(locationId, rows) {
+      ensure();
+      let created = 0;
+      let updated = 0;
+      for (const r of rows) {
+        const k = `${locationId}|${r.ownerKey}`;
+        const prev = data.lotOwners[k];
+        data.lotOwners[k] = {
+          status: prev?.status || "new",
+          contactId: prev?.contactId || null,
+          importedAt: prev?.importedAt || null,
+          firstSeen: prev?.firstSeen || nowIso(),
+          lastSeen: nowIso(),
+          locationId, ownerKey: r.ownerKey, pocketId: r.pocketId, doc: { ...(prev?.doc || {}), ...r.doc },
+        };
+        if (prev) updated++;
+        else created++;
+      }
+      persist();
+      return { created, updated };
+    },
+    async listLotOwners(locationId, { pocketId = null, status = null, limit = 5000 } = {}) {
+      ensure();
+      return Object.values(data.lotOwners)
+        .filter((o) => o.locationId === locationId && (!pocketId || o.pocketId === pocketId) && (!status || o.status === status))
+        .sort((a, b) => String(a.firstSeen).localeCompare(String(b.firstSeen)))
+        .slice(0, limit);
+    },
+    async getLotOwner(locationId, ownerKey) {
+      ensure();
+      return data.lotOwners[`${locationId}|${ownerKey}`] || null;
+    },
+    async setLotOwner(locationId, ownerKey, { status, contactId, importedAt, doc } = {}) {
+      ensure();
+      const row = data.lotOwners[`${locationId}|${ownerKey}`];
+      if (!row) return false;
+      if (status) row.status = status;
+      if (contactId) row.contactId = contactId;
+      if (importedAt) row.importedAt = importedAt;
+      if (doc) row.doc = doc;
+      persist();
+      return true;
     },
 
     /* ---- contact record ---- */

@@ -86,6 +86,10 @@ const dozFor = (months) => (months <= 1 ? "30" : months <= 3 ? "90" : months <= 
 export function soldSearchUrl({
   lat, lng, radiusMiles = 0.5, beds = 0, baths = 0, sqft = 0, monthsBack = 12,
   bedTolerance = 0, sqftPct = 0.2, homeType = null,
+  // The teardown lane's two searches (routes/lot-finder.js discoverPocket):
+  // new builds (built since a year, over a price) and old houses (built
+  // before a year). Best-effort like every key here; re-checked in code.
+  builtMin = 0, builtMax = 0, priceMin = 0,
 }) {
   const filterState = {
     // Sold only. The five for-sale flags are switched off explicitly because
@@ -121,6 +125,8 @@ export function soldSearchUrl({
   if (sqft > 0) {
     filterState.sqft = { min: Math.round(sqft * (1 - sqftPct)), max: Math.round(sqft * (1 + sqftPct)) };
   }
+  if (builtMin > 0 || builtMax > 0) filterState.built = { ...(builtMin > 0 ? { min: builtMin } : {}), ...(builtMax > 0 ? { max: builtMax } : {}) };
+  if (priceMin > 0) filterState.price = { min: Math.round(priceMin) };
 
   const state = {
     isMapVisible: true,
@@ -434,7 +440,7 @@ export async function pullZillowComps({
 }
 
 // One search, bought once a day: the cache, then the actor.
-async function searchRows(url, limit, apifyToken, what) {
+export async function searchRows(url, limit, apifyToken, what) {
   const hit = cachedRows(url, limit);
   if (hit) return hit;
   const r = await fetch(

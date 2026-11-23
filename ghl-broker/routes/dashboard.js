@@ -118,6 +118,8 @@ const PIPELINE_EVENT_TYPES = [
   "email_offered", "email_saved",
   // The gatekeeper line's notes that went and their answers: its call rows.
   "gatekeeper_sent", "gatekeeper_replied",
+  // The lot finder's texts that went and the owners' answers: its call row.
+  "lot_owner_sent", "lot_owner_replied",
 ];
 
 const DAY_MS = 86400000;

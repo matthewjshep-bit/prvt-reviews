@@ -115,6 +115,9 @@ export const EVENT_TYPES = [
   // before its draft is written (data.step, data.hookKey), the draft actually
   // going, and their answer — which stops the machine for good.
   "gatekeeper_queued", "gatekeeper_sent", "gatekeeper_replied",
+  // The lot finder (ghl-broker/lot-finder.js): a text claimed, gone, and the
+  // owner's answer, which stops the machine and puts a call on the Desk.
+  "lot_owner_queued", "lot_owner_sent", "lot_owner_replied",
   // A text a person typed on Today's work pane (ghl-broker/hand-reply.js).
   // The words are in GHL's thread, not here.
   "hand_reply",
@@ -229,6 +232,7 @@ export const EVENT_LABEL = {
   outreach_email_queued: "introduction email queued",
   checkin_email_queued: "check-in email queued",
   gatekeeper_queued: "gatekeeper note queued", gatekeeper_sent: "gatekeeper note sent", gatekeeper_replied: "gatekeeper answered",
+  lot_owner_queued: "lot owner text queued", lot_owner_sent: "lot owner text sent", lot_owner_replied: "lot owner answered",
   pulse_sent: "checked in between deals",
   pulse_voided: "a check-in drafted nothing",
   pulse_texted: "we checked in between deals",
@@ -279,6 +283,7 @@ export const EVENT_ICON = {
   outreach_email_queued: "Mail",
   checkin_email_queued: "Mail",
   gatekeeper_queued: "Mail", gatekeeper_sent: "Send", gatekeeper_replied: "MessageCircle",
+  lot_owner_queued: "Mail", lot_owner_sent: "Send", lot_owner_replied: "MessageCircle",
   pulse_sent: "BellRing",
   pulse_voided: "Clock",
   pulse_texted: "BellRing",

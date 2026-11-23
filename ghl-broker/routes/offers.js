@@ -881,7 +881,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // characters; PUT keeps the stored value wherever the form sent a blank.
   // `?reveal=1` returns them only for a location that has a location key
   // configured (and therefore presented one to get this far).
-  const SECRET_FIELDS = ["aiApiKey", "apifyToken", "brickedApiKey", "compsApiKey", "rentcastApiKey", "googleApiKey", "captureToken", "githubToken", "slackBotToken"];
+  const SECRET_FIELDS = ["aiApiKey", "apifyToken", "brickedApiKey", "compsApiKey", "rentcastApiKey", "googleApiKey", "captureToken", "githubToken", "slackBotToken", "tracerfyApiKey"];
   const locationHasKey = (locationId) => {
     try { return Boolean(JSON.parse(process.env.GHL_LOCATION_KEYS || "{}")[locationId]); } catch { return false; }
   };
@@ -933,7 +933,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // chart saving one field would otherwise carry its copy of everything
   // else over a Setup form saved in between — or the form over the chart.
   // Arrays replace; objects merge. Only these sections, never conversationAi.
-  const PATCHABLE = ["outreachAutopilot", "dispoAutopilot"];
+  const PATCHABLE = ["outreachAutopilot", "dispoAutopilot", "lotFinder"];
   const isPlain = (v) => v && typeof v === "object" && !Array.isArray(v);
   const mergeInto = (base, patch) => {
     const out = isPlain(base) ? { ...base } : {};

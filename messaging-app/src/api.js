@@ -904,3 +904,11 @@ export const setGatekeeperStatus = (gkKey, status) => post(`/api/gatekeepers/${e
 export const importGatekeepers = (gkKeys, { dryRun = true } = {}) => post(`/api/gatekeepers/import`, { gkKeys, dryRun });
 export const getGatekeeperSweep = () => fetch(`${API_BASE}/api/gatekeepers/sweep?${locq()}`).then(j);
 export const runGatekeeperSweep = ({ dryRun = true } = {}) => post(`/api/gatekeepers/sweep/run`, { dryRun, wait: true });
+
+/* ---------- the lot finder (luxury teardown lane: parcels → skip trace → owner texts) ---------- */
+export const getLotFinder = () => fetch(`${API_BASE}/api/lot-finder?${locq()}`).then(j);
+export const getLotOwners = ({ pocketId = "", status = "", limit = 500 } = {}) =>
+  fetch(`${API_BASE}/api/lot-finder/owners?${locq()}${pocketId ? `&pocketId=${encodeURIComponent(pocketId)}` : ""}${status ? `&status=${encodeURIComponent(status)}` : ""}&limit=${limit}`).then(j);
+export const setLotOwnerStatus = (ownerKey, status) => post(`/api/lot-finder/owners/${encodeURIComponent(ownerKey)}/status`, { status });
+export const suggestLotPocket = (address, radiusMiles) => post(`/api/lot-finder/suggest`, { address, radiusMiles });
+export const runLotFinder = ({ dryRun = true } = {}) => post(`/api/lot-finder/run`, { dryRun, wait: true });

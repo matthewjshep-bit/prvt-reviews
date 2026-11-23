@@ -15,6 +15,8 @@ import createOffersRouter from "./routes/offers.js";
 import createOutreachRouter from "./routes/outreach.js";
 import createGatekeepersRouter from "./routes/gatekeepers.js";
 import { maybeRunGatekeeperSweep } from "./gatekeeper-sweep.js";
+import createLotFinderRouter from "./routes/lot-finder.js";
+import { maybeRunLotFinder } from "./lot-finder.js";
 import createDashboardRouter from "./routes/dashboard.js";
 import createDispoRouter from "./routes/dispo.js";
 import createContactsRouter from "./routes/contacts.js";
@@ -197,6 +199,8 @@ outreachRouter.conversationDepsFor = offersRouter.conversationDepsFor;
 // The gatekeeper line: estate attorneys and title/escrow, apart from agents.
 const gatekeepersRouter = createGatekeepersRouter({ resolveLocation });
 app.use("/api/gatekeepers", gatekeepersRouter);
+// The luxury teardown lane's front end: parcels → skip trace → owner texts.
+app.use("/api/lot-finder", createLotFinderRouter({ resolveLocation }));
 const dashboardRouter = createDashboardRouter({ resolveLocation, conversationDepsFor: offersRouter.conversationDepsFor, handTextDepsFor: (args) => offersRouter.handTextDepsFor?.(args) || {},
   operatorStatus: (args) => offersRouter.applyOperatorStatus?.(args) });
 app.use("/api/dashboard", dashboardRouter);
@@ -279,6 +283,11 @@ const TICK_JOBS = [
   { area: "gatekeepers", run: async ({ client, locationId, saved }) => {
     if (await maybeRunGatekeeperSweep({ client, locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE,
       deps: { importGatekeepers: gatekeepersRouter.importGatekeepers } })) console.log(`gatekeeper sweep started for ${locationId}`);
+  } },
+  // The lot finder (luxury teardown lane): the week's parcels, the day's skip
+  // traces, imports and owner texts — off unless settings.lotFinder.enabled.
+  { area: "lot-finder", run: async ({ client, locationId, saved }) => {
+    if (await maybeRunLotFinder({ client, locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE })) console.log(`lot finder started for ${locationId}`);
   } },
   // The agents GHL texted and never heard back from, into the second workflow.
   { area: "outreach-follow-up", run: async ({ client, locationId, saved }) => {
