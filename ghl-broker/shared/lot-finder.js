@@ -220,11 +220,11 @@ export const reachable = (phones = []) => phones.filter((p) => p.type === "mobil
 // nobody filled never sends (shared/voice.js LEFTOVER_RX), and the house rules
 // hold: no dollar sign, one question, no "following up" (voiceFlags).
 export const OPEN_TEXTS = [
-  "Hey {first}, Matt Shepherd here. I'm an investor and work with builders building new construction homes in {pocket}. Reaching out to see if you'd ever consider selling {street}. Open to a quick conversation about what we might be able to offer?",
+  "Hey {first}, Matt Shepherd here. I'm an investor and work with builders building new construction homes in {pocket}. Wanted to ask whether you'd ever consider selling {street}. Open to a quick conversation about what we might be able to offer?",
   "Hi {first}, this is Matt, a local investor. I work with builders putting up new homes in {pocket} and {street} is the kind of lot they look for. Would you ever consider selling it?",
   "{first}, Matt Shepherd here. I work with the builders doing the new construction around {pocket}. Not here to waste your time: is selling {street} something you'd ever think about?",
   "Hey {first}, Matt here, local investor working with builders in {pocket}. If you've ever thought about selling {street}, I'd like a quick conversation about what we could offer. Worth a chat?",
-  "Hi {first}, Matt Shepherd, investor working with new construction builders in {pocket}. Reaching out about {street}: would you consider selling, now or down the road?",
+  "Hi {first}, Matt Shepherd, investor working with new construction builders in {pocket}. About {street}: would you consider selling, now or down the road?",
   "{first}, this is Matt. I work with builders building new homes in {pocket} and I'm looking for a lot nearby. Any chance you'd consider selling {street}?",
   "Hi {first}, Matt Shepherd here. I'm a local investor and I work with the builders behind the new construction in {pocket}. Would you be open to a conversation about selling {street}?",
   "Hey {first}, Matt here. I work with builders doing new construction in {pocket} and {street} caught my eye. Would you ever consider selling, and if so could we talk about what we might offer?",
