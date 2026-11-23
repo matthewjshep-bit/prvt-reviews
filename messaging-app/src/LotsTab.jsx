@@ -66,7 +66,7 @@ function PocketCard({ p, onChange, onRemove, counts, canSuggest }) {
       </div>
       <p className="text-xs text-slate-500">
         {p.lat && p.lng ? "On the map. " : "Not on the map yet: press Suggest, or save and the first run places it. "}
-        {p.bandLo > 0 ? `The first text says "${money(p.bandLo)} to ${money(p.bandHi)} range".` : "No price band yet: nothing is texted until there is one."}
+        {p.bandLo > 0 ? `Comps for the reply: ${money(p.bandLo)} to ${money(p.bandHi)}. The first text names the neighborhood, not a number.` : "No price band yet: the first text still goes (it names the neighborhood, not a number); the bot has no comps to quote until Suggest sets one."}
         {c.total ? ` · ${c.total} found, ${c.traced || 0} with a cell, ${c.imported || 0} in GHL, ${c.no_phone || 0} no cell.` : ""}
       </p>
       {note && <p className="text-xs text-blue-800" role="status">{note}</p>}

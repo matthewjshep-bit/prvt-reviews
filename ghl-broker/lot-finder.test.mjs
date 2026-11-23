@@ -120,7 +120,7 @@ test("with imports live, the owner goes into GHL tagged apart from agents and ge
     assert.ok(d, "the first text is a draft");
     assert.equal(d.status, "draft");
     assert.match(d.autoSend.reason, /OWNER_SMS_ENABLED/);
-    assert.ok(d.reply.includes("9 Lakeview Ln") && d.reply.includes("1.9M") && d.reply.includes("2.3M"), d.reply);
+    assert.ok(d.reply.includes("9 Lakeview Ln") && d.reply.includes("Clyde Hill") && !/\d\.\dM/.test(d.reply), d.reply);
     assert.doesNotMatch(d.reply, /[{}]/);
     assert.equal(d.party, "owner");
     // The next day, nothing more: the first text hasn't gone yet.
