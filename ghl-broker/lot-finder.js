@@ -360,6 +360,16 @@ export async function runLotFinder({ client, locationId, saved = {}, store = def
         await store.updateReplyDraft(open.id, { ...open, reply: fresh, updatedAt: iso(now) });
         out.texts.refreshed++;
       }
+      // Once every switch is on, a first text drafted while they were off
+      // schedules itself too (Matt turned OWNER_SMS_ENABLED on after the
+      // first ten were drafted, 2026-11-23).
+      const hardNow = open ? voiceFlags({ text: open.reply, channel: "sms", kind: "lot_owner_open" }).filter((x) => x.level === "hard") : ["none"];
+      if (open && schedule && !hardNow.length && !(open.flags || []).length) {
+        const sendAt = spreadAcrossDay({ now, quietHours: machineHours(config.autoSend || {}), hours: 6, weekends: "none", offDays: config.autoSend?.offDays || [] });
+        await store.updateReplyDraft(open.id, { ...open, reply: fresh || open.reply, status: "scheduled", sendAt, scheduledAt: iso(now), autoSendable: true, autoSend: { decided: true, reason: "" }, updatedAt: iso(now) });
+        out.texts.scheduled++;
+        out.rows.push({ ownerKey: row.ownerKey, step: "open", draftId: open.id, status: "scheduled", sendAt });
+      }
     }
     if (!next.step) { out.rows.push({ ownerKey: row.ownerKey, waiting: next.stop || next.why }); continue; }
     const text = lotOwnerText({ step: next.step, variant: variantOf(row.ownerKey), first: d.first, street: d.house?.street, pocket: pocket.name, bandLo: pocket.bandLo, bandHi: pocket.bandHi });
