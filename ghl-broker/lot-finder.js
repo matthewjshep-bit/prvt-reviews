@@ -163,7 +163,7 @@ export async function traceOwner({ row, apiKey, fetchFn = fetch }) {
  * deps: { fetch, getContact, findDuplicateContact, createContact, addContactTags } — the
  * two APIs and GHL, injectable for tests.
  */
-export async function runLotFinder({ client, locationId, saved = {}, store = defaultStore, sendsEnabled = false, deps = {}, now = Date.now(), dryRun = null }) {
+export async function runLotFinder({ client, locationId, saved = {}, store = defaultStore, sendsEnabled = false, deps = {}, now = Date.now(), dryRun = null, rescan = false }) {
   const f = normalizeLotFinder(saved?.lotFinder);
   dryRun = dryRun ?? f.dryRun;
   const fetchFn = deps.fetch || fetch;
@@ -202,11 +202,13 @@ export async function runLotFinder({ client, locationId, saved = {}, store = def
     const line = out.pockets.find((x) => x.id === p.id);
     if (!p.enabled || !p.lat || !p.lng || dryRun) continue;
     if (!apifyToken) { line.builders = "no Apify token"; continue; }
-    if (scans[p.id] && now - Date.parse(scans[p.id]) <= PULL_EVERY_MS) continue;
+    if (!rescan && scans[p.id] && now - Date.parse(scans[p.id]) <= PULL_EVERY_MS) continue;
     try {
       const scan = await (deps.scanPocketZillow || scanPocketZillow)({ lat: p.lat, lng: p.lng, radiusMiles: p.radiusMiles, apifyToken, now, deps });
       const rows = scan.newBuilds.map((b) => builderFromNewBuild({ row: b, facts: b.facts, pocket: p, now })).filter(Boolean);
       const up = await store.upsertLotBuilders(locationId, rows);
+      // A builder read again with a number this time goes back to new, so the import below takes it.
+      for (const r of rows) if (r.doc?.agent?.phone) { const cur = await store.getLotBuilder?.(locationId, r.builderKey).catch(() => null); if (cur?.status === "no_phone") await store.setLotBuilder(locationId, r.builderKey, { status: "new" }); }
       line.builders = rows.length; line.buildersCreated = up.created;
       scans[p.id] = iso(now);
     } catch (e) { line.builders = `scan failed: ${String(e?.message || e).slice(0, 120)}`; }
@@ -367,7 +369,7 @@ export async function runLotFinder({ client, locationId, saved = {}, store = def
 }
 
 /** startLotFinder(...) → job: runs in the background, the cursor says how it went. */
-export function startLotFinder({ client, locationId, saved, store = defaultStore, sendsEnabled = false, deps = {}, now = Date.now(), dryRun = null, trigger = "daily" }) {
+export function startLotFinder({ client, locationId, saved, store = defaultStore, sendsEnabled = false, deps = {}, now = Date.now(), dryRun = null, trigger = "daily", rescan = false }) {
   const job = { id: `lot-${now.toString(36)}`, trigger, status: "running", startedAt: iso(now), finishedAt: null, result: null, error: null };
   jobs.set(locationId, job);
   const stamp = async (patch) => {
@@ -377,7 +379,7 @@ export function startLotFinder({ client, locationId, saved, store = defaultStore
   const summary = () => ({ id: job.id, trigger, status: job.status, startedAt: job.startedAt, finishedAt: job.finishedAt, error: job.error,
     ...(job.result ? { dryRun: job.result.dryRun, pockets: job.result.pockets, traced: job.result.traced, imported: job.result.imported, builders: job.result.builders, texts: job.result.texts } : {}) });
   job.done = stamp({ run: { id: job.id, trigger, startedAt: job.startedAt } })
-    .then(() => runLotFinder({ client, locationId, saved, store, sendsEnabled, deps, now, dryRun }))
+    .then(() => runLotFinder({ client, locationId, saved, store, sendsEnabled, deps, now, dryRun, rescan }))
     .then(async (result) => {
       job.result = result; job.status = "done"; job.finishedAt = iso(Date.now());
       console.log(`lot finder: ${result.traced.looked} traced (${result.traced.reachable} reachable), imported ${JSON.stringify(result.imported)}, texts ${JSON.stringify(result.texts)}`);
