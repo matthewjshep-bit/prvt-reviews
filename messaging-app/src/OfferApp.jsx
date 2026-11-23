@@ -35,6 +35,10 @@ import AgentsTab from "./AgentsTab.jsx";
 import GatekeepersTab from "./GatekeepersTab.jsx";
 import LotsTab from "./LotsTab.jsx";
 import { isLuxuryLot } from "@shared/asset-type.js";
+
+// The Offers page is the agent-outreach book; a luxury lot lives on the Luxury
+// page and nowhere else (Matt, 2026-11-23). The Deals page (/deals) shows every kind.
+const notLuxury = (o) => !isLuxuryLot(o);
 import OverviewTab from "./OverviewTab.jsx";
 import InvestorsTab from "./InvestorsTab.jsx";
 import LessonsTab from "./LessonsTab.jsx";
@@ -372,10 +376,10 @@ export default function OfferApp() {
           <OffersHistory onEdit={(o) => { setEditing(o); setView("new"); }}
             onNew={(contactId) => { setEditing(null); setInitialContactId(contactId); setFormNonce((n) => n + 1); setView("new"); }}
             onDeal={() => setView("deals")} settings={settings}
-            only={APP_MODE === "luxury" ? isLuxuryLot : null} />
+            only={APP_MODE === "luxury" ? isLuxuryLot : APP_MODE === "offers" ? notLuxury : null} />
         )}
         {view === "deals" && (
-          <DealsView settings={settings} only={APP_MODE === "luxury" ? isLuxuryLot : null}
+          <DealsView settings={settings} only={APP_MODE === "luxury" ? isLuxuryLot : APP_MODE === "offers" ? notLuxury : null}
             onEdit={APP_MODE === "deals"
               ? (o) => window.open(offerEditorUrl(o.id), "_blank")
               : (o) => { setEditing(o); setView("new"); }} />

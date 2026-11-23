@@ -192,3 +192,13 @@ test("the weekly pass reads the new builds that sold in the pocket and puts thei
     assert.equal(again.pockets[0].builders, undefined);
   } finally { delete process.env.OUTREACH_IMPORTS_ENABLED; }
 });
+
+test("a house from a lot owner, or inside a pocket, belongs to the luxury lane; any other house doesn't", async () => {
+  const { luxuryLaneFor } = await import("./auto-underwrite.js");
+  const saved = ON();
+  assert.match(luxuryLaneFor({ saved, contact: { tags: ["lot-owner", "lot-pocket-clyde-hill"] } }).why, /homeowner the lot finder texted, inside the Clyde Hill pocket/);
+  assert.match(luxuryLaneFor({ saved, contact: { tags: ["lot-owner"] } }).why, /homeowner the lot finder texted/);
+  assert.equal(luxuryLaneFor({ saved, contact: { tags: ["agent-outreach"] }, lat: 47.635, lng: -122.212, lotSqft: 34000, yearBuilt: 1962 }).pocket.id, "clyde-hill");
+  assert.equal(luxuryLaneFor({ saved, contact: { tags: ["agent-outreach"] }, lat: 47.635, lng: -122.212, lotSqft: 7000, yearBuilt: 1962 }), null, "too small a lot");
+  assert.equal(luxuryLaneFor({ saved: {}, contact: { tags: ["agent-outreach"] }, lat: 47.635, lng: -122.212, lotSqft: 34000, yearBuilt: 1962 }), null, "no pockets");
+});

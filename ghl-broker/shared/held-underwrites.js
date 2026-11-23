@@ -41,6 +41,7 @@ import { addressKey, sameStreet, parseUsAddress, completeAddress } from "./us-ad
 import { propertyDossier } from "./contact-record.js";
 import { aiHoldReasons, effectiveStatus, DEAD_STATUSES, saidYes, DRAFT_ONLY_HOLD, DRAFT_ONLY_RX } from "./offer-status.js";
 import { KIND_HOLD, MOBILE_HOLD, RURAL_HOLD } from "./asset-type.js";
+import { LOT_HOLD } from "./lot-finder.js";
 import { pricedByHand } from "./underwrite-model.js";
 import { WA_CITY_COORDS } from "./wa-city-coords.js";
 import { threadPassed } from "./flip-read.js";
@@ -406,6 +407,12 @@ function triageCore({
     return { ...base, action: "retire", status: "we_passed", reason: "we asked for their read a week ago and heard nothing" };
   }
 
+  /* --- 2c. a luxury lot (shared/lot-finder.js, 2026-11-23) --- */
+  // A lot for a builder: priced by the lot on the Luxury page, by a person.
+  // The machine never passes it and never asks the agent for a read.
+  const lot = held.find((h) => LOT_HOLD.test(String(h || "")));
+  if (lot) return { ...base, action: "yours", reason: String(lot) };
+
   /* --- 3. rural: two acres or more (Matt, 2026-10-08) --- */
   // Harder to comp, and our buyers don't want it. No day to wait, unlike a
   // house that isn't single-family: passed at the next check, and the agent
@@ -616,6 +623,7 @@ export function heldOnTheMachine(offer, { knownCities = null, now = Date.now() }
   const cls = classifyHolds(held);
   const address = String(offer?.address || "").trim();
   if (!address || cls.junk || TEST_ADDRESS.test(address) || !/\d/.test(address)) return { what: "dropped at the 7pm check — nothing to place" };
+  if (held.some((h) => LOT_HOLD.test(String(h || "")))) return { what: "waits for you on the Luxury page — a lot for a builder, priced by the lot; the machine never passes it" };
   const rural = held.find((h) => RURAL_HOLD.test(String(h || "")));
   if (rural) return { what: `passed at the 7pm check — ${String(rural).split(" (")[0].replace(/^rural — /, "rural: ")}; we buy under 2 acres` };
   if (held.some((h) => MOBILE_HOLD.test(String(h || "")))) return { what: "passed at the 7pm check — a mobile home; we don't buy mobile or manufactured homes" };

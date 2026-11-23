@@ -391,9 +391,21 @@ avoided selling costs.
   non-REET closing.
 
 Built the same day: the lot finder below (pockets, parcels, skip trace, owner
-texts behind `OWNER_SMS_ENABLED`, and the builders who buy there). Not built:
-holding a listed teardown inside a pocket for lot pricing instead of grading
-it C.
+texts behind `OWNER_SMS_ENABLED`, and the builders who buy there).
+
+**Every luxury offer runs through the Luxury page** (Matt, 2026-11-23). A house
+belongs to the lane when its contact is a homeowner the lot finder texted
+(tag `lot-owner` / `lot-pocket-*`), or when it sits inside an enabled pocket,
+big and old enough (`pocketFor` in `shared/lot-finder.js`; `luxuryLaneFor` in
+`ghl-broker/auto-underwrite.js`). Then:
+- the auto-underwrite holds it before comps or a photo scan are bought, with a
+  `luxury lot — …` reason (`lotHold`) and the lane stamped on the draft, so no
+  flip math ever runs on it, not even a fill run;
+- the nightly held sweep leaves it as yours (`triageHeldUnderwrite` → `yours`):
+  never passed, never a read asked of the agent;
+- any save of an offer on such a house (the editor, a re-quote) stamps
+  `asset.lane = "luxury"` whoever made it, so the Luxury page's Offers and
+  Deals list every one and the lot analyzer opens it.
 
 ## The lot finder — parcels → skip trace → owner texts, and the builders who buy there (2026-11-23)
 
@@ -6764,6 +6776,8 @@ sent it, so it still comes back at once.
 | Autopilot | `https://<site>/autopilot?location_id={{location.id}}` | Overview · Agents · Investors · Advanced settings |
 | Reports | `https://<site>/reports?location_id={{location.id}}` | Flow · Line · Follow-up · Activity · Lessons |
 | Luxury | `https://<site>/luxury?location_id={{location.id}}` | Lots · Offers (luxury lots only) · Deals (luxury lots only); New Offer starts as a luxury lot |
+
+The Offer Generator's own Offers and Deals tabs leave luxury lots out: that page is the agent-outreach book, the Luxury page is the lane's. `/deals` on its own shows every kind.
 
 Cross-app links go through `messaging-app/src/links.js`.
 

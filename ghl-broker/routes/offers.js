@@ -165,6 +165,7 @@ import { normalizeBuybox, buyboxIsEmpty, matchBuybox } from "../shared/buybox.js
 import { normalizeAsset, assetFromSnapshot, assetOf, assetLabel, goesToBuilders } from "../shared/asset-type.js";
 import { DEAL_SENT_TYPES, sentTo } from "../shared/buyer-score.js";
 import { buildUnderwriteCalc, underwriteModel } from "../shared/underwrite-model.js";
+import { luxuryLaneFor } from "../auto-underwrite.js";
 import { recordEvent, recordEvents, learnFacts, ensureProfile } from "../contact-record.js";
 import { FACT_KEYS, eventFromLedgerLine, parseHistoryLine, ledgerEventType, propertyDossier } from "../shared/contact-record.js";
 import { issueDataroomInvite } from "../dataroom.js";
@@ -2361,7 +2362,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // what Zillow said on this underwrite. Stored, not only derived, because
     // the lean list rows never carry the snapshot it is read from.
     const picked = body.asset ? normalizeAsset({ ...body.asset, by: "you", at: new Date().toISOString() }) : null;
-    const asset = picked
+    let asset = picked
       || (existing?.asset?.by === "you" ? normalizeAsset(existing.asset) : null)
       || assetFromSnapshot({ snapshot })
       || normalizeAsset(existing?.asset);
@@ -2381,6 +2382,16 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
 
     // 2. Calculate.
     const saved = await store.getOfferSettings(locationId);
+    // The luxury lane (shared/lot-finder.js, 2026-11-23): an offer on a homeowner
+    // the lot finder texted, or on a house inside one of the pockets, carries
+    // the lane whoever made it, so the Luxury page lists every one. The lane
+    // only ever goes onto a house (normalizeAsset keeps it for sfr alone).
+    if (!asset?.lane && (!asset || asset.type === "sfr")) {
+      const info = snapshot?.subjectInfo || {};
+      const sub = snapshot?.comps?.result?.subject || snapshot?.subject || {};
+      const lane = luxuryLaneFor({ saved, contact, lat: sub.lat, lng: sub.lng, lotSqft: info.lotSqft, yearBuilt: info.yearBuilt });
+      if (lane) asset = normalizeAsset({ ...(asset || { type: "sfr", by: "underwrite" }), lane: "luxury", at: new Date().toISOString() });
+    }
     // An income or land offer (shared/underwrite-model.js) is priced by its
     // own engine from the deal the editor sent; a house by comps, as always.
     // A revision that names no model — "Re-quote at N", a counter applied

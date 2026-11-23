@@ -401,3 +401,44 @@ export function builderOpener({ first = "", exit = {}, lotStreet = "", assignAt 
   const size = exit.lotSqft > 0 ? " of similar size" : "";
   return `${f ? `${f}, ` : ""}Matt Shepherd here. Saw you sold ${sold} for ${kWords(exit.exitPrice)}${lot}, congrats. I've got an off-market lot${size} a few blocks away at ${clean(lotStreet).split(",")[0]}${at}, fits the building envelope of the one you just did. Any interest?`.slice(0, TEXT_MAX);
 }
+
+/* ---------- a house that belongs to the lane (the Luxury page gets every one) ---------- */
+
+// Every hold reason for a luxury lot starts with this (held-underwrites.js
+// keys on it): never passed by the machine, never flip math — a person prices
+// it by the lot, on the Luxury page.
+export const LOT_HOLD_PREFIX = "luxury lot";
+export const LOT_HOLD = /^luxury lot\b/i;
+
+const toRad = (d) => (d * Math.PI) / 180;
+/** milesApart(a, b) → great-circle miles between two { lat, lng } points. */
+export function milesApart(a, b) {
+  const R = 3958.8;
+  const dLat = toRad(num(b.lat) - num(a.lat));
+  const dLng = toRad(num(b.lng) - num(a.lng));
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(num(a.lat))) * Math.cos(toRad(num(b.lat))) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+/**
+ * pocketFor({ lat, lng, lotSqft, yearBuilt }, pockets) → the enabled pocket the
+ * house falls in, or null: inside the circle, lot at least the pocket's
+ * minimum, built no later than its cutoff. A house with no lot or no year on
+ * record doesn't qualify — the lane is for the houses we're sure about.
+ */
+export function pocketFor({ lat, lng, lotSqft = 0, yearBuilt = 0 } = {}, pockets = []) {
+  if (!(num(lat) && num(lng) && num(lotSqft) > 0 && num(yearBuilt) > 0)) return null;
+  for (const p of pockets || []) {
+    if (!p?.enabled || !p.lat || !p.lng) continue;
+    if (num(lotSqft) < p.lotSqftMin || num(yearBuilt) > p.yearBuiltMax) continue;
+    if (milesApart({ lat, lng }, p) <= p.radiusMiles) return p;
+  }
+  return null;
+}
+
+/** lotHold(pocket, { lotSqft, yearBuilt, why }) → the hold reason, in the words the Desk shows. */
+export function lotHold(pocket = null, { lotSqft = 0, yearBuilt = 0, why = "" } = {}) {
+  const facts = [lotSqft > 0 ? `${Math.round(lotSqft).toLocaleString("en-US")} sqft lot` : "", yearBuilt > 0 ? `built ${yearBuilt}` : ""].filter(Boolean).join(", ");
+  const where = why || (pocket?.name ? `inside the ${pocket.name} pocket` : "a homeowner the lot finder texted");
+  return `${LOT_HOLD_PREFIX} — ${where}${facts ? ` (${facts})` : ""}: a lot for a builder, priced by the lot on the Luxury page, never flip math`;
+}

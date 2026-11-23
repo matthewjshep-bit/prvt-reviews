@@ -172,3 +172,19 @@ test("a new build that sold reads as a builder lead: the exit, the lot buy befor
   assert.equal(t, "Ann, Matt Shepherd here. Saw you sold 12 Summit Dr for 4.6M, looks like the lot ran 1.1M, congrats. I've got an off-market lot of similar size a few blocks away at 9 Lakeview Ln at 1.3M, fits the building envelope of the one you just did. Any interest?");
   assert.doesNotMatch(t, /\$/);
 });
+
+test("a house inside an enabled pocket, big and old enough, belongs to the lane; one outside, too small, too new or unknown doesn't", async () => {
+  const { pocketFor, lotHold, milesApart, LOT_HOLD } = await import("./lot-finder.js");
+  const p = { ...pocket, enabled: true };
+  assert.ok(Math.abs(milesApart({ lat: 47.63, lng: -122.21 }, { lat: 47.63, lng: -122.19 }) - 0.93) < 0.05);
+  assert.equal(pocketFor({ lat: 47.635, lng: -122.212, lotSqft: 34000, yearBuilt: 1962 }, [p])?.id, "clyde-hill");
+  assert.equal(pocketFor({ lat: 47.70, lng: -122.21, lotSqft: 34000, yearBuilt: 1962 }, [p]), null, "outside the circle");
+  assert.equal(pocketFor({ lat: 47.635, lng: -122.212, lotSqft: 9000, yearBuilt: 1962 }, [p]), null, "too small");
+  assert.equal(pocketFor({ lat: 47.635, lng: -122.212, lotSqft: 34000, yearBuilt: 1995 }, [p]), null, "too new");
+  assert.equal(pocketFor({ lat: 47.635, lng: -122.212, lotSqft: 0, yearBuilt: 1962 }, [p]), null, "no lot on record");
+  assert.equal(pocketFor({ lat: 47.635, lng: -122.212, lotSqft: 34000, yearBuilt: 1962 }, [{ ...p, enabled: false }]), null, "pocket off");
+  const h = lotHold(p, { lotSqft: 34000, yearBuilt: 1962 });
+  assert.ok(LOT_HOLD.test(h));
+  assert.match(h, /inside the Clyde Hill pocket \(34,000 sqft lot, built 1962\)/);
+  assert.match(lotHold(null), /a homeowner the lot finder texted/);
+});
