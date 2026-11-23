@@ -228,3 +228,20 @@ test("a builder first read without a number and read again with one goes back to
     assert.equal(g.created[0].phone, "+14255550177");
   } finally { delete process.env.OUTREACH_IMPORTS_ENABLED; }
 });
+
+test("a first text still unsent is rewritten with the current words on the next run", async () => {
+  process.env.OUTREACH_IMPORTS_ENABLED = "true";
+  try {
+    const g = ghl();
+    const saved = ON({ traceDailyCap: 5, autoSend: false });
+    await runLotFinder({ client: {}, locationId: "L10", saved, store, deps: { fetch: fetchStub(PHONES), ...g.deps }, now: T0 });
+    const d = (await store.listReplyDrafts("L10", { limit: 10 })).find((x) => x.outbound?.kind === "lot_owner_open");
+    assert.ok(d && d.status === "draft");
+    await store.updateReplyDraft(d.id, { ...d, reply: "old words with a 1.9M to 2.3M band" });
+    const again = await runLotFinder({ client: {}, locationId: "L10", saved, store, deps: { fetch: fetchStub(PHONES), ...g.deps }, now: T0 + 3600000 });
+    assert.equal(again.texts.refreshed, 1);
+    const fresh = (await store.listReplyDrafts("L10", { limit: 10 })).find((x) => x.id === d.id);
+    assert.ok(fresh.reply.includes("Clyde Hill") && !/1\.9M/.test(fresh.reply), fresh.reply);
+    assert.equal(fresh.status, "draft");
+  } finally { delete process.env.OUTREACH_IMPORTS_ENABLED; }
+});
