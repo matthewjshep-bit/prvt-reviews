@@ -131,8 +131,10 @@ export function propertySearchBody(p, { size = 250, resultIndex = 0 } = {}) {
   };
 }
 
+// "2219 95th Ave Ne" reads like a machine: a directional is upper case.
+const fixDirectionals = (s) => String(s).replace(/\b(Ne|Nw|Se|Sw)\b/g, (m) => m.toUpperCase());
 const addr = (a = {}) => ({
-  street: clean(a?.street || a?.address || "").slice(0, 120), city: clean(a?.city).slice(0, 60),
+  street: fixDirectionals(clean(a?.street || a?.address || "")).slice(0, 120), city: clean(a?.city).slice(0, 60),
   state: clean(a?.state).slice(0, 2).toUpperCase(), zip: clean(a?.zip).slice(0, 10),
 });
 
