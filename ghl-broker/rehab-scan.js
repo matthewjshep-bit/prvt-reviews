@@ -284,12 +284,20 @@ export async function fetchZillowListings(addresses = [], apifyToken) {
  */
 export function zillowAgentFrom(item) {
   const at = item?.attributionInfo && typeof item.attributionInfo === "object" ? item.attributionInfo : {};
-  const pick = (...vals) => vals.map((v) => String(v ?? "").trim()).find(Boolean) || "";
+  const str = (v) => (v && typeof v === "object" ? String(v.number ?? v.phone ?? v.value ?? "") : String(v ?? "")).trim();
+  const pick = (...vals) => vals.map(str).find(Boolean) || "";
+  // The live row (checked 2026-11-23): `attributionInfo.listingAgents[]` and
+  // `listingOffices[]`, plus a top-level `agent` and `broker`. The flat
+  // `agentName` / `agentPhoneNumber` keys this first read were never there.
+  const la = Array.isArray(at.listingAgents) ? at.listingAgents[0] || {} : {};
+  const top = item?.agent && typeof item.agent === "object" ? item.agent : {};
+  const office = (Array.isArray(at.listingOffices) ? at.listingOffices[0] : null) || (item?.broker && typeof item.broker === "object" ? item.broker : {});
   return {
-    name: pick(at.agentName, at.listingAgentName, item?.listingAgent?.name),
-    phone: pick(at.agentPhoneNumber, at.agentPhone, at.listingAgentPhone, item?.listingAgent?.phone),
-    email: pick(at.agentEmail, at.listingAgentEmail, item?.listingAgent?.email),
-    fields: Object.keys(at).sort(),
+    name: pick(at.agentName, at.listingAgentName, la.name, la.agentName, la.displayName, la.fullName, top.name, top.agentName, top.displayName, item?.listingAgent?.name),
+    phone: pick(at.agentPhoneNumber, at.agentPhone, at.listingAgentPhone, la.phone, la.phoneNumber, la.agentPhone, Array.isArray(la.phones) ? la.phones[0] : "", top.phone, top.phoneNumber, Array.isArray(top.phones) ? top.phones[0] : "", item?.listingAgent?.phone),
+    email: pick(at.agentEmail, at.listingAgentEmail, la.email, top.email, item?.listingAgent?.email),
+    brokerage: pick(at.brokerageName, office?.name, office?.officeName, office?.brokerageName),
+    fields: [...Object.keys(at), ...Object.keys(la).map((k) => `listingAgents.${k}`), ...Object.keys(top).map((k) => `agent.${k}`)].sort(),
   };
 }
 
@@ -338,14 +346,19 @@ export function _resetFactsCache() { factsCache.clear(); }
 
 /** salesFromDetail(item) → [{ date, price }] — the page's "Sold" events, newest first. */
 export function salesFromDetail(item = {}) {
-  const history = Array.isArray(item?.priceHistory) ? item.priceHistory : [];
+  // The live row (2026-11-23) calls it `listingPriceHistory`; older shapes said `priceHistory`.
+  const history = Array.isArray(item?.listingPriceHistory) ? item.listingPriceHistory : Array.isArray(item?.priceHistory) ? item.priceHistory : [];
   const out = [];
   for (const h of history) {
-    if (!/\bsold\b/i.test(String(h?.event || ""))) continue;
-    const price = Number(h?.price) || 0;
-    const date = h?.date ? String(h.date).slice(0, 10) : (Number.isFinite(Number(h?.time)) ? new Date(Number(h.time)).toISOString().slice(0, 10) : "");
+    const ev = String(h?.event ?? h?.eventType ?? h?.type ?? h?.eventName ?? "");
+    if (!/\bsold\b/i.test(ev)) continue;
+    const price = Number(h?.price ?? h?.priceValue ?? h?.amount ?? h?.price?.value) || 0;
+    const raw = h?.date ?? h?.dateString ?? h?.eventDate ?? null;
+    const date = raw ? String(raw).slice(0, 10) : (Number.isFinite(Number(h?.time)) ? new Date(Number(h.time)).toISOString().slice(0, 10) : "");
     if (price > 0) out.push({ date, price });
   }
+  // No history on the row: the page's last sale is still a sale.
+  if (!out.length && Number(item?.lastSoldPrice) > 0 && item?.dateSold) out.push({ date: new Date(item.dateSold).toISOString().slice(0, 10), price: Number(item.lastSoldPrice) });
   return out.sort((a, b) => String(b.date).localeCompare(String(a.date)));
 }
 
@@ -368,11 +381,13 @@ function factsFromDetail(item) {
     // builderFromNewBuild), and the listing agent on the page.
     sales: salesFromDetail(item),
     agent: zillowAgentFrom(item),
-    brokerage: String(item?.attributionInfo?.brokerageName || "").trim().slice(0, 80) || null,
+    brokerage: (zillowAgentFrom(item).brokerage || "").slice(0, 80) || null,
     // The row's own shape for the two fields above, until a live row has been
     // checked (the lot finder's first run, 2026-11-23: no agent phone, no
     // prior sale, on every new build). Keys only, never a value.
-    shape: { attribution: Object.keys(item?.attributionInfo || {}).sort(), history: (Array.isArray(item?.priceHistory) ? item.priceHistory : []).slice(0, 4).map((h) => ({ keys: Object.keys(h || {}).sort(), event: String(h?.event || "") })), top: Object.keys(item || {}).filter((k) => /agent|broker|history|sold|sale|listing/i.test(k)).sort() },
+    shape: { attribution: Object.keys(item?.attributionInfo || {}).sort(), listingAgent0: Object.keys(item?.attributionInfo?.listingAgents?.[0] || {}).sort(), agentTop: Object.keys(item?.agent || {}).sort(),
+      history: (Array.isArray(item?.listingPriceHistory) ? item.listingPriceHistory : Array.isArray(item?.priceHistory) ? item.priceHistory : []).slice(0, 4).map((h) => ({ keys: Object.keys(h || {}).sort(), event: String(h?.event ?? h?.eventType ?? h?.type ?? "") })),
+      top: Object.keys(item || {}).filter((k) => /agent|broker|history|sold|sale|listing/i.test(k)).sort() },
     // The comp's garage, so a no-garage subject is measured against comps
     // that have one (shared/arv-checks.js compParity) — known only when the
     // detail row says.

@@ -108,7 +108,7 @@ export default function createLotFinderRouter({ resolveLocation, getSettings = (
       if (getLotFinderJob(locationId)?.status === "running") throw Object.assign(new Error("a run is already going"), { http: 409 });
       const saved = (await getSettings(locationId)) || {};
       const dryRun = req.body?.dryRun === false ? null : true;
-      const job = startLotFinder({ client, locationId, saved, store, sendsEnabled: process.env.CARD_SENDS_ENABLED === "true", deps, dryRun, trigger: "manual" });
+      const job = startLotFinder({ client, locationId, saved, store, sendsEnabled: process.env.CARD_SENDS_ENABLED === "true", deps, dryRun, trigger: "manual", rescan: req.body?.rescan === true });
       if (req.body?.wait) await job.done;
       res.json({ ok: true, job: { status: job.status, startedAt: job.startedAt, error: job.error,
         ...(job.result ? { dryRun: job.result.dryRun, pockets: job.result.pockets, traced: job.result.traced, imported: job.result.imported, texts: job.result.texts, rows: job.result.rows.slice(0, 100) } : {}) } });

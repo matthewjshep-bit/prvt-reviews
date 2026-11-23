@@ -370,7 +370,11 @@ test("a card in Needs Matt comes with the reason it's there and when it landed",
     assert.equal(a.needsMatt.why, "Price it on Lincoln St: the agent has waited 2 days for our number");
     assert.equal(a.needsMatt.kind, "price");
     assert.ok(Date.parse(a.needsMatt.landedAt), "when it landed");
-    assert.equal(Date.parse(a.needsMatt.passAt) - Date.parse(a.needsMatt.landedAt), 72 * 3600000, "an unpriced house is passed three days after it landed");
+    // Three WORKING days since 2026-11-10 (shared/needs-matt.js): a flat 72 hours
+    // failed every time the window crossed a weekend.
+    const { addWorkingHours, WORK_TZ } = await import("./shared/paper-follows.js");
+    const { PASS_AFTER_HOURS } = await import("./shared/needs-matt.js");
+    assert.equal(Date.parse(a.needsMatt.passAt), addWorkingHours(Date.parse(a.needsMatt.landedAt), PASS_AFTER_HOURS, WORK_TZ), "an unpriced house is passed three working days after it landed");
     assert.equal((await h.req("GET", "/api/dashboard/ghl/card?contact_id=b1")).json.needsMatt, null, "nothing open for them");
   } finally { STAGES.pop(); h.close(); }
 });
