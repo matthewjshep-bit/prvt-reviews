@@ -134,7 +134,9 @@ export async function scanPocketZillow({ lat, lng, radiusMiles = 1, apifyToken, 
   const teardowns = mergeFacts(old, detail).filter((r) => r.yearBuilt > 0 && r.yearBuilt <= TEARDOWN_YEAR_MAX)
     .map((r) => ({ address: r.address, price: r.price, saleDate: r.saleDate, lotSqft: r.lotSqft || 0, sqft: r.sqft || 0, yearBuilt: r.yearBuilt }));
   const suggest = suggestPocket({ newBuilds, teardowns });
-  const debug = { newRows: nb.length, oldRows: old.length, oldWithYear: mergeFacts(old, detail).filter((r) => r.yearBuilt > 0).length, newBuilds: newBuilds.length, teardowns: teardowns.length };
+  const sample = newBuilds.find((b) => b.facts)?.facts || null;
+  const debug = { newRows: nb.length, oldRows: old.length, oldWithYear: mergeFacts(old, detail).filter((r) => r.yearBuilt > 0).length, newBuilds: newBuilds.length, teardowns: teardowns.length,
+    shape: sample?.shape || null, agentKeys: sample ? Object.keys(sample.agent || {}) : null, agentFields: sample?.agent?.fields || null, salesSeen: sample ? (sample.sales || []).length : null };
   return { newBuilds, teardowns: teardowns.filter((t) => !suggest.lotSqftMin || t.lotSqft >= suggest.lotSqftMin), suggest, debug };
 }
 

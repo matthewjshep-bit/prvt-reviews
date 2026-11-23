@@ -369,6 +369,10 @@ function factsFromDetail(item) {
     sales: salesFromDetail(item),
     agent: zillowAgentFrom(item),
     brokerage: String(item?.attributionInfo?.brokerageName || "").trim().slice(0, 80) || null,
+    // The row's own shape for the two fields above, until a live row has been
+    // checked (the lot finder's first run, 2026-11-23: no agent phone, no
+    // prior sale, on every new build). Keys only, never a value.
+    shape: { attribution: Object.keys(item?.attributionInfo || {}).sort(), history: (Array.isArray(item?.priceHistory) ? item.priceHistory : []).slice(0, 4).map((h) => ({ keys: Object.keys(h || {}).sort(), event: String(h?.event || "") })), top: Object.keys(item || {}).filter((k) => /agent|broker|history|sold|sale|listing/i.test(k)).sort() },
     // The comp's garage, so a no-garage subject is measured against comps
     // that have one (shared/arv-checks.js compParity) — known only when the
     // detail row says.

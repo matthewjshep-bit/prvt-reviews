@@ -27,7 +27,7 @@ export async function discoverPocket({ address, radiusMiles = 1, apifyToken, now
   const geo = await (deps.geocode || geocodeAddress)(address, { minPrecision: "street" });
   if (!geo) throw Object.assign(new Error("couldn't place that address on the map"), { http: 400 });
   const scan = await scanPocketZillow({ lat: geo.lat, lng: geo.lng, radiusMiles, apifyToken, now, deps });
-  return { center: { lat: geo.lat, lng: geo.lng }, suggest: scan.suggest,
+  return { center: { lat: geo.lat, lng: geo.lng }, suggest: scan.suggest, debug: scan.debug,
     newBuilds: scan.newBuilds.slice(0, 40).map(({ facts, ...b }) => ({ ...b, builder: facts?.description ? (facts.description.match(/built by ([^.,]{3,60})/i) || [])[1] || "" : "" })),
     teardowns: scan.teardowns.slice(0, 40) };
 }
