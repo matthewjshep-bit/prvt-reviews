@@ -23,7 +23,8 @@
 
 import { store as defaultStore } from "./store.js";
 import { recordEvent, recordEvents, ensureProfile } from "./contact-record.js";
-import { getContact, findDuplicateContact, createContact, addContactTags, smsUnsubscribed } from "./ghl.js";
+import { getContact, findDuplicateContact, createContact, addContactTags, removeContactTags, smsUnsubscribed } from "./ghl.js";
+import { resolveBuilderContact } from "./builder-contacts.js";
 import { matchTagPatterns } from "./conversation-party.js";
 import { optOutTagsOf, optedOutReason } from "./shared/opt-out.js";
 import { optedOutFor } from "./opt-out.js";
@@ -51,6 +52,10 @@ const PULL_EVERY_MS = 7 * 86400000;
 const PAGE = 250;
 const MAX_PAGES = 4;
 const STEP_KIND = { open: "lot_owner_open", follow: "lot_owner_follow" };
+// Builder lookups a run (registry + county are free; a skip trace counts against the day's cap).
+const BUILDER_LOOKUPS_PER_RUN = 60;
+// The tags a listing agent wrongly carried as a "builder" (2026-11-23), taken back.
+const AGENT_UNTAG = ["investor", "builder", "dispo-type-new-construction", "dispo-source-builder-exits"];
 const PROPERTY_SEARCH_URL = "https://api.realestateapi.com/v2/PropertySearch";
 const NEW_BUILD_YEARS = 3;
 const SEARCH_LIMIT = 80;
@@ -203,6 +208,8 @@ export async function runLotFinder({ client, locationId, saved = {}, store = def
     } catch (e) { line.error = String(e?.message || e).slice(0, 160); }
   }
 
+  const byPocket = new Map(f.pockets.map((p) => [p.id, p]));
+
   // 1b. The builders who buy here, off the new builds that sold (weekly, with
   // the parcels). Dry: nothing bought.
   const apifyToken = String(saved?.apifyToken || "").trim();
@@ -215,18 +222,38 @@ export async function runLotFinder({ client, locationId, saved = {}, store = def
     try {
       const scan = await (deps.scanPocketZillow || scanPocketZillow)({ lat: p.lat, lng: p.lng, radiusMiles: p.radiusMiles, apifyToken, now, deps });
       const rows = scan.newBuilds.map((b) => builderFromNewBuild({ row: b, facts: b.facts, pocket: p, now })).filter(Boolean);
-      const before = new Map((await store.listLotBuilders(locationId, { pocketId: p.id, limit: 5000 })).map((r) => [r.builderKey, r.status]));
       const up = await store.upsertLotBuilders(locationId, rows);
-      // A builder read again with a number this time goes back to new, so the import below takes it.
-      for (const r of rows) if (r.doc?.agent?.phone && before.get(r.builderKey) === "no_phone") await store.setLotBuilder(locationId, r.builderKey, { status: "new" });
       line.builders = rows.length; line.buildersCreated = up.created;
       scans[p.id] = iso(now);
     } catch (e) { line.builders = `scan failed: ${String(e?.message || e).slice(0, 120)}`; }
   }
 
+  // 1c. The builder's own contact (builder-contacts.js; Matt, 2026-11-23: "we
+  // want the builder who bought it, not the agent who helped them"): by name
+  // in the contractor registry, by the entity on the county's sale record, or
+  // the person behind a one-off LLC through the skip trace. Never the agent.
+  out.builderLookups = { looked: 0, found: 0, traced: 0, credits: 0 };
+  let traceRoom = Math.max(0, f.traceDailyCap - tracesToday);
+  if (!dryRun) {
+    const resolve = deps.resolveBuilderContact || resolveBuilderContact;
+    const pending = (await store.listLotBuilders(locationId, { limit: 5000 })).filter((r) => byPocket.get(r.pocketId)?.enabled && !r.doc?.builderContact && r.doc?.reach !== "agent").slice(0, BUILDER_LOOKUPS_PER_RUN);
+    for (const row of pending) {
+      try {
+        const c = await resolve({ address: row.doc.address, builderName: row.doc.builder || "", traceKey, allowTrace: Boolean(traceKey) && traceRoom > 0, fetchFn });
+        out.builderLookups.looked++;
+        if (c?.credits) { out.builderLookups.credits += c.credits; out.builderLookups.traced++; traceRoom--; }
+        const contact = c || { entity: "", phone: "", principal: "", source: "none" };
+        if (contact.phone) out.builderLookups.found++;
+        // The county's record of the builder's own sale is the exit worth naming.
+        const exitFix = c?.exit?.price > 0 && c.exit.price !== row.doc.exitPrice ? { builderExit: c.exit } : {};
+        await store.setLotBuilder(locationId, row.builderKey, { status: contact.phone ? "new" : row.status === "imported" ? row.status : "no_phone", doc: { ...row.doc, builderContact: contact, ...exitFix, reach: contact.phone ? "builder" : "none" } });
+        await sleep(200);
+      } catch (e) { out.rows.push({ builderKey: row.builderKey, error: `builder lookup: ${String(e?.message || e).slice(0, 120)}` }); }
+    }
+  }
+
   // 2. The cell numbers, up to the day's cap. Never on a dry run (it's money).
   const all = await store.listLotOwners(locationId, { limit: 20000 });
-  const byPocket = new Map(f.pockets.map((p) => [p.id, p]));
   const fresh = all.filter((r) => byPocket.get(r.pocketId)?.enabled);
   const room = Math.max(0, f.traceDailyCap - tracesToday);
   const toTrace = pickToTrace(fresh, { cap: room });
@@ -297,36 +324,54 @@ export async function runLotFinder({ client, locationId, saved = {}, store = def
     } catch (e) { out.imported.skipped++; out.rows.push({ ownerKey: row.ownerKey, error: `import: ${String(e?.message || e).slice(0, 120)}` }); }
   }
 
-  // 3b. The builders into the buyer book: a buyer who builds, found here,
-  // reached through the listing agent until someone finds the builder's own
-  // number. Tagged for the pocket's city, so a lot deal there picks them
+  // 3a. The listing agents imported as "builders" on the first pass (2026-11-23)
+  // are taken back out of the pool: their builder tags come off, a
+  // lot-listing-agent tag goes on so the thread is still placed, and the row
+  // waits for the builder's own contact. Runs once per row.
+  out.agentsRetired = 0;
+  if (!dryRun) {
+    for (const row of (await store.listLotBuilders(locationId, { status: "imported", limit: 2000 })).filter((r) => r.doc?.reach === "agent" && r.contactId)) {
+      const untag = deps.removeContactTags || ((id, tags) => removeContactTags(client, id, tags));
+      try {
+        await untag(row.contactId, [...AGENT_UNTAG, `lot-pocket-${row.pocketId}`]);
+        await tag(row.contactId, ["lot-listing-agent"]);
+      } catch (e) { out.rows.push({ builderKey: row.builderKey, error: `agent untag: ${String(e?.message || e).slice(0, 120)}` }); }
+      await store.setLotBuilder(locationId, row.builderKey, { status: "new", doc: { ...row.doc, reach: "agent_retired", agentContactId: row.contactId } });
+      out.agentsRetired++;
+    }
+  }
+
+  // 3b. The builders into the buyer book: a buyer who builds, found here, by
+  // THEIR OWN number (doc.builderContact), never the listing agent's (Matt,
+  // 2026-11-23: "make sure this doesn't happen again for the luxury lane").
+  // Tagged for the pocket's city, so a lot deal there picks them
   // (shared/buyer-score.js). Same gate as the owners.
   out.builders = { created: 0, updated: 0, would: 0, skipped: 0, noPhone: 0 };
   for (const row of (await store.listLotBuilders(locationId, { status: "new", limit: 2000 })).filter((r) => byPocket.get(r.pocketId)?.enabled)) {
     const pocket = byPocket.get(row.pocketId);
     const d = row.doc || {};
-    const phone = d.agent?.phone || "";
-    if (!phone) { out.builders.noPhone++; await store.setLotBuilder(locationId, row.builderKey, { status: "no_phone" }); continue; }
+    const bc = d.builderContact || {};
+    const phone = bc.phone || "";
+    if (!phone) { out.builders.noPhone++; if (d.builderContact) await store.setLotBuilder(locationId, row.builderKey, { status: "no_phone" }); continue; }
     if (out.imported.dry) { out.builders.would++; continue; }
     try {
       await sleep(150);
       const match = await findDup({ phone });
       const city = String(d.address || "").split(",")[1]?.trim() || "";
-      const tags = [...builderTags(pocket), ...(city ? [`dispo-city-${citySlug(city)}`] : [])];
+      const tags = [...builderTags(pocket), `dispo-source-${bc.source || "county"}`, ...(city ? [`dispo-city-${citySlug(city)}`] : [])];
       let contactId = match?.id;
       let action = "updated";
       if (!contactId) {
         action = "created";
-        const [first = "", ...rest] = String(d.agent?.name || "").split(" ");
-        contactId = await create({ firstName: first || "Builder", lastName: rest.join(" "), phone, ...(d.agent?.email ? { email: d.agent.email } : {}),
-          companyName: d.builder || d.agent?.brokerage || "", source: "lot-finder" });
+        const [first = "", ...rest] = String(bc.principal || "").split(" ");
+        contactId = await create({ firstName: first || (bc.entity || d.builder || "Builder"), lastName: rest.join(" "), phone, companyName: bc.entity || d.builder || "", source: "lot-finder" });
       }
       if (!contactId) throw new Error("no contact id returned");
       await tag(contactId, tags);
       const at = iso(now);
-      await ensureProfile({ store, locationId, contactId, party: "investor", name: d.agent?.name || null, phone });
+      await ensureProfile({ store, locationId, contactId, party: "investor", name: bc.principal || bc.entity || null, phone });
       await recordEvents({ store, locationId, contactId, party: "investor", events: [
-        { type: "import", at, address: d.address || "", source: "lot-finder", ref: `builder:${row.builderKey}`, data: { action, builderKey: row.builderKey, pocketId: row.pocketId, exitPrice: d.exitPrice, priorLotPrice: d.priorLotPrice, lotSqft: d.lotSqft, builder: d.builder || "" } },
+        { type: "import", at, address: d.address || "", source: "lot-finder", ref: `builder:${row.builderKey}`, data: { action, builderKey: row.builderKey, pocketId: row.pocketId, exitPrice: d.builderExit?.price || d.exitPrice, priorLotPrice: d.priorLotPrice, lotSqft: d.lotSqft, builder: bc.entity || d.builder || "", via: bc.source } },
         ...tags.map((t) => ({ type: "tag_added", at, source: "lot-finder", ref: `builder:${row.builderKey}`, data: { tag: t } })),
       ] });
       await store.setLotBuilder(locationId, row.builderKey, { status: "imported", contactId, importedAt: at });
@@ -409,7 +454,7 @@ export function startLotFinder({ client, locationId, saved, store = defaultStore
     await store.setJobCursor?.(locationId, CURSOR_NAME, { at: cur?.at || iso(now), doc: { ...(cur?.doc || {}), ...patch } }).catch(() => {});
   };
   const summary = () => ({ id: job.id, trigger, status: job.status, startedAt: job.startedAt, finishedAt: job.finishedAt, error: job.error,
-    ...(job.result ? { dryRun: job.result.dryRun, pockets: job.result.pockets, traced: job.result.traced, imported: job.result.imported, builders: job.result.builders, texts: job.result.texts } : {}) });
+    ...(job.result ? { dryRun: job.result.dryRun, pockets: job.result.pockets, traced: job.result.traced, imported: job.result.imported, builders: job.result.builders, builderLookups: job.result.builderLookups, agentsRetired: job.result.agentsRetired, texts: job.result.texts } : {}) });
   job.done = stamp({ run: { id: job.id, trigger, startedAt: job.startedAt } })
     .then(() => runLotFinder({ client, locationId, saved, store, sendsEnabled, deps, now, dryRun, rescan }))
     .then(async (result) => {

@@ -187,17 +187,22 @@ test("the weekly pass reads the new builds that sold in the pocket and puts thei
       { address: "14 Summit Dr, Clyde Hill, WA 98004", price: 4100000, saleDate: "2026-02-01", lotSqft: 43560, sqft: 6000, yearBuilt: 2025, facts: { description: "", sales: [], agent: { name: "", phone: "" } } },
     ] });
     const saved = { ...ON({ traceDailyCap: 0, dailyNew: 0 }), apifyToken: "apify" };
-    const out = await runLotFinder({ client: {}, locationId: "L8", saved, store, deps: { fetch: fetchStub(PHONES), scanPocketZillow: scan, ...g.deps }, now: T0 });
+    // The builder's own contact: the registry knows Mystery Homes; nobody knows the other build.
+    const resolveBuilderContact = async ({ builderName }) => (builderName ? { entity: "Mystery Homes LLC", phone: "+14255550100", principal: "Sam Sample", source: "lni" } : null);
+    const out = await runLotFinder({ client: {}, locationId: "L8", saved, store, deps: { fetch: fetchStub(PHONES), scanPocketZillow: scan, resolveBuilderContact, ...g.deps }, now: T0 });
     assert.equal(out.pockets[0].builders, 2);
-    assert.equal(out.builders.created, 1, "the one with a number on the page");
-    assert.equal(out.builders.noPhone, 1);
-    assert.equal(g.created[0].companyName, "Mystery Homes");
-    assert.equal(g.created[0].phone, "+14255550177");
-    assert.deepEqual(g.tagged[0].tags, ["investor", "builder", "dispo-type-new-construction", "dispo-source-builder-exits", "lot-pocket-clyde-hill", "dispo-city-clyde-hill"]);
+    assert.equal(out.builderLookups.looked, 2);
+    assert.equal(out.builders.created, 1, "the builder the registry knows");
+    assert.equal(out.builderLookups.looked - out.builderLookups.found, 1, "the other build has no builder number, and the listing agent's is never used");
+    assert.equal((await store.listLotBuilders("L8")).filter((x) => x.status === "no_phone").length, 1);
+    assert.equal(g.created[0].companyName, "Mystery Homes LLC");
+    assert.equal(g.created[0].firstName, "Sam");
+    assert.equal(g.created[0].phone, "+14255550100", "the registry's number, not the agent's");
+    assert.deepEqual(g.tagged[0].tags, ["investor", "builder", "dispo-type-new-construction", "dispo-source-builder-exits", "lot-pocket-clyde-hill", "dispo-source-lni", "dispo-city-clyde-hill"]);
     const rows = await store.listLotBuilders("L8");
     assert.equal(rows.find((r) => r.builderKey === "nb:12-summit-dr-clyde-hill-wa-98004").doc.priorLotPrice, 1100000);
     // A week later the same pocket isn't scanned again.
-    const again = await runLotFinder({ client: {}, locationId: "L8", saved, store, deps: { fetch: fetchStub(PHONES), scanPocketZillow: async () => { throw new Error("scanned twice"); }, ...g.deps }, now: T0 + 86400000 });
+    const again = await runLotFinder({ client: {}, locationId: "L8", saved, store, deps: { fetch: fetchStub(PHONES), scanPocketZillow: async () => { throw new Error("scanned twice"); }, resolveBuilderContact, ...g.deps }, now: T0 + 86400000 });
     assert.equal(again.pockets[0].builders, undefined);
   } finally { delete process.env.OUTREACH_IMPORTS_ENABLED; }
 });
@@ -212,20 +217,29 @@ test("a house from a lot owner, or inside a pocket, belongs to the luxury lane; 
   assert.equal(luxuryLaneFor({ saved: {}, contact: { tags: ["agent-outreach"] }, lat: 47.635, lng: -122.212, lotSqft: 34000, yearBuilt: 1962 }), null, "no pockets");
 });
 
-test("a builder first read without a number and read again with one goes back to new and into the buyer book", async () => {
+test("a listing agent imported as a builder on the first pass is retired: builder tags off, a lot-listing-agent tag on, and the row waits for the builder's own number", async () => {
   process.env.OUTREACH_IMPORTS_ENABLED = "true";
   try {
     const g = ghl();
-    const build = (phone) => ({ address: "12 Summit Dr, Clyde Hill, WA 98004", price: 4600000, saleDate: "2026-06-10", lotSqft: 32670, sqft: 6500, yearBuilt: 2026,
-      facts: { description: "Built by Mystery Homes", sales: [], agent: { name: "Ann Agent", phone, email: "" }, brokerage: "" } });
+    const untagged = [];
+    await store.upsertLotBuilders("L9", [{ builderKey: "nb:old", pocketId: "clyde-hill", doc: { address: "14 Summit Dr, Clyde Hill, WA 98004", exitPrice: 4100000, agent: { name: "Ann Agent", phone: "+14255550177" }, reach: "agent" } }]);
+    await store.setLotBuilder("L9", "nb:old", { status: "imported", contactId: "c-agent", importedAt: new Date(T0).toISOString() });
     const saved = { ...ON({ traceDailyCap: 0, dailyNew: 0 }), apifyToken: "apify" };
-    const first = await runLotFinder({ client: {}, locationId: "L9", saved, store, deps: { fetch: fetchStub(PHONES), scanPocketZillow: async () => ({ suggest: {}, teardowns: [], newBuilds: [build("")] }), ...g.deps }, now: T0 });
-    assert.equal(first.builders.noPhone, 1);
-    assert.equal((await store.listLotBuilders("L9"))[0].status, "no_phone");
-    const again = await runLotFinder({ client: {}, locationId: "L9", saved, store, deps: { fetch: fetchStub(PHONES), scanPocketZillow: async () => ({ suggest: {}, teardowns: [], newBuilds: [build("4255550177")] }), ...g.deps }, now: T0 + 1000, rescan: true });
-    assert.equal(again.builders.created, 1);
-    assert.equal((await store.listLotBuilders("L9"))[0].status, "imported");
-    assert.equal(g.created[0].phone, "+14255550177");
+    const out = await runLotFinder({ client: {}, locationId: "L9", saved, store, deps: { fetch: fetchStub(PHONES), scanPocketZillow: async () => ({ suggest: {}, teardowns: [], newBuilds: [] }), resolveBuilderContact: async () => ({ entity: "Summit 14 LLC", phone: "", principal: "", source: "county" }), removeContactTags: async (id, tags) => { untagged.push({ id, tags }); }, ...g.deps }, now: T0 });
+    assert.equal(out.agentsRetired, 1);
+    assert.equal(untagged[0].id, "c-agent");
+    assert.ok(untagged[0].tags.includes("builder") && untagged[0].tags.includes("investor") && untagged[0].tags.includes("lot-pocket-clyde-hill"));
+    assert.deepEqual(g.tagged.find((t) => t.id === "c-agent").tags, ["lot-listing-agent"]);
+    const row = (await store.listLotBuilders("L9"))[0];
+    assert.equal(row.status, "new", "waits for the builder's own number");
+    assert.equal(row.doc.reach, "agent_retired");
+    assert.equal(g.created.length, 0, "nobody imported off the agent's number");
+    // The next run looks the builder up; nothing found, so the row is no_phone, still not in the book.
+    await runLotFinder({ client: {}, locationId: "L9", saved, store, deps: { fetch: fetchStub(PHONES), scanPocketZillow: async () => ({ suggest: {}, teardowns: [], newBuilds: [] }), resolveBuilderContact: async () => ({ entity: "Summit 14 LLC", phone: "", principal: "", source: "county" }), removeContactTags: async () => {}, ...g.deps }, now: T0 + 86400000 });
+    const later = (await store.listLotBuilders("L9"))[0];
+    assert.equal(later.status, "no_phone");
+    assert.equal(later.doc.reach, "none");
+    assert.equal(g.created.length, 0);
   } finally { delete process.env.OUTREACH_IMPORTS_ENABLED; }
 });
 

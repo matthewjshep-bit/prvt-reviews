@@ -164,7 +164,7 @@ test("a new build that sold reads as a builder lead: the exit, the lot buy befor
   assert.equal(b.doc.priorLotDate, "2023-09-01");
   assert.equal(b.doc.builder, "Mystery Homes");
   assert.equal(b.doc.agent.phone, "+14255550177");
-  assert.equal(b.doc.reach, "agent");
+  assert.equal(b.doc.reach, "none", "the agent is a reference, never who we reach");
   const noBuilder = builderFromNewBuild({ row, facts: { ...facts, description: "Stunning new estate" }, pocket: { id: "x" } });
   assert.equal(noBuilder.doc.name, "Ann Agent (listing agent)");
   assert.equal(builderFromNewBuild({ row: { address: "", price: 0 } }), null);

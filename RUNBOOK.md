@@ -442,6 +442,21 @@ the numbers before switching a pocket on.
    buy before it off the page's sale history (`salesFromDetail`: the sale a
    year or more earlier and well under the exit), the builder the description
    names (`builderName`) and the listing agent on the page (`zillowAgentFrom`).
+   **The builder's own contact, never the agent's** (`ghl-broker/builder-contacts.js`;
+   Matt, 2026-11-23: "we want the builder who bought it, not the agent who
+   helped them… make sure this doesn't happen again"): the method's P1 and
+   P3. A named builder is looked up in the WA contractor registry (L&I,
+   `data.wa.gov/resource/m8qx-ubtq`, free: phone + principal). An unnamed
+   build's entity comes off the county's last-3-years sales layer
+   (`KingCo_PropertyInfo/MapServer/3`: seller of the new build, buyer of the
+   lot), then the registry; a one-off LLC the registry doesn't know goes to
+   the skip trace on its mailing address (5 credits, counted against
+   `traceDailyCap`). `doc.builderContact = { entity, phone, principal, source }`;
+   `doc.builderExit` is the county's record of the builder's own sale when a
+   later resale would otherwise read as the exit. Up to 60 lookups a run. The
+   listing agent stays on the row as a reference (`doc.agent`) and is never
+   imported or texted as a buyer. The agents imported on the first pass are
+   retired on the next run: builder tags off, `lot-listing-agent` on.
 3. **Skip trace** (`traceDailyCap` a day, default 25, never on a dry run):
    Tracerfy's instant lookup (`TRACERFY_API_KEY`, or `tracerfyApiKey` in
    Settings; about 5 credits = 10¢ a hit, a miss free), a person by name, an
@@ -449,11 +464,10 @@ the numbers before switching a pocket on.
    someone who isn't a litigator (`reachable`). Everything else is
    `no_phone` with the reason.
 4. **Into GHL** (`dailyNew` owners a day): tags `lot-owner`,
-   `lot-pocket-<id>`; the builders tagged `investor`, `builder`,
-   `dispo-type-new-construction`, `dispo-source-builder-exits`,
-   `lot-pocket-<id>` and `dispo-city-<city>`, reached through the listing
-   agent until someone finds the builder's own number (the method's P1/P2;
-   P3, the LLC, is the county's and a skip trace's, by hand). Someone already
+   `lot-pocket-<id>`; the builders (their own number only) tagged `investor`,
+   `builder`, `dispo-type-new-construction`, `dispo-source-builder-exits`,
+   `dispo-source-<lni|county|trace>`, `lot-pocket-<id>` and `dispo-city-<city>`,
+   contact = the principal, company = the entity. Someone already
    in GHL as an agent or a buyer is left as they are. Dry unless
    `OUTREACH_IMPORTS_ENABLED`, like every import.
 5. **Texts**: the first text names the street and the price band in the
