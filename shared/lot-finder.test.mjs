@@ -215,3 +215,11 @@ test("a 1990s house, a condo with a unit number, or a house as big as the new bu
   assert.equal(wide.bandLo, 2050000);
   assert.equal(wide.bandHi, 2700000);
 });
+
+test("no owner text says investor, local investor, or any other word the carriers block (2026-11-23: 'local investor' was blocked 15 of 16 times)", async () => {
+  const { carrierFlags } = await import("./carrier-words.js");
+  for (const t of [...OPEN_TEXTS, ...FOLLOW_TEXTS]) {
+    assert.doesNotMatch(t, /\binvestor\b/i, t);
+    assert.deepEqual(carrierFlags(t.replace(/\{[a-z]+\}/g, "x")), [], t);
+  }
+});

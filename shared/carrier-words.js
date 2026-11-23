@@ -16,6 +16,9 @@
 const RULES = [
   ["cash", /\bcash\b/i],
   ["as-is", /\bas-is\b/i],
+  // The lot finder's first 49 texts (2026-11-23): every one with this phrase
+  // was blocked (15 of 16), every one without it delivered (31 of 31).
+  ["local investor", /\blocal\s+investors?\b/i],
   ["investor", /\binvestors?\b/i],
   ["buy houses", /\b(?:buy|buys|buying)\s+(?:houses|homes|properties)\b/i],
   ["no repairs", /\bno repairs?\b|\bany condition\b/i],

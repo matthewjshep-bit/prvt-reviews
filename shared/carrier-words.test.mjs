@@ -6,8 +6,8 @@ import { carrierFlags, coldBuyerFlags } from "./carrier-words.js";
 test("a we-buy-houses pitch is caught: cash, as-is, investor, buy houses, no repairs, quick close, wholesale, a link", () => {
   assert.deepEqual(
     carrierFlags("Jeff, noticed your listing at 1515 Lombard Ave has been sitting a while. I'm a local investor buying houses as-is, no repairs needed. Would the seller consider a cash offer?"),
-    ["cash", "as-is", "investor", "buy houses", "no repairs"]);
-  assert.deepEqual(carrierFlags("I'm a local investor who buys houses needing work, quick close."), ["investor", "buy houses", "quick close"]);
+    ["cash", "as-is", "local investor", "investor", "buy houses", "no repairs"]);
+  assert.deepEqual(carrierFlags("I'm a local investor who buys houses needing work, quick close."), ["local investor", "investor", "buy houses", "quick close"]);
   assert.deepEqual(carrierFlags("a Seattle investor who wholesales the deals I'm too busy to do"), ["investor", "wholesale"]);
   assert.deepEqual(carrierFlags("Photos and numbers: https://deals.shepflips.com/d/abc"), ["a link"]);
   assert.deepEqual(carrierFlags("we close fast on homes in any condition"), ["no repairs", "quick close"]);
