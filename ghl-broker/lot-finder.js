@@ -33,6 +33,7 @@ import { spreadAcrossDay, machineHours } from "./conversation-scheduler.js";
 import { workHour, isWorkday } from "./outreach-sweep.js";
 import { ranThisDay, pacificDay } from "./daily-gate.js";
 import { voiceFlags } from "./shared/voice.js";
+import { carrierFlags } from "./shared/carrier-words.js";
 import { soldSearchUrl, searchRows, normalizeRow, mergeFacts, streetKey } from "./comps-zillow.js";
 import { fetchZillowFacts, MAX_FACT_LOOKUPS } from "./rehab-scan.js";
 import { citySlug } from "./shared/dispo-regions.js";
@@ -425,7 +426,10 @@ export async function runLotFinder({ client, locationId, saved = {}, store = def
     const claimed = await recordEvent({ store, locationId, contactId: row.contactId, party: LOT_OWNER_PARTY, type: LOT_OWNER_EVENTS.queued, at: ts,
       address: d.house?.street || "", source: "lot-finder", ref: `lot:${row.ownerKey}`, dedupeKey: `lot_owner:${row.contactId}:${next.step}`, data: { step: next.step, why: next.why, pocketId: row.pocketId } });
     if (!claimed?.inserted) { out.texts.skipped++; continue; }
-    const hard = voiceFlags({ text, channel: "sms", kind: STEP_KIND[next.step] }).filter((x) => x.level === "hard").map((x) => x.key);
+    // The voice rules, and the carrier's (shared/carrier-words.js): a text with
+    // a we-buy-houses word never goes on its own — 2026-11-23, "local investor"
+    // was blocked 15 times out of 16.
+    const hard = [...voiceFlags({ text, channel: "sms", kind: STEP_KIND[next.step] }).filter((x) => x.level === "hard").map((x) => x.key), ...carrierFlags(text).map((w) => `carrier word: ${w}`)];
     const goes = schedule && !hard.length;
     const sendAt = goes ? spreadAcrossDay({ now, quietHours: machineHours(config.autoSend || {}), hours: 6, weekends: "none", offDays: config.autoSend?.offDays || [] }) : null;
     const record = await store.createReplyDraft({

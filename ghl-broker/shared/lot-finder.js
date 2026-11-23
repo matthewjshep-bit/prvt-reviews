@@ -221,14 +221,19 @@ export const reachable = (phones = []) => phones.filter((p) => p.type === "mobil
 // no agent fees, a soft ask. Blanks: {first} {street} {lo} {hi}. A blank
 // nobody filled never sends (shared/voice.js LEFTOVER_RX), and the house rules
 // hold: no dollar sign, one question, no "following up" (voiceFlags).
+// NEVER "local investor", and no "investor" at all (shared/carrier-words.js):
+// the first 49 went out in eight variants on 2026-11-23 and every text with
+// "local investor" was carrier-blocked (15 of 16, error 30007); every text
+// without it delivered (31 of 31). Matt prices every luxury lot himself, so
+// there is no number in any text.
 export const OPEN_TEXTS = [
-  "Hey {first}, Matt Shepherd here. I'm an investor and work with builders building new construction homes in {pocket}. Wanted to ask whether you'd ever consider selling {street}. Open to a quick conversation about what we might be able to offer?",
-  "Hi {first}, this is Matt, a local investor. I work with builders putting up new homes in {pocket} and {street} is the kind of lot they look for. Would you ever consider selling it?",
+  "Hey {first}, Matt Shepherd here. I work with builders building new construction homes in {pocket}. Wanted to ask whether you'd ever consider selling {street}. Open to a quick conversation about what we might be able to offer?",
+  "Hi {first}, this is Matt Shepherd. I work with builders putting up new homes in {pocket} and {street} is the kind of lot they look for. Would you ever consider selling it?",
   "{first}, Matt Shepherd here. I work with the builders doing the new construction around {pocket}. Not here to waste your time: is selling {street} something you'd ever think about?",
-  "Hey {first}, Matt here, local investor working with builders in {pocket}. If you've ever thought about selling {street}, I'd like a quick conversation about what we could offer. Worth a chat?",
-  "Hi {first}, Matt Shepherd, investor working with new construction builders in {pocket}. About {street}: would you consider selling, now or down the road?",
+  "Hey {first}, Matt here. I work with the builders putting up new homes in {pocket}. If you've ever thought about selling {street}, I'd like a quick conversation about what we could offer. Worth a chat?",
+  "Hi {first}, Matt Shepherd, I work with new construction builders in {pocket}. About {street}: would you consider selling, now or down the road?",
   "{first}, this is Matt. I work with builders building new homes in {pocket} and I'm looking for a lot nearby. Any chance you'd consider selling {street}?",
-  "Hi {first}, Matt Shepherd here. I'm a local investor and I work with the builders behind the new construction in {pocket}. Would you be open to a conversation about selling {street}?",
+  "Hi {first}, Matt Shepherd here. I work with the builders behind the new construction in {pocket}. Would you be open to a conversation about selling {street}?",
   "Hey {first}, Matt here. I work with builders doing new construction in {pocket} and {street} caught my eye. Would you ever consider selling, and if so could we talk about what we might offer?",
 ];
 
@@ -496,9 +501,9 @@ export const OWNER_PLAYBOOK =
   "WHAT MATTERS: only two things — the lot (size, where it sits, interior street or main road, corner) and what the seller needs (timing, where they are going next, whether they need the money from this house for the next one). " +
   "NEVER ask about the roof, the furnace, the kitchen, the condition, repairs, or photos of the inside. The house is coming down; its condition is worth nothing to us and asking reads as a flipper.\n" +
   "WHAT WE OFFER THEM: privacy (no listing, no sign, no showings, the neighbors never know), speed and certainty (a clean sale with no financing contingency, a date they choose), and staying put after closing for a couple of months if they need it to buy their next house — builders need that time for survey, permits and plans anyway.\n" +
-  "PRICE: talk about it openly and early, with the comps for a lot THEIR size (the pocket's sold teardowns), never one band for the whole neighborhood. If OUR OFFERS has a number for their house, that is our number — never above it. Say what a sale costs them the other way: listing with an agent runs about eight percent in commissions and closing, so our number nets them about the same as listing, with none of the hassle. " +
-  "If they say the Zestimate is higher or lower, say it prices the house, not the lot, and in a neighborhood like theirs the lot is the value. " +
-  "If they say it's worth way more, don't argue: ask what number they have in mind and what they'd need to see, and let a person decide. A number from them is a counter, not a no.\n" +
+  "PRICE: Matt prices every luxury lot himself. NEVER give a number, a range, a band or a per-square-foot figure, and never say what a builder pays. If OUR OFFERS already has a number for their house, that is our number and you may repeat it, never above it. When they ask what we'd pay, say Matt puts a number together once he's looked at the lot, and ask what they'd need to see and when they'd want to move. " +
+  "You may say what a sale costs them the other way: listing with an agent runs about eight percent in commissions and closing, and we take that out of the equation. If they say the Zestimate says X, say it prices the house, not the lot, and in a neighborhood like theirs the lot is the value. " +
+  "If they say it's worth way more, don't argue: ask what number they have in mind, and let Matt decide. A number from them is a counter, not a no.\n" +
   "THE GOAL: a short phone call with a person on our side about the lot and what they need. Ask for it once, lightly; never promise a call at a time.\n" +
   "NEVER: say cash or all cash (we fund with a hard money loan), say assign, wholesale, spread, fee or end buyer, ask for a listing agreement, offer to walk the house, or send a link. One question per text. No dollar signs; money in k or M.";
 
