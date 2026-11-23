@@ -76,3 +76,12 @@ test("garbage in the deal is tidied, not trusted", () => {
   assert.equal(d.screens.arterial, true);
   assert.equal(d.yearBuilt, 1966);
 });
+
+test("a typed assign price moves the spread, never the seller's offer (the method assigned at the top of the band)", () => {
+  const run = underwriteLot({ ...sampleLotDeal(), assignAt: 1400000 });
+  assert.ok(run.ok);
+  assert.equal(run.result.maxOffer, 1196000, "the seller's number stays lot value less 8%");
+  assert.equal(run.result.assignAt, 1400000);
+  assert.equal(run.result.spread, 204000);
+  assert.match(run.result.tests.find((t) => t.key === "assign").label, /Assign to a builder at/);
+});

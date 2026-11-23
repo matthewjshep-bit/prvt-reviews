@@ -167,3 +167,28 @@ test("a reply event from an owner stops the follow-up", async () => {
   const { nextOwnerStep } = await import("./shared/lot-finder.js");
   assert.match(nextOwnerStep({ events, now: T0 + 3 * 86400000 }).stop, /yours to call/);
 });
+
+test("the weekly pass reads the new builds that sold in the pocket and puts their builders into the buyer book through the listing agent, tagged for the pocket's city", async () => {
+  process.env.OUTREACH_IMPORTS_ENABLED = "true";
+  try {
+    const g = ghl();
+    const scan = async () => ({ suggest: {}, teardowns: [], newBuilds: [
+      { address: "12 Summit Dr, Clyde Hill, WA 98004", price: 4600000, saleDate: "2026-06-10", lotSqft: 32670, sqft: 6500, yearBuilt: 2026,
+        facts: { description: "Built by Mystery Homes, an estate…", sales: [{ date: "2026-06-10", price: 4600000 }, { date: "2023-09-01", price: 1100000 }], agent: { name: "Ann Agent", phone: "4255550177", email: "" }, brokerage: "Example Realty" } },
+      { address: "14 Summit Dr, Clyde Hill, WA 98004", price: 4100000, saleDate: "2026-02-01", lotSqft: 43560, sqft: 6000, yearBuilt: 2025, facts: { description: "", sales: [], agent: { name: "", phone: "" } } },
+    ] });
+    const saved = { ...ON({ traceDailyCap: 0, dailyNew: 0 }), apifyToken: "apify" };
+    const out = await runLotFinder({ client: {}, locationId: "L8", saved, store, deps: { fetch: fetchStub(PHONES), scanPocketZillow: scan, ...g.deps }, now: T0 });
+    assert.equal(out.pockets[0].builders, 2);
+    assert.equal(out.builders.created, 1, "the one with a number on the page");
+    assert.equal(out.builders.noPhone, 1);
+    assert.equal(g.created[0].companyName, "Mystery Homes");
+    assert.equal(g.created[0].phone, "+14255550177");
+    assert.deepEqual(g.tagged[0].tags, ["investor", "builder", "dispo-type-new-construction", "dispo-source-builder-exits", "lot-pocket-clyde-hill", "dispo-city-clyde-hill"]);
+    const rows = await store.listLotBuilders("L8");
+    assert.equal(rows.find((r) => r.builderKey === "nb:12-summit-dr-clyde-hill-wa-98004").doc.priorLotPrice, 1100000);
+    // A week later the same pocket isn't scanned again.
+    const again = await runLotFinder({ client: {}, locationId: "L8", saved, store, deps: { fetch: fetchStub(PHONES), scanPocketZillow: async () => { throw new Error("scanned twice"); }, ...g.deps }, now: T0 + 86400000 });
+    assert.equal(again.pockets[0].builders, undefined);
+  } finally { delete process.env.OUTREACH_IMPORTS_ENABLED; }
+});

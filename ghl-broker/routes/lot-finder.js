@@ -14,45 +14,22 @@
 import express from "express";
 import { store } from "../store.js";
 import { geocodeAddress } from "../geocode.js";
-import { soldSearchUrl, searchRows, normalizeRow, mergeFacts } from "../comps-zillow.js";
-import { fetchZillowFacts } from "../rehab-scan.js";
-import { normalizeLotFinder, normalizePocket, suggestPocket, OWNER_STATUSES } from "../shared/lot-finder.js";
-import { startLotFinder, getLotFinderJob, CURSOR_NAME, OWNER_SMS_ENABLED, traceKeyOf, propertyKeyOf } from "../lot-finder.js";
+import { normalizeLotFinder, normalizePocket, OWNER_STATUSES } from "../shared/lot-finder.js";
+import { startLotFinder, getLotFinderJob, scanPocketZillow, CURSOR_NAME, OWNER_SMS_ENABLED, traceKeyOf, propertyKeyOf } from "../lot-finder.js";
 
 const fail = (res, err) => res.status(err?.http || 500).json({ error: err?.message || String(err) });
 const OUTREACH_IMPORTS_ENABLED = () => process.env.OUTREACH_IMPORTS_ENABLED === "true";
-const NEW_BUILD_YEARS = 3;
-const SEARCH_LIMIT = 80;
-
 /**
  * discoverPocket({ address, radiusMiles, apifyToken, now }) → { center, suggest, newBuilds, teardowns }
- *
- * The method's §1A–1C off Zillow: the new builds that sold nearby (the
- * builders' exits, with their lots), and the older houses that sold in the
- * same box (what builders paid for the lot). Two sold searches plus one
- * detail batch for year built and lot size; the comps cache makes a second
- * look at the same box free for a day.
+ * The method's §1A–1C off Zillow for the Suggest button (lot-finder.js scanPocketZillow).
  */
 export async function discoverPocket({ address, radiusMiles = 1, apifyToken, now = Date.now(), deps = {} }) {
   const geo = await (deps.geocode || geocodeAddress)(address, { minPrecision: "street" });
   if (!geo) throw Object.assign(new Error("couldn't place that address on the map"), { http: 400 });
-  const year = new Date(now).getFullYear();
-  const search = deps.searchRows || searchRows;
-  const facts = deps.fetchZillowFacts || fetchZillowFacts;
-  const rowsOf = async (url, what) => (await search(url, SEARCH_LIMIT, apifyToken, what)).map(normalizeRow).filter((r) => r.price > 0);
-  const [nb, old] = await Promise.all([
-    rowsOf(soldSearchUrl({ lat: geo.lat, lng: geo.lng, radiusMiles, monthsBack: 36, builtMin: year - NEW_BUILD_YEARS, priceMin: 1000000 }), "Zillow new-build lookup"),
-    rowsOf(soldSearchUrl({ lat: geo.lat, lng: geo.lng, radiusMiles, monthsBack: 24, builtMax: year - 20 }), "Zillow teardown lookup"),
-  ]);
-  const detail = await facts([...nb, ...old].map((r) => r.address), apifyToken).catch(() => new Map());
-  const withFacts = (rows) => mergeFacts(rows, detail);
-  // Re-applied in code: Zillow ignores filter keys it doesn't know.
-  const newBuilds = withFacts(nb).filter((r) => (r.yearBuilt || 0) >= year - NEW_BUILD_YEARS && r.price >= 1000000)
-    .map((r) => ({ address: r.address, price: r.price, saleDate: r.saleDate, lotSqft: r.lotSqft || 0, sqft: r.sqft || 0, yearBuilt: r.yearBuilt || 0 }));
-  const teardowns = withFacts(old).filter((r) => r.yearBuilt > 0 && r.yearBuilt <= year - 20)
-    .map((r) => ({ address: r.address, price: r.price, saleDate: r.saleDate, lotSqft: r.lotSqft || 0, sqft: r.sqft || 0, yearBuilt: r.yearBuilt }));
-  const suggest = suggestPocket({ newBuilds, teardowns });
-  return { center: { lat: geo.lat, lng: geo.lng }, suggest, newBuilds: newBuilds.slice(0, 40), teardowns: teardowns.filter((t) => !suggest.lotSqftMin || t.lotSqft >= suggest.lotSqftMin).slice(0, 40) };
+  const scan = await scanPocketZillow({ lat: geo.lat, lng: geo.lng, radiusMiles, apifyToken, now, deps });
+  return { center: { lat: geo.lat, lng: geo.lng }, suggest: scan.suggest,
+    newBuilds: scan.newBuilds.slice(0, 40).map(({ facts, ...b }) => ({ ...b, builder: facts?.description ? (facts.description.match(/built by ([^.,]{3,60})/i) || [])[1] || "" : "" })),
+    teardowns: scan.teardowns.slice(0, 40) };
 }
 
 export default function createLotFinderRouter({ resolveLocation, getSettings = (loc) => store.getOfferSettings(loc), deps = {} } = {}) {
@@ -89,6 +66,15 @@ export default function createLotFinderRouter({ resolveLocation, getSettings = (
       const status = OWNER_STATUSES.includes(String(req.query.status || "")) ? String(req.query.status) : null;
       const limit = Math.min(2000, Math.max(1, Number(req.query.limit) || 500));
       res.json({ owners: await store.listLotOwners(locationId, { pocketId, status, limit }) });
+    } catch (err) { fail(res, err); }
+  });
+
+  router.get("/builders", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const pocketId = String(req.query.pocketId || "") || null;
+      const limit = Math.min(2000, Math.max(1, Number(req.query.limit) || 500));
+      res.json({ builders: await store.listLotBuilders(locationId, { pocketId, limit }) });
     } catch (err) { fail(res, err); }
   });
 

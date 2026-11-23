@@ -147,3 +147,28 @@ test("the pocket's numbers come off the new builds' lots and the teardowns that 
   assert.equal(s.exitLo, 4100000);
   assert.equal(s.exitHi, 5250000);
 });
+
+test("a new build that sold reads as a builder lead: the exit, the lot buy before it, the builder the listing names or its agent", async () => {
+  const { builderFromNewBuild, builderName, builderTags, builderOpener } = await import("./lot-finder.js");
+  assert.equal(builderName("Another stunning home built by Mystery Homes LLC on a private acre"), "Mystery Homes LLC");
+  assert.equal(builderName("Welcome to this Pacific Crest Homes masterpiece"), "Pacific Crest Homes");
+  assert.equal(builderName("Beautiful remodel with a view"), "");
+  const row = { address: "12 Summit Dr, Clyde Hill, WA 98004", price: 4600000, saleDate: "2026-06-10", lotSqft: 32670, sqft: 6500, yearBuilt: 2026 };
+  const facts = { description: "Built by Mystery Homes, this 6,500 sqft estate…", sales: [{ date: "2026-06-10", price: 4600000 }, { date: "2023-09-01", price: 1100000 }, { date: "2001-03-01", price: 400000 }],
+    agent: { name: "Ann Agent", phone: "(425) 555-0177", email: "" }, brokerage: "Example Realty" };
+  const b = builderFromNewBuild({ row, facts, pocket: { id: "clyde-hill" }, now: Date.parse("2026-11-24T18:00:00Z") });
+  assert.equal(b.builderKey, "nb:12-summit-dr-clyde-hill-wa-98004");
+  assert.equal(b.doc.exitPrice, 4600000);
+  assert.equal(b.doc.priorLotPrice, 1100000, "the sale before the exit, a year or more earlier and well under it");
+  assert.equal(b.doc.priorLotDate, "2023-09-01");
+  assert.equal(b.doc.builder, "Mystery Homes");
+  assert.equal(b.doc.agent.phone, "+14255550177");
+  assert.equal(b.doc.reach, "agent");
+  const noBuilder = builderFromNewBuild({ row, facts: { ...facts, description: "Stunning new estate" }, pocket: { id: "x" } });
+  assert.equal(noBuilder.doc.name, "Ann Agent (listing agent)");
+  assert.equal(builderFromNewBuild({ row: { address: "", price: 0 } }), null);
+  assert.deepEqual(builderTags({ id: "clyde-hill" }), ["investor", "builder", "dispo-type-new-construction", "dispo-source-builder-exits", "lot-pocket-clyde-hill"]);
+  const t = builderOpener({ first: "Ann", exit: b.doc, lotStreet: "9 Lakeview Ln, Clyde Hill", assignAt: 1300000 });
+  assert.equal(t, "Ann, Matt Shepherd here. Saw you sold 12 Summit Dr for 4.6M, looks like the lot ran 1.1M, congrats. I've got an off-market lot of similar size a few blocks away at 9 Lakeview Ln at 1.3M, fits the building envelope of the one you just did. Any interest?");
+  assert.doesNotMatch(t, /\$/);
+});

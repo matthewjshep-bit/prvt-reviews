@@ -390,11 +390,95 @@ avoided selling costs.
   is the seller's either way and creates no spread; the 8% is commission plus
   non-REET closing.
 
-Not built yet (planned): a per-pocket buy box (polygon, vintage cutoff, lot
-band), holding a listed teardown inside a pocket for lot pricing instead of
-grading it C, a builder book with lot price paid and exit price, and the owner
-line (letter → call → text behind `OWNER_SMS_ENABLED`, off, pending the
-RCW 19.190.060 question).
+Built the same day: the lot finder below (pockets, parcels, skip trace, owner
+texts behind `OWNER_SMS_ENABLED`, and the builders who buy there). Not built:
+holding a listed teardown inside a pocket for lot pricing instead of grading
+it C.
+
+## The lot finder — parcels → skip trace → owner texts, and the builders who buy there (2026-11-23)
+
+Autopilot → **Lots**. The luxury teardown lane's front end, on the Gatekeepers
+pattern: its own tables, its own tags, a daily job gated like the conversation
+audit, drafts that wait for Matt, and a reply the bot never answers. Matt:
+"automate this entire thing from finding properties to skiptrace to sending
+text", on the acquisition side and the disposition side. Rules in
+`shared/lot-finder.js`; the day in `ghl-broker/lot-finder.js`; API
+`/api/lot-finder` (`routes/lot-finder.js`); settings in `settings.lotFinder`
+(saved through PATCH `/api/offers/settings`).
+
+**A pocket** is a circle around an address: lots at least `lotSqftMin` (30,000
+sqft), built before `yearBuiltMax` (1980), owned `yearsOwnedMin` years (5),
+and the price band the first text names (`bandLo`–`bandHi`). **Suggest from
+Zillow** fills it from two sold searches through the Apify scraper
+(`scanPocketZillow`): the new builds that sold nearby (built in the last 3
+years, over $1M: the builders' exits, with their lots) and the older houses
+that sold in the same box; the lot band is the new builds' lots, the cutoff
+the newest teardown that sold inside it rounded up to the decade, the price
+band the middle half of what those teardowns went for (`suggestPocket`). Check
+the numbers before switching a pocket on.
+
+**Each weekday at 10am** (`maybeRunLotFinder`, cursor `lotFinder`, stale retry,
+4 tries), for every pocket that's on:
+
+1. **Parcels** (weekly per pocket, cursor `lotFinderPulls`): the property-data
+   API's PropertySearch (the comps key, `compsApiKey`) with
+   `property_type SFR, year_built_max, lot_size_min, years_owned_min` inside
+   the circle → `lot_owners` rows (owner of record, mailing address, year
+   built, lot, last sale). A re-pull never undoes a trace or an import.
+2. **Builders** (weekly, same pass, needs the Apify token): the new builds
+   that sold → `lot_builders` rows: the exit price and date, the lot, the lot
+   buy before it off the page's sale history (`salesFromDetail`: the sale a
+   year or more earlier and well under the exit), the builder the description
+   names (`builderName`) and the listing agent on the page (`zillowAgentFrom`).
+3. **Skip trace** (`traceDailyCap` a day, default 25, never on a dry run):
+   Tracerfy's instant lookup (`TRACERFY_API_KEY`, or `tracerfyApiKey` in
+   Settings; about 5 credits = 10¢ a hit, a miss free), a person by name, an
+   entity by the address. Kept: cells only, not on a do-not-call list, from
+   someone who isn't a litigator (`reachable`). Everything else is
+   `no_phone` with the reason.
+4. **Into GHL** (`dailyNew` owners a day): tags `lot-owner`,
+   `lot-pocket-<id>`; the builders tagged `investor`, `builder`,
+   `dispo-type-new-construction`, `dispo-source-builder-exits`,
+   `lot-pocket-<id>` and `dispo-city-<city>`, reached through the listing
+   agent until someone finds the builder's own number (the method's P1/P2;
+   P3, the LLC, is the county's and a skip trace's, by hand). Someone already
+   in GHL as an agent or a buyer is left as they are. Dry unless
+   `OUTREACH_IMPORTS_ENABLED`, like every import.
+5. **Texts**: the first text names the street and the price band in the
+   method's shape (eight variants, `OPEN_TEXTS`: who we are, the address,
+   respect for their time, the band, cash and no agent fees, one soft ask);
+   one follow-up `followUpDays` after the first actually went
+   (`lot_owner_sent`, never the draft); then nothing (`nextOwnerStep`). House
+   rules hold: no dollar sign, one question, no "following up"; a text that
+   trips `voiceFlags` waits with the reason. A draft **schedules itself only
+   when** `autoSend` is on, `CARD_SENDS_ENABLED` is set **and**
+   `OWNER_SMS_ENABLED` is set; otherwise it waits in the outbox with the
+   reason on the row.
+
+**Replies.** A contact tagged `lot-owner` / `lot-pocket-*` is never answered by
+the bot (`handsOffReason`: "a homeowner on a luxury lot — yours to call"),
+never classified as an agent, never forced to agent by the offer book. The
+inbound writes `lot_owner_replied`, which ends their texts, and the Desk shows
+`call_lot_owner_replied` (score 98): call now, then again; talk about the lot
+and what they need, never the roof. "Worth way more than that" is a reply,
+not a dead lead.
+
+**Disposition.** A builder imported here is a buyer who builds in that city,
+so a luxury-lot deal promoted in the pocket reaches them through the normal
+blast (`goesToBuilders`, `buyerTypeFit`, `pickDealBuyers`). The method's
+opener for a hand text is `builderOpener`: "saw you sold X for Y, looks like
+the lot ran Z, off-market lot of similar size a few blocks away at W, want the
+package?"
+
+**Switches, all off:** `lotFinder.enabled`, `lotFinder.dryRun` (true), `lotFinder.autoSend`,
+`OWNER_SMS_ENABLED`. **Washington:** RCW 19.190.060 limits unsolicited
+commercial texts to WA cell phones ($500 a message). Whether a "would you
+sell?" text is commercial hasn't had an attorney's answer; `OWNER_SMS_ENABLED`
+is where that decision lives, and it is Matt's. **Money:** each parcel pull
+and each trace costs; a dry run spends nothing.
+
+**Logs and results** carry counts and keys (`rapi:<id>`, `nb:<slug>`), never a
+name, a phone or an address.
 
 ## Step 3 — messaging-app (frontend)
 

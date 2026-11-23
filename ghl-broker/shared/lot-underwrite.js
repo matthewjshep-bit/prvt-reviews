@@ -57,6 +57,11 @@ export const DEFAULT_LOT_DEAL = {
   newBuilds: [],           // [{ label, price, lotSqft, sqft, priorLotPrice, priorLotDate }]
   sellingCostPct: DEFAULT_SELLING_COST_PCT,  // what the seller avoids by not listing
   agentFeePct: 0,          // 0.025 when the builder comes through an agent, paid out of the spread
+  // What a builder takes it at. 0 = the lot value. In the method's own deals
+  // the assignment landed at the top of the band (1.1M in, 1.25M out), so a
+  // typed number here is the spread you really expect; the seller's offer
+  // never moves with it.
+  assignAt: 0,
   minSpread: DEFAULT_MIN_SPREAD,
   // The screens a lot has to pass (the method's §1D): a main road or a corner
   // costs a builder's buyer privacy; a lot already on the MLS, with cuts, isn't
@@ -123,6 +128,7 @@ export function normalizeLotDeal(raw = {}) {
     })),
     sellingCostPct: Math.min(0.5, Math.max(0, pick("sellingCostPct"))),
     agentFeePct: Math.min(0.2, Math.max(0, pick("agentFeePct"))),
+    assignAt: Math.max(0, Math.round(pick("assignAt"))),
     minSpread: Math.max(0, pick("minSpread")),
     screens: {
       arterial: Boolean(sc.arterial),
@@ -163,7 +169,7 @@ function spreadOf(d, comps) {
   const sellingCosts = lotValue * d.sellingCostPct;
   const maxOffer = Math.max(0, Math.floor(lotValue - sellingCosts));
   const agentFee = maxOffer * d.agentFeePct;
-  const assignAt = Math.round(lotValue);
+  const assignAt = Math.round(d.assignAt > 0 ? d.assignAt : lotValue);
   const spread = assignAt - maxOffer - agentFee;
   return { lotValue, sellingCosts, maxOffer, agentFee, assignAt, spread };
 }
@@ -232,7 +238,7 @@ export function underwriteLot(raw) {
       comps: comps.length, warnings: lotWarnings(deal),
       tests: [
         { key: "offer", label: `Lot value less the seller's ${pct}% selling costs`, price: maxOffer, binding: true },
-        { key: "assign", label: "Lot value (what a builder pays)", price: assignAt, binding: false, info: true },
+        { key: "assign", label: deal.assignAt > 0 ? "Assign to a builder at" : "Lot value (what a builder pays)", price: assignAt, binding: false, info: true },
       ],
     },
   };

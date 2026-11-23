@@ -129,6 +129,10 @@ export default function LotUnderwriter({ deal, setDeal, run, asking, priceOverri
             <span className={LABEL}>Minimum spread</span>
             <NumField ariaLabel="Minimum spread" money prefix="$" value={deal.minSpread} onChange={(v) => patch({ minSpread: v })} />
           </label>
+          <label className="block">
+            <span className={LABEL}>Assign to a builder at</span>
+            <NumField ariaLabel="Assign at" money prefix="$" value={deal.assignAt} onChange={(v) => patch({ assignAt: v })} placeholder="lot value" />
+          </label>
         </div>
         <div className="mt-3 flex flex-wrap gap-4 text-sm text-slate-700">
           <label className="flex items-center gap-2">
@@ -164,7 +168,7 @@ export default function LotUnderwriter({ deal, setDeal, run, asking, priceOverri
       ) : (
         <VerdictCard step={5} title="Lot offer"
           maxOffer={r.maxOffer} asking={asking} per={deal.lotSqft > 0 ? r.maxOffer / deal.lotSqft : 0} perLabel="sqft of lot"
-          sentence={`${r.comps} sold teardown${r.comps === 1 ? "" : "s"} put lots here at about ${money(r.lotValue)}. Listing would cost the seller about ${money(r.sellingCosts)} (${pct}%), so the offer is ${money(r.maxOffer)} and they net the same. A builder takes it at about ${money(r.assignAt)}, leaving a ${money(r.spread)} spread${r.agentFee > 0 ? ` after the ${money(r.agentFee)} agent fee` : ""}.`}
+          sentence={`${r.comps} sold teardown${r.comps === 1 ? "" : "s"} put lots here at about ${money(r.lotValue)}. Listing would cost the seller about ${money(r.sellingCosts)} (${pct}%), so the offer is ${money(r.maxOffer)} and they net the same. A builder takes it at ${deal.assignAt > 0 ? "" : "about "}${money(r.assignAt)}, leaving a ${money(r.spread)} spread${r.agentFee > 0 ? ` after the ${money(r.agentFee)} agent fee` : ""}.`}
           priceOverride={priceOverride} setPriceOverride={setPriceOverride} fmtTyped={fmtTyped}>
           <TestBars tests={r.tests.map((t) => (t.key === "assign" ? { ...t, info: false } : t))} asking={asking} />
           {r.warnings.length > 0 && (

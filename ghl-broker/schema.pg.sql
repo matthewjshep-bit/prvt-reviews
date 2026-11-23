@@ -569,3 +569,21 @@ create table if not exists lot_owners (
 );
 create index if not exists lot_owners_loc_idx on lot_owners (location_id, pocket_id, status);
 create index if not exists lot_owners_contact_idx on lot_owners (location_id, contact_id);
+
+-- The builders who buy in a pocket (2026-11-23), read off the new builds
+-- that sold there: the exit, the lot, the lot buy before it, the builder the
+-- listing names or its agent. builder_key is the new build's address.
+create table if not exists lot_builders (
+  id           uuid primary key,
+  location_id  text not null,
+  builder_key  text not null,
+  pocket_id    text not null,
+  status       text not null default 'new',   -- 'new' | 'imported' | 'skipped' | 'no_phone'
+  contact_id   text,
+  imported_at  timestamptz,
+  first_seen   timestamptz not null default now(),
+  last_seen    timestamptz not null default now(),
+  doc          jsonb not null,
+  unique (location_id, builder_key)
+);
+create index if not exists lot_builders_loc_idx on lot_builders (location_id, pocket_id, status);

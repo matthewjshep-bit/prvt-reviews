@@ -1343,6 +1343,44 @@ const pgStore = {
     );
     return rowCount > 0;
   },
+  // The builders who buy in a pocket, read off the new builds that sold there.
+  async upsertLotBuilders(locationId, rows) {
+    let created = 0;
+    let updated = 0;
+    for (const r of rows) {
+      const { rows: out } = await query(
+        `insert into lot_builders (id, location_id, builder_key, pocket_id, doc)
+         values ($1,$2,$3,$4,$5)
+         on conflict (location_id, builder_key)
+         do update set pocket_id = excluded.pocket_id, doc = lot_builders.doc || excluded.doc, last_seen = now()
+         returning (xmax = 0) as created`,
+        [uuid(), locationId, r.builderKey, r.pocketId, r.doc]
+      );
+      if (out[0]?.created) created++;
+      else updated++;
+    }
+    return { created, updated };
+  },
+  async listLotBuilders(locationId, { pocketId = null, status = null, limit = 5000 } = {}) {
+    const { rows } = await query(
+      `select builder_key as "builderKey", pocket_id as "pocketId", status, contact_id as "contactId", imported_at as "importedAt",
+              first_seen as "firstSeen", last_seen as "lastSeen", doc
+       from lot_builders
+       where location_id = $1 and ($2::text is null or pocket_id = $2) and ($3::text is null or status = $3)
+       order by first_seen asc limit $4`,
+      [locationId, pocketId, status, limit]
+    );
+    return rows;
+  },
+  async setLotBuilder(locationId, builderKey, { status, contactId, importedAt, doc } = {}) {
+    const { rowCount } = await query(
+      `update lot_builders set status = coalesce($3, status), contact_id = coalesce($4, contact_id),
+              imported_at = coalesce($5, imported_at), doc = coalesce($6, doc)
+       where location_id = $1 and builder_key = $2`,
+      [locationId, builderKey, status || null, contactId || null, importedAt || null, doc || null]
+    );
+    return rowCount > 0;
+  },
 
   /* ---- contact record (the app's own memory of a person) ---- */
   // Person-scoped and permanent: nothing re-syncs over these rows and the
@@ -1810,6 +1848,7 @@ const fileStore = (() => {
       data.gatekeepers = data.gatekeepers || {};
       data.gatekeeperHooks = data.gatekeeperHooks || {};
       data.lotOwners = data.lotOwners || {};
+      data.lotBuilders = data.lotBuilders || {};
       data.jobCursors = data.jobCursors || {};
       data.replyDrafts = data.replyDrafts || {};
       data.appErrors = data.appErrors || {};
@@ -2758,6 +2797,42 @@ const fileStore = (() => {
     async setLotOwner(locationId, ownerKey, { status, contactId, importedAt, doc } = {}) {
       ensure();
       const row = data.lotOwners[`${locationId}|${ownerKey}`];
+      if (!row) return false;
+      if (status) row.status = status;
+      if (contactId) row.contactId = contactId;
+      if (importedAt) row.importedAt = importedAt;
+      if (doc) row.doc = doc;
+      persist();
+      return true;
+    },
+    async upsertLotBuilders(locationId, rows) {
+      ensure();
+      let created = 0;
+      let updated = 0;
+      for (const r of rows) {
+        const k = `${locationId}|${r.builderKey}`;
+        const prev = data.lotBuilders[k];
+        data.lotBuilders[k] = {
+          status: prev?.status || "new", contactId: prev?.contactId || null, importedAt: prev?.importedAt || null,
+          firstSeen: prev?.firstSeen || nowIso(), lastSeen: nowIso(),
+          locationId, builderKey: r.builderKey, pocketId: r.pocketId, doc: { ...(prev?.doc || {}), ...r.doc },
+        };
+        if (prev) updated++;
+        else created++;
+      }
+      persist();
+      return { created, updated };
+    },
+    async listLotBuilders(locationId, { pocketId = null, status = null, limit = 5000 } = {}) {
+      ensure();
+      return Object.values(data.lotBuilders)
+        .filter((o) => o.locationId === locationId && (!pocketId || o.pocketId === pocketId) && (!status || o.status === status))
+        .sort((a, b) => String(a.firstSeen).localeCompare(String(b.firstSeen)))
+        .slice(0, limit);
+    },
+    async setLotBuilder(locationId, builderKey, { status, contactId, importedAt, doc } = {}) {
+      ensure();
+      const row = data.lotBuilders[`${locationId}|${builderKey}`];
       if (!row) return false;
       if (status) row.status = status;
       if (contactId) row.contactId = contactId;

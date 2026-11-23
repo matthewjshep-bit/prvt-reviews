@@ -32,9 +32,13 @@ import { spreadAcrossDay, machineHours } from "./conversation-scheduler.js";
 import { workHour, isWorkday } from "./outreach-sweep.js";
 import { ranThisDay, pacificDay } from "./daily-gate.js";
 import { voiceFlags } from "./shared/voice.js";
+import { soldSearchUrl, searchRows, normalizeRow, mergeFacts, streetKey } from "./comps-zillow.js";
+import { fetchZillowFacts } from "./rehab-scan.js";
+import { citySlug } from "./shared/dispo-regions.js";
 import {
   normalizeLotFinder, pocketReady, propertySearchBody, ownerFromProperty, pickToTrace, traceLookupBody, phonesFromTrace, reachable,
   lotOwnerText, nextOwnerStep, lotOwnerTags, LOT_OWNER_EVENTS, LOT_OWNER_PARTY, SEQUENCE_EVENT_TYPES,
+  suggestPocket, builderFromNewBuild, builderTags,
 } from "./shared/lot-finder.js";
 
 export const CURSOR_NAME = "lotFinder";
@@ -48,6 +52,8 @@ const PAGE = 250;
 const MAX_PAGES = 4;
 const STEP_KIND = { open: "lot_owner_open", follow: "lot_owner_follow" };
 const PROPERTY_SEARCH_URL = "https://api.realestateapi.com/v2/PropertySearch";
+const NEW_BUILD_YEARS = 3;
+const SEARCH_LIMIT = 80;
 const TRACE_URL = "https://tracerfy.com/v1/api/trace/lookup/";
 
 export const OWNER_SMS_ENABLED = () => process.env.OWNER_SMS_ENABLED === "true";
@@ -91,6 +97,37 @@ export async function pullPocket({ pocket, apiKey, fetchFn = fetch, countOnly = 
     if (data.length < PAGE) break;
   }
   return { count: count || rows.length, rows };
+}
+
+/* ---------- 1b. the pocket off Zillow: the builders' exits and the teardowns that sold (§1A–1C, §6) ---------- */
+
+/**
+ * scanPocketZillow({ lat, lng, radiusMiles, apifyToken, now, deps }) → { newBuilds, teardowns, suggest }
+ *
+ * Two sold searches plus one detail batch: the new builds that sold nearby
+ * (the builders' exits, with their lots, sale history, description and
+ * listing agent) and the older houses that sold in the same box (what
+ * builders paid for the lot). Every filter is re-applied in code: Zillow
+ * ignores keys it doesn't know. The comps cache makes a second look free
+ * for a day.
+ */
+export async function scanPocketZillow({ lat, lng, radiusMiles = 1, apifyToken, now = Date.now(), deps = {} }) {
+  const year = new Date(now).getFullYear();
+  const search = deps.searchRows || searchRows;
+  const facts = deps.fetchZillowFacts || fetchZillowFacts;
+  const rowsOf = async (url, what) => (await search(url, SEARCH_LIMIT, apifyToken, what)).map(normalizeRow).filter((r) => r.price > 0);
+  const [nb, old] = await Promise.all([
+    rowsOf(soldSearchUrl({ lat, lng, radiusMiles, monthsBack: 36, builtMin: year - NEW_BUILD_YEARS, priceMin: 1000000 }), "Zillow new-build lookup"),
+    rowsOf(soldSearchUrl({ lat, lng, radiusMiles, monthsBack: 24, builtMax: year - 20 }), "Zillow teardown lookup"),
+  ]);
+  const detail = await facts([...nb, ...old].map((r) => r.address), apifyToken).catch(() => new Map());
+  const factsFor = (r) => detail.get(streetKey(r.address)) || null;
+  const newBuilds = mergeFacts(nb, detail).filter((r) => (r.yearBuilt || 0) >= year - NEW_BUILD_YEARS && r.price >= 1000000)
+    .map((r) => ({ address: r.address, price: r.price, saleDate: r.saleDate, lotSqft: r.lotSqft || 0, sqft: r.sqft || 0, yearBuilt: r.yearBuilt || 0, facts: factsFor(r) }));
+  const teardowns = mergeFacts(old, detail).filter((r) => r.yearBuilt > 0 && r.yearBuilt <= year - 20)
+    .map((r) => ({ address: r.address, price: r.price, saleDate: r.saleDate, lotSqft: r.lotSqft || 0, sqft: r.sqft || 0, yearBuilt: r.yearBuilt }));
+  const suggest = suggestPocket({ newBuilds, teardowns });
+  return { newBuilds, teardowns: teardowns.filter((t) => !suggest.lotSqftMin || t.lotSqft >= suggest.lotSqftMin), suggest };
 }
 
 /* ---------- 2. the cell numbers ---------- */
@@ -147,6 +184,24 @@ export async function runLotFinder({ client, locationId, saved = {}, store = def
     } catch (e) { line.error = String(e?.message || e).slice(0, 160); }
   }
 
+  // 1b. The builders who buy here, off the new builds that sold (weekly, with
+  // the parcels). Dry: nothing bought.
+  const apifyToken = String(saved?.apifyToken || "").trim();
+  const scans = { ...(cur.scans || {}) };
+  for (const p of f.pockets) {
+    const line = out.pockets.find((x) => x.id === p.id);
+    if (!p.enabled || !p.lat || !p.lng || dryRun) continue;
+    if (!apifyToken) { line.builders = "no Apify token"; continue; }
+    if (scans[p.id] && now - Date.parse(scans[p.id]) <= PULL_EVERY_MS) continue;
+    try {
+      const scan = await (deps.scanPocketZillow || scanPocketZillow)({ lat: p.lat, lng: p.lng, radiusMiles: p.radiusMiles, apifyToken, now, deps });
+      const rows = scan.newBuilds.map((b) => builderFromNewBuild({ row: b, facts: b.facts, pocket: p, now })).filter(Boolean);
+      const up = await store.upsertLotBuilders(locationId, rows);
+      line.builders = rows.length; line.buildersCreated = up.created;
+      scans[p.id] = iso(now);
+    } catch (e) { line.builders = `scan failed: ${String(e?.message || e).slice(0, 120)}`; }
+  }
+
   // 2. The cell numbers, up to the day's cap. Never on a dry run (it's money).
   const all = await store.listLotOwners(locationId, { limit: 20000 });
   const byPocket = new Map(f.pockets.map((p) => [p.id, p]));
@@ -173,9 +228,9 @@ export async function runLotFinder({ client, locationId, saved = {}, store = def
         if (e?.credits) { out.traced.stopped = "out of credits"; break; }
       }
     }
-    await store.setJobCursor?.(locationId, `${CURSOR_NAME}Pulls`, { at: iso(now), doc: { ...cur, pulls, traces: { day, n } } }).catch(() => {});
+    await store.setJobCursor?.(locationId, `${CURSOR_NAME}Pulls`, { at: iso(now), doc: { ...cur, pulls, scans, traces: { day, n } } }).catch(() => {});
   }
-  if (!dryRun && out.traced.looked === 0) await store.setJobCursor?.(locationId, `${CURSOR_NAME}Pulls`, { at: iso(now), doc: { ...cur, pulls } }).catch(() => {});
+  if (!dryRun && out.traced.looked === 0) await store.setJobCursor?.(locationId, `${CURSOR_NAME}Pulls`, { at: iso(now), doc: { ...cur, pulls, scans } }).catch(() => {});
 
   // 3. Into GHL, the day's reachable owners. Dry unless both gates are open.
   const config = conversationConfig(saved);
@@ -218,6 +273,43 @@ export async function runLotFinder({ client, locationId, saved = {}, store = def
       out.imported[action]++;
       out.rows.push({ ownerKey: row.ownerKey, imported: action });
     } catch (e) { out.imported.skipped++; out.rows.push({ ownerKey: row.ownerKey, error: `import: ${String(e?.message || e).slice(0, 120)}` }); }
+  }
+
+  // 3b. The builders into the buyer book: a buyer who builds, found here,
+  // reached through the listing agent until someone finds the builder's own
+  // number. Tagged for the pocket's city, so a lot deal there picks them
+  // (shared/buyer-score.js). Same gate as the owners.
+  out.builders = { created: 0, updated: 0, would: 0, skipped: 0, noPhone: 0 };
+  for (const row of (await store.listLotBuilders(locationId, { status: "new", limit: 2000 })).filter((r) => byPocket.get(r.pocketId)?.enabled)) {
+    const pocket = byPocket.get(row.pocketId);
+    const d = row.doc || {};
+    const phone = d.agent?.phone || "";
+    if (!phone) { out.builders.noPhone++; await store.setLotBuilder(locationId, row.builderKey, { status: "no_phone" }); continue; }
+    if (out.imported.dry) { out.builders.would++; continue; }
+    try {
+      await sleep(150);
+      const match = await findDup({ phone });
+      const city = String(d.address || "").split(",")[1]?.trim() || "";
+      const tags = [...builderTags(pocket), ...(city ? [`dispo-city-${citySlug(city)}`] : [])];
+      let contactId = match?.id;
+      let action = "updated";
+      if (!contactId) {
+        action = "created";
+        const [first = "", ...rest] = String(d.agent?.name || "").split(" ");
+        contactId = await create({ firstName: first || "Builder", lastName: rest.join(" "), phone, ...(d.agent?.email ? { email: d.agent.email } : {}),
+          companyName: d.builder || d.agent?.brokerage || "", source: "lot-finder" });
+      }
+      if (!contactId) throw new Error("no contact id returned");
+      await tag(contactId, tags);
+      const at = iso(now);
+      await ensureProfile({ store, locationId, contactId, party: "investor", name: d.agent?.name || null, phone });
+      await recordEvents({ store, locationId, contactId, party: "investor", events: [
+        { type: "import", at, address: d.address || "", source: "lot-finder", ref: `builder:${row.builderKey}`, data: { action, builderKey: row.builderKey, pocketId: row.pocketId, exitPrice: d.exitPrice, priorLotPrice: d.priorLotPrice, lotSqft: d.lotSqft, builder: d.builder || "" } },
+        ...tags.map((t) => ({ type: "tag_added", at, source: "lot-finder", ref: `builder:${row.builderKey}`, data: { tag: t } })),
+      ] });
+      await store.setLotBuilder(locationId, row.builderKey, { status: "imported", contactId, importedAt: at });
+      out.builders[action]++;
+    } catch (e) { out.builders.skipped++; out.rows.push({ builderKey: row.builderKey, error: `builder import: ${String(e?.message || e).slice(0, 120)}` }); }
   }
 
   // 4. The texts, for everyone in GHL.
@@ -273,7 +365,7 @@ export function startLotFinder({ client, locationId, saved, store = defaultStore
     await store.setJobCursor?.(locationId, CURSOR_NAME, { at: cur?.at || iso(now), doc: { ...(cur?.doc || {}), ...patch } }).catch(() => {});
   };
   const summary = () => ({ id: job.id, trigger, status: job.status, startedAt: job.startedAt, finishedAt: job.finishedAt, error: job.error,
-    ...(job.result ? { dryRun: job.result.dryRun, pockets: job.result.pockets, traced: job.result.traced, imported: job.result.imported, texts: job.result.texts } : {}) });
+    ...(job.result ? { dryRun: job.result.dryRun, pockets: job.result.pockets, traced: job.result.traced, imported: job.result.imported, builders: job.result.builders, texts: job.result.texts } : {}) });
   job.done = stamp({ run: { id: job.id, trigger, startedAt: job.startedAt } })
     .then(() => runLotFinder({ client, locationId, saved, store, sendsEnabled, deps, now, dryRun }))
     .then(async (result) => {

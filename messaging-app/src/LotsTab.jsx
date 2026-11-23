@@ -12,7 +12,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { Loader2, Plus, Sparkles, Trash2 } from "lucide-react";
 import { normalizeLotFinder, normalizePocket, OWNER_STATUSES } from "@shared/lot-finder.js";
-import { getLotFinder, getLotOwners, setLotOwnerStatus, suggestLotPocket, runLotFinder, patchSettings } from "./api.js";
+import { getLotFinder, getLotOwners, getLotBuilders, setLotOwnerStatus, suggestLotPocket, runLotFinder, patchSettings } from "./api.js";
 import { BTN, BTN_PRIMARY, ErrorBar, Pill } from "./ui.jsx";
 
 const INPUT = "w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100";
@@ -79,12 +79,13 @@ export default function LotsTab() {
   const [f, setF] = useState(null);
   const [info, setInfo] = useState(null);
   const [owners, setOwners] = useState([]);
+  const [builders, setBuilders] = useState([]);
   const [busy, setBusy] = useState("");
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
 
-  const load = useCallback(() => Promise.all([getLotFinder(), getLotOwners({ limit: 300 }).catch(() => ({ owners: [] }))])
-    .then(([r, o]) => { setInfo(r); setF(normalizeLotFinder(r.settings)); setOwners(o.owners || []); setErr(""); })
+  const load = useCallback(() => Promise.all([getLotFinder(), getLotOwners({ limit: 300 }).catch(() => ({ owners: [] })), getLotBuilders({ limit: 200 }).catch(() => ({ builders: [] }))])
+    .then(([r, o, b]) => { setInfo(r); setF(normalizeLotFinder(r.settings)); setOwners(o.owners || []); setBuilders(b.builders || []); setErr(""); })
     .catch((e) => setErr(e.message || "Couldn't load the lot finder.")), []);
   useEffect(() => { load(); }, [load]);
   if (!f) return err ? <ErrorBar>{err}</ErrorBar> : <p className="p-4 text-sm text-slate-500">Loading…</p>;
@@ -118,7 +119,7 @@ export default function LotsTab() {
       const parcels = (j.pockets || []).map((p) => `${p.id}: ${p.parcels ?? "?"} parcel${p.parcels === 1 ? "" : "s"}${p.skipped ? ` (${p.skipped})` : ""}${p.error ? ` (${p.error})` : ""}`).join("; ");
       setMsg(dryRun
         ? `Dry run — ${parcels || "no pockets"}. Would trace ${j.traced?.would || 0}, would import ${j.imported?.would || 0}, would text ${j.texts?.would || 0}.`
-        : `Ran — ${parcels}. Traced ${j.traced?.looked || 0} (${j.traced?.reachable || 0} with a cell${j.traced?.credits ? `, ${j.traced.credits} credits` : ""}${j.traced?.stopped ? `; ${j.traced.stopped}` : ""}); imported ${j.imported?.created || 0}${j.imported?.dry ? ` (dry: ${j.imported.would} would)` : ""}; texts ${j.texts?.scheduled || 0} scheduled, ${j.texts?.drafted || 0} waiting for you.`);
+        : `Ran — ${parcels}. Traced ${j.traced?.looked || 0} (${j.traced?.reachable || 0} with a cell${j.traced?.credits ? `, ${j.traced.credits} credits` : ""}${j.traced?.stopped ? `; ${j.traced.stopped}` : ""}); owners imported ${j.imported?.created || 0}${j.imported?.dry ? ` (dry: ${j.imported.would} would)` : ""}; builders imported ${j.builders?.created || 0}${j.builders?.would ? ` (dry: ${j.builders.would} would)` : ""}; texts ${j.texts?.scheduled || 0} scheduled, ${j.texts?.drafted || 0} waiting for you.`);
       await load();
     } catch (e) { setErr(e.message || "The run failed."); } finally { setBusy(""); }
   };
@@ -141,7 +142,7 @@ export default function LotsTab() {
           </div>
         </div>
         <p className="max-w-3xl text-xs text-slate-600">
-          Each weekday at 10am: pull the old houses on big lots in each pocket (weekly), look up the owners' cell numbers up to the day's cap, put the day's new ones in GHL tagged <code>lot-owner</code>, and write each a first text that names the price band, then one follow-up a day later. A reply is yours: the bot never answers a homeowner, and the Desk says call now.
+          Each weekday at 10am: pull the old houses on big lots in each pocket (weekly), look up the owners' cell numbers up to the day's cap, put the day's new ones in GHL tagged <code>lot-owner</code>, and write each a first text that names the price band, then one follow-up a day later. A reply is yours: the bot never answers a homeowner, and the Desk says call now. The same weekly pass reads the new builds that sold in the pocket and puts their builders (through the listing agent until you have the builder's own number) into the buyer book tagged new construction, so a lot you lock up there goes to them on promote.
         </p>
         {err && <ErrorBar>{err}</ErrorBar>}
         {msg && <p className="mt-2 text-sm text-blue-800" role="status">{msg}</p>}
@@ -176,6 +177,35 @@ export default function LotsTab() {
             onRemove={() => set({ pockets: f.pockets.filter((_, j) => j !== i) })} />
         ))}
       </div>
+
+      {builders.length > 0 && (
+        <div className="rounded-xl border border-slate-200 bg-white p-3">
+          <h3 className="mb-2 text-sm font-bold text-slate-800">Builders who bought here ({builders.length} new builds sold)</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[40rem] text-sm">
+              <thead><tr className="text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                <th className="pb-1 pr-2">New build</th><th className="pb-1 pr-2">Sold for</th><th className="pb-1 pr-2">Lot</th><th className="pb-1 pr-2">Lot bought</th><th className="pb-1 pr-2">Builder / agent</th><th className="pb-1 pr-2">Status</th>
+              </tr></thead>
+              <tbody>
+                {builders.map((b) => {
+                  const d = b.doc || {};
+                  return (
+                    <tr key={b.builderKey} className="border-t border-slate-100">
+                      <td className="py-1 pr-2">{String(d.address || "").split(",")[0]}{d.exitDate ? ` · ${d.exitDate.slice(0, 7)}` : ""}</td>
+                      <td className="py-1 pr-2 tabular-nums">{money(d.exitPrice)}</td>
+                      <td className="py-1 pr-2 tabular-nums">{d.lotSqft ? d.lotSqft.toLocaleString("en-US") : "—"}</td>
+                      <td className="py-1 pr-2 tabular-nums">{d.priorLotPrice ? `${money(d.priorLotPrice)}${d.priorLotDate ? ` (${d.priorLotDate.slice(0, 7)})` : ""}` : "—"}</td>
+                      <td className="py-1 pr-2">{d.builder ? <><span className="font-semibold">{d.builder}</span>{d.agent?.name ? ` · ${d.agent.name}` : ""}</> : d.agent?.name ? `${d.agent.name} (listing agent)` : "—"}{d.agent?.brokerage ? <span className="text-slate-500">, {d.agent.brokerage}</span> : null}</td>
+                      <td className="py-1 pr-2">{b.status === "imported" ? "In the buyer book" : b.status === "no_phone" ? "No number on Zillow" : b.status === "skipped" ? "Skipped" : "Found"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <p className="mt-2 text-[11px] text-slate-500">The builder's own number isn't on Zillow. Until you find it, the listing agent is the way in: the builder gives them the finished house to list, so they have a reason to help. Budget about 2.5% for the agent on the lot deal.</p>
+        </div>
+      )}
 
       {owners.length > 0 && (
         <div className="rounded-xl border border-slate-200 bg-white p-3">

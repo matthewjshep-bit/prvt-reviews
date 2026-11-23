@@ -912,3 +912,5 @@ export const getLotOwners = ({ pocketId = "", status = "", limit = 500 } = {}) =
 export const setLotOwnerStatus = (ownerKey, status) => post(`/api/lot-finder/owners/${encodeURIComponent(ownerKey)}/status`, { status });
 export const suggestLotPocket = (address, radiusMiles) => post(`/api/lot-finder/suggest`, { address, radiusMiles });
 export const runLotFinder = ({ dryRun = true } = {}) => post(`/api/lot-finder/run`, { dryRun, wait: true });
+export const getLotBuilders = ({ pocketId = "", limit = 500 } = {}) =>
+  fetch(`${API_BASE}/api/lot-finder/builders?${locq()}${pocketId ? `&pocketId=${encodeURIComponent(pocketId)}` : ""}&limit=${limit}`).then(j);

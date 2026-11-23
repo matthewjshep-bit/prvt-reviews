@@ -317,3 +317,86 @@ export function suggestPocket({ newBuilds = [], teardowns = [], lotSqftMin = 0 }
     exitHi: Math.round(Math.max(...newBuilds.map((b) => num(b.price)).filter((p) => p > 0))) || null,
   };
 }
+
+/* ---------- the disposition side: the builders who buy here (the method's §6) ---------- */
+
+export const BUILDER_STATUSES = ["new", "imported", "skipped", "no_phone"];
+export const BUILDER_SOURCE_TAG = "dispo-source-builder-exits";
+
+// "Built by Acme Homes", "another Acme Homes masterpiece", "presented by Acme
+// Construction LLC": the builder's name as a listing description says it.
+const BUILDER_RX = /\b(?:built|constructed|crafted|presented|brought to you|developed|designed and built)\s+by\s+([A-Z][\w&'.-]*(?:\s+[A-Z][\w&'.-]*){0,4})/;
+const BUILDER_WORD_RX = /\b([A-Z][\w&'.-]*(?:\s+[A-Z][\w&'.-]*){0,3}\s+(?:Homes|Home Builders|Builders|Construction|Development|Developments|Custom Homes|Design Build|Residential))\b/;
+const NOT_A_BUILDER = /\b(?:New|This|The|Stunning|Luxury|Modern|Custom|Beautiful|Gorgeous|Welcome)\b$/;
+
+/** builderName(description) → "Acme Homes" | "" — the builder a listing names, if it does. */
+export function builderName(description = "") {
+  const text = clean(description);
+  const m = text.match(BUILDER_RX) || text.match(BUILDER_WORD_RX);
+  if (!m) return "";
+  const name = clean(m[1]).replace(/[.,;:]+$/, "");
+  if (!name || NOT_A_BUILDER.test(name) || name.split(" ").length > 6) return "";
+  return name.slice(0, 80);
+}
+
+/**
+ * builderFromNewBuild({ row, facts, pocket, now }) → { builderKey, pocketId, doc } | null
+ *
+ * One new build that sold (a Zillow sold row with its detail facts) read as a
+ * builder lead: the exit (price and date), the lot it sits on, and the lot
+ * buy before it in the page's sale history — the method's "you got the lot
+ * for $1.2M" line. The builder's name off the description when it's there;
+ * the listing agent otherwise, who has a reason to help (the builder gives
+ * them the finished house to list). Nothing is skip-traced here.
+ */
+export function builderFromNewBuild({ row = {}, facts = null, pocket = {}, now = Date.now() } = {}) {
+  const address = clean(row.address);
+  const price = Math.round(num(row.price));
+  if (!address || price <= 0) return null;
+  const sales = Array.isArray(facts?.sales) ? facts.sales : [];
+  const exitDate = clean(row.saleDate || sales[0]?.date).slice(0, 10);
+  // The lot buy: the sale before the exit, a year or more earlier and well under it.
+  const prior = sales.find((s) => s.date && exitDate && s.date < exitDate && s.price < price * 0.7
+    && (Date.parse(exitDate) - Date.parse(s.date)) >= 300 * DAY_MS) || null;
+  const agent = facts?.agent || {};
+  const builder = builderName(facts?.description || "");
+  const name = builder || (agent.name ? `${agent.name} (listing agent)` : "");
+  return {
+    builderKey: `nb:${address.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 80)}`,
+    pocketId: pocket.id || "",
+    doc: {
+      address, exitPrice: price, exitDate: exitDate || null,
+      lotSqft: int(row.lotSqft ?? facts?.lotSqft, 0, 0, 10000000) || null,
+      sqft: int(row.sqft ?? facts?.sqft, 0, 0, 100000) || null,
+      yearBuilt: int(row.yearBuilt ?? facts?.yearBuilt, 0, 0, 2100) || null,
+      priorLotPrice: prior?.price || null, priorLotDate: prior?.date || null,
+      builder, name,
+      agent: { name: clean(agent.name).slice(0, 80), phone: e164(agent.phone), email: clean(agent.email).slice(0, 120), brokerage: clean(facts?.brokerage).slice(0, 80) },
+      // Who we'd reach: the builder (P1) when we have a number for them — we
+      // don't off Zillow — else the listing agent (P2). P3, the LLC behind the
+      // sale, is the county's and a skip trace's, by hand for now.
+      reach: agent.phone ? "agent" : "none",
+      seenAt: iso(now),
+    },
+  };
+}
+
+const iso = (t) => new Date(t).toISOString();
+
+/** builderTags(pocket) → the buyer-book tags on a builder contact: a buyer who builds, found here. */
+export const builderTags = (pocket = {}) => ["investor", "builder", "dispo-type-new-construction", BUILDER_SOURCE_TAG, ...(pocket?.id ? [`lot-pocket-${slug(pocket.id)}`] : [])];
+
+/**
+ * builderOpener({ first, exit, lotStreet, assignAt }) → the method's buyer line:
+ * "saw you sold X for Y, looks like the lot ran Z — similar lot nearby at W,
+ * want the package?" One question, no dollar signs (the house rules).
+ */
+export function builderOpener({ first = "", exit = {}, lotStreet = "", assignAt = 0 } = {}) {
+  const f = clean(first).split(" ")[0];
+  const sold = clean(exit.address).split(",")[0];
+  if (!sold || !(num(exit.exitPrice) > 0) || !lotStreet) return "";
+  const lot = exit.priorLotPrice > 0 ? `, looks like the lot ran ${kWords(exit.priorLotPrice)}` : "";
+  const at = assignAt > 0 ? ` at ${kWords(assignAt)}` : "";
+  const size = exit.lotSqft > 0 ? " of similar size" : "";
+  return `${f ? `${f}, ` : ""}Matt Shepherd here. Saw you sold ${sold} for ${kWords(exit.exitPrice)}${lot}, congrats. I've got an off-market lot${size} a few blocks away at ${clean(lotStreet).split(",")[0]}${at}, fits the building envelope of the one you just did. Any interest?`.slice(0, TEXT_MAX);
+}
