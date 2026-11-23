@@ -16,7 +16,7 @@
 
 import { remarkSignals } from "./house-facts.js";
 import { rehabBand, gutSignal, gutRehab, GUT_PER_SQFT } from "./rehab-catalog.js";
-import { assetOf, assetPhrase } from "./asset-type.js";
+import { assetOf, assetPhrase, isLuxuryLot } from "./asset-type.js";
 import { isOffMarket, onMarketCue } from "./off-market.js";
 import { buyerCeiling, amountsIn } from "./post-mortem.js";
 import { parseThread } from "./deal-feedback.js";
@@ -242,6 +242,10 @@ export function preContractChecks({ offer = {}, settings = {}, videos = [], pric
   const lines = threadLines(thread);
   const theirs = lines.filter((l) => l.dir === "THEM").map((l) => l.text).join("\n");
   const land = assetOf(offer)?.type === "land";
+  // A luxury teardown lot (shared/lot-underwrite.js): no rehab, no ARV, no
+  // buyer ceiling either — the lot value is the question, as for land.
+  const lot = isLuxuryLot(offer);
+  const dirt = land || lot;
 
   /* --- the listing remarks --- */
   if (signals) {
@@ -304,8 +308,8 @@ export function preContractChecks({ offer = {}, settings = {}, videos = [], pric
   const sqft = sqftOf(offer);
   const repairs = repairsOf(offer);
   const band = rehabBand(sqft);
-  if (land) {
-    // Land is priced off land sales (land_value), not a rehab.
+  if (dirt) {
+    // Land, or a teardown lot, is priced off what the lot sells for, not a rehab.
   } else if (gut && sqft > 0 && repairs < gutRehab(sqft)) {
     add("rehab_floor", "warn", `rehab ${kText(repairs)} is under the gut tier (${kText(gutRehab(sqft))} at $${GUT_PER_SQFT}/sqft) — ${gut.why}`,
       `rehab ${kText(repairs)} vs ${kText(gutRehab(sqft))} for a gut`);
@@ -323,7 +327,7 @@ export function preContractChecks({ offer = {}, settings = {}, videos = [], pric
   const full = snapOf(offer)?.checks;
   const cap = full?.cap;
   const capped = full?.arv?.capped || null;
-  if (land) {
+  if (dirt) {
     // An "ARV" on land is whatever the form held — the asking price, on
     // 1538 NW 61st St. What land sells for is the question (land_value).
   } else if (!arv) add("arv_actives", "unknown", "no ARV on file");
@@ -349,7 +353,7 @@ export function preContractChecks({ offer = {}, settings = {}, videos = [], pric
   const agreed = priceAgreed(offer);
   const at = round(price) || round(agreed?.amount) || round(offer?.contract?.fields?.price) || ours;
   // A land "ARV" is no value at all, so there is no buyer ceiling on land.
-  const ceiling = land ? { computable: false } : (() => { try { return buyerCeiling({ offer, settings, ...(fee != null ? { fee } : {}) }); } catch { return { computable: false }; } })();
+  const ceiling = dirt ? { computable: false } : (() => { try { return buyerCeiling({ offer, settings, ...(fee != null ? { fee } : {}) }); } catch { return { computable: false }; } })();
   const over = [];
   const shorts = [];
   const unpriced = !ours || effectiveStatus(offer) === "draft";
@@ -358,7 +362,7 @@ export function preContractChecks({ offer = {}, settings = {}, videos = [], pric
   if (ceiling.computable && at > ceiling.withFee) { over.push(`${kText(at)} is over the buyer ceiling (${kText(ceiling.withFee)}: ${ceiling.pct}% of ARV less rehab and our fee)`); shorts.push(`over the ${kText(ceiling.withFee)} ceiling`); }
   if (over.length) add("our_number", "warn", over.join("; "), shorts.join(", "));
   else if (!at) add("our_number", "unknown", "no price on file");
-  else if (!ceiling.computable) add("our_number", "unknown", `${kText(at)} — ${land ? "land has no buyer ceiling; see the land value" : "no ARV for the buyer ceiling"}`);
+  else if (!ceiling.computable) add("our_number", "unknown", `${kText(at)} — ${dirt ? "land has no buyer ceiling; see the land value" : "no ARV for the buyer ceiling"}`);
   else add("our_number", "ok", `${kText(at)}: at or under our ${kText(ours || at)} and the buyer ceiling ${kText(ceiling.withFee)}`);
 
   /* --- land, priced off land sales --- */
@@ -373,6 +377,19 @@ export function preContractChecks({ offer = {}, settings = {}, videos = [], pric
     } else {
       add("land_value", "warn", "nobody valued the land — price it off land sales (per lot or per buildable unit), not the asking price or the agent's word",
         "the land was never valued");
+    }
+  }
+  if (lot) {
+    const uw = underwriteModel(offer) === "lot" ? offer?.calc?.underwrite : null;
+    const value = round(uw?.lotValue);
+    const sales = Number(uw?.comps) || 0;
+    if (value > 0 && sales > 0) {
+      add("land_value", at > value ? "warn" : "ok",
+        at > value ? `${kText(at)} is above the lot value (${kText(value)} off ${sales} sold teardown${sales === 1 ? "" : "s"}) — a builder pays the lot value, so there's no spread` : `lot valued at ${kText(value)} off ${sales} sold teardown${sales === 1 ? "" : "s"}; a builder pays about that`,
+        `over the ${kText(value)} lot value`);
+    } else {
+      add("land_value", "warn", "nobody valued the lot — price it off what teardowns on lots like this sold for, not the asking price or the owner's word",
+        "the lot was never valued");
     }
   }
 

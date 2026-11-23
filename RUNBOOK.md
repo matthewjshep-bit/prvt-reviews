@@ -354,6 +354,48 @@ boot. Tables from the pre-overhaul card-studio era are left untouched; the file
 ends with a commented `drop` block to run manually when that history is no
 longer needed.
 
+## Luxury lots — a teardown priced for a builder (2026-11-23)
+
+The fourth way to price an offer, beside comps, income and land
+(`shared/underwrite-model.js`). In a high-end pocket builders buy old houses on
+big lots, tear them down and build $3M+ homes. Lots are scarce, so a builder
+pays close to full value off-market. The seller would pay about 8% to list. We
+offer the lot value less that, so they net the same with no showings, and a
+builder takes the contract at about the lot value. The spread is the seller's
+avoided selling costs.
+
+- **Pick it:** the editor's Property type row has a **Luxury lot** toggle on
+  Single family (the Deals modal has the same checkbox). It sets
+  `asset.lane = "luxury"` on the offer and prices by the `lot` model
+  (`shared/lot-underwrite.js`). Still a single-family house to every feed, so
+  the lane is on the asset, not a type of its own.
+- **The math:** lot value = the median sold price of the teardowns you enter
+  (same pocket, lot in the band, built before the cutoff). Offer = lot value ×
+  (1 − selling costs). A builder's agent fee, when there is one, comes out of
+  the spread, not the offer. A spread under the minimum ($75k default) doesn't
+  price; lower the minimum or pass.
+- **Warnings, not blocks:** a house big or new enough that a remodel might
+  compete, a lot outside the comps' band, a main road or corner, already
+  listed with price cuts.
+- **The letter** shows lot value and the selling costs the seller keeps, never
+  the spread or the assign price. The float, SendModal and agent page show no
+  math on it (`offerMath` is null), as for land.
+- **Buyers:** a luxury lot goes to the buyers who build, like land
+  (`goesToBuilders` in `shared/asset-type.js`): a buy box that says land, or
+  the new-construction tag. The blast text reads "teardown lot" with the lot
+  and the year built, no ARV or rehab. The pre-contract check warns when the
+  price is above the lot value.
+- **Hand-priced**, so the counter band, the requote and the auto-underwrite
+  leave it alone (`pricedByHand`). Nothing sends on its own. Washington: REET
+  is the seller's either way and creates no spread; the 8% is commission plus
+  non-REET closing.
+
+Not built yet (planned): a per-pocket buy box (polygon, vintage cutoff, lot
+band), holding a listed teardown inside a pocket for lot pricing instead of
+grading it C, a builder book with lot price paid and exit price, and the owner
+line (letter → call → text behind `OWNER_SMS_ENABLED`, off, pending the
+RCW 19.190.060 question).
+
 ## Step 3 — messaging-app (frontend)
 
 Netlify auto-builds from `main` via the root `netlify.toml`. The API base

@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  assetFromHomeType, normalizeAsset, assetOf, assetPhrase, assetLabel, exclusionsSay, buyerTypeFit,
+  assetFromHomeType, normalizeAsset, assetOf, assetPhrase, assetLabel, exclusionsSay, buyerTypeFit, isLuxuryLot, goesToBuilders,
 } from "./asset-type.js";
 
 // 1510 Maple Lane's offer as it was on 2026-10-01: no type, Zillow's subject
@@ -172,4 +172,24 @@ test("the agent bot is told we don't buy short sales or bank-owned houses, in Ma
   const r = agentFocusRule();
   assert.match(r, /don't buy short sales or bank-owned houses/);
   assert.match(r, /Hey, yeah, we don't like to touch those\. We're going to pass on it\./);
+});
+
+test("a luxury lot is a single-family house with a lane, and goes to the buyers who build, never to a flipper", () => {
+  const lot = normalizeAsset({ type: "sfr", lane: "luxury", by: "you" });
+  assert.deepEqual(lot, { type: "sfr", land: "", by: "you", lane: "luxury" });
+  assert.equal(normalizeAsset({ type: "land", lane: "luxury" }).lane, undefined, "the lane is a house's");
+  assert.equal(normalizeAsset({ type: "sfr", lane: "bogus" }).lane, undefined);
+  assert.equal(isLuxuryLot({ asset: lot }), true);
+  assert.equal(isLuxuryLot({ asset: { type: "sfr" } }), false);
+  assert.equal(goesToBuilders(lot), true);
+  assert.equal(goesToBuilders({ type: "land" }), true);
+  assert.equal(goesToBuilders({ type: "sfr" }), false);
+  assert.equal(assetLabel(lot), "Single family · luxury lot");
+  assert.equal(assetPhrase(lot), "teardown lot");
+  const builder = { buybox: { propertyTypes: ["land"] } };
+  const tagged = { markets: { types: ["new-construction"] } };
+  const flipper = { buybox: { propertyTypes: ["sfr"], exclusions: "no land" } };
+  assert.deepEqual(buyerTypeFit(builder, lot), { wants: true, refuses: false, reason: "builds" });
+  assert.deepEqual(buyerTypeFit(tagged, lot), { wants: true, refuses: false, reason: "builds" });
+  assert.equal(buyerTypeFit(flipper, lot).wants, false, "a house-only buy box doesn't want a teardown lot");
 });

@@ -14,6 +14,7 @@ import { ASSET_TYPE_LABELS, MH_LAND, MH_LAND_LABELS, assetFromHomeType } from "@
 import { buildUnderwriteCalc, modelForAsset, runUnderwrite as runAnalyzer } from "@shared/underwrite-model.js";
 import { blankIncomeDeal } from "@shared/income-underwrite.js";
 import { blankLandDeal } from "@shared/land-underwrite.js";
+import { blankLotDeal } from "@shared/lot-underwrite.js";
 import {
   addContactNote, cancelUnderwrite, getContactDetail, getContactNotes, getOffer, getUnderwrite,
   ghlContactUrl, listDatarooms, listOffers, previewDocument, promoteDeal, publishOffer, runUnderwrite, brickedRead, saveDraft,
@@ -26,6 +27,7 @@ import CompsPane from "./CompsPane.jsx";
 import RehabPane from "./RehabPane.jsx";
 import IncomeUnderwriter from "./IncomeUnderwriter.jsx";
 import LandUnderwriter from "./LandUnderwriter.jsx";
+import LotUnderwriter from "./LotUnderwriter.jsx";
 import NotesPanel from "./NotesPanel.jsx";
 import SendModal, { CHANNEL_LABELS } from "./SendModal.jsx";
 import ContractModal from "./ContractModal.jsx";
@@ -121,7 +123,7 @@ const TYPE_CHOICES = [
   { type: "land", label: "Land" },
   { type: "manufactured", label: "Mobile" },
 ];
-const MODEL_WORDS = { comps: "comps & rehab", income: "income", land: "land value" };
+const MODEL_WORDS = { comps: "comps & rehab", income: "income", land: "land value", lot: "lot value" };
 const LABEL_CLS = "mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500";
 
 // The Auto-underwrite button: the same robot the GHL workflow fires, pointed
@@ -959,7 +961,7 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
   // what Zillow said on the subject record. Kept in the workspace so a draft
   // reopens on it; a pick already saved on the offer is the starting point.
   const [assetPick, setAssetPick] = useState(() => snap?.assetPick
-    || (fromOffer?.asset?.by === "you" ? { type: fromOffer.asset.type, land: fromOffer.asset.land || "" } : null));
+    || (fromOffer?.asset?.by === "you" ? { type: fromOffer.asset.type, land: fromOffer.asset.land || "", ...(fromOffer.asset.lane ? { lane: fromOffer.asset.lane } : {}) } : null));
   const zillowAsset = assetFromHomeType(subjectInfo?.homeType);
   const assetType = assetPick?.type || zillowAsset || "";
   // Which way it's priced (shared/underwrite-model.js): comps for a house,
@@ -968,8 +970,15 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
   // stays on comps until you switch it.
   const [uwModel, setUwModel] = useState(() => {
     const m = snap?.model || fromOffer?.calc?.model;
-    return m === "income" || m === "land" ? m : "comps";
+    return m === "income" || m === "land" || m === "lot" ? m : "comps";
   });
+  // The luxury teardown lane (shared/asset-type.js): a single-family house
+  // priced by the lot (shared/lot-underwrite.js). Rides on the asset pick.
+  const luxuryLot = assetPick?.lane === "luxury";
+  const pickLuxuryLot = (on) => {
+    setAssetPick(on ? { type: "sfr", land: "", lane: "luxury" } : { type: "sfr", land: "" });
+    setUwModel(on ? "lot" : "comps");
+  };
   // One deal per kind, so trying Commercial and coming back keeps the rent roll.
   const [uwDeals, setUwDeals] = useState(() => {
     const d = snap?.underwrite?.deal || fromOffer?.calc?.underwrite?.deal || null;
@@ -981,9 +990,9 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
   };
   const pickLand = (land) => setAssetPick({ type: "manufactured", land });
   const incomeKind = assetType === "commercial" ? "commercial" : "multi_family";
-  const dealKey = uwModel === "land" ? "land" : incomeKind;
+  const dealKey = uwModel === "land" ? "land" : uwModel === "lot" ? "lot" : incomeKind;
   const uwDeal = uwModel === "comps" ? null
-    : uwDeals[dealKey] || (uwModel === "land" ? blankLandDeal() : blankIncomeDeal(incomeKind));
+    : uwDeals[dealKey] || (uwModel === "land" ? blankLandDeal() : uwModel === "lot" ? blankLotDeal() : blankIncomeDeal(incomeKind));
   const setUwDeal = (d) => setUwDeals((m) => ({ ...m, [dealKey]: d }));
   const uwBody = uwModel === "comps" ? undefined : { model: uwModel, deal: uwDeal };
   // Comps for a mobile home are mobile homes (the pull keeps to houses otherwise).
@@ -1725,6 +1734,13 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
                 );
               })}
             </div>
+            {(assetType || "sfr") === "sfr" && (
+              <button type="button" onClick={() => pickLuxuryLot(!luxuryLot)} aria-pressed={luxuryLot}
+                title="An old house on a big lot in a builders' pocket: priced by what builders pay for the lot, less the seller's selling costs"
+                className={`rounded-lg border px-3 py-1.5 text-xs font-semibold ${luxuryLot ? "border-amber-500 bg-amber-50 text-amber-900" : "border-slate-300 text-slate-600 hover:bg-slate-100"}`}>
+                Luxury lot
+              </button>
+            )}
             <span className="text-xs text-slate-500">
               Priced by {MODEL_WORDS[uwModel]}
               {!assetPick && zillowAsset ? ` · Zillow: ${ASSET_TYPE_LABELS[zillowAsset]}` : ""}
@@ -1782,8 +1798,8 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
               rooms={pinnedRooms}
               unpinning={unpinning === "repairs"} onFollow={() => followOffer("repairs")} />
           </div>}
-          <Field label={uwModel === "comps" ? "Asking price ($, optional)" : "Asking price ($)"}>
-            <input className={INPUT_CLS} inputMode="numeric" value={inputs.askingPrice} onChange={setMoney("askingPrice")} placeholder={uwModel === "comps" ? "for %-of-asking context" : "what the seller wants"} />
+          <Field label={uwModel === "comps" || uwModel === "lot" ? "Asking price ($, optional)" : "Asking price ($)"}>
+            <input className={INPUT_CLS} inputMode="numeric" value={inputs.askingPrice} onChange={setMoney("askingPrice")} placeholder={uwModel === "comps" ? "for %-of-asking context" : uwModel === "lot" ? "what the owner wants, if they've said" : "what the seller wants"} />
           </Field>
           <div>
             {assetType === "manufactured" && (
@@ -1812,6 +1828,12 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
       )}
       {uwModel === "land" && (
         <LandUnderwriter deal={uwDeal} setDeal={setUwDeal} run={uwRun}
+          asking={moneyNum(inputs.askingPrice)}
+          priceOverride={inputs.priceOverride || ""} setPriceOverride={(v) => setInputs((s) => ({ ...s, priceOverride: v }))}
+          fmtTyped={fmtTyped} />
+      )}
+      {uwModel === "lot" && (
+        <LotUnderwriter deal={uwDeal} setDeal={setUwDeal} run={uwRun}
           asking={moneyNum(inputs.askingPrice)}
           priceOverride={inputs.priceOverride || ""} setPriceOverride={(v) => setInputs((s) => ({ ...s, priceOverride: v }))}
           fmtTyped={fmtTyped} />

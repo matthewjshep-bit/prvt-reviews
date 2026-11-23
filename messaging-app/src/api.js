@@ -465,9 +465,9 @@ export const deleteOffer = (id) =>
 export const HOT_ON = "__hot_on";
 export const HOT_OFF = "__hot_off";
 // The kind of house (shared/asset-type.js) on an offer or its deal: { type,
-// land? }, type "" to go back to what Zillow said. Returns { offer, asset }.
-export const setOfferAsset = (id, { type = "", land = "" } = {}) =>
-  post(`/api/offers/${encodeURIComponent(id)}/asset`, { type, land }, "PATCH");
+// land?, lane? }, type "" to go back to what Zillow said. Returns { offer, asset }.
+export const setOfferAsset = (id, { type = "", land = "", lane = "" } = {}) =>
+  post(`/api/offers/${encodeURIComponent(id)}/asset`, { type, land, ...(lane ? { lane } : {}) }, "PATCH");
 
 // "Current" is the third axis: which row on a house is the number we're
 // working from (shared/current-offer.js). Same menu, same { offer } back.

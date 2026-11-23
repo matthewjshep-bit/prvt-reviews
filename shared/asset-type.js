@@ -26,6 +26,14 @@ export const ASSET_TYPE_LABELS = {
   land: "Land",
 };
 
+// The luxury teardown lane (Matt, 2026-11-23, the "Lux Blueprint" method): an
+// old single-family house on a big lot in a pocket where builders tear down
+// and build $3M+ homes. Still an SFR to every feed, so it is a lane on the
+// asset, not a type of its own: priced by the lot (shared/lot-underwrite.js)
+// and sold to the buyers who build, like land.
+export const LUXURY_LANE = "luxury";
+export const LANES = [LUXURY_LANE];
+
 export const MH_LAND = ["park", "own_lot"];
 
 export const MH_LAND_LABELS = {
@@ -59,10 +67,11 @@ const asType = (v) => {
 };
 
 /**
- * normalizeAsset(v) → { type, land, by, at } | null
+ * normalizeAsset(v) → { type, land, by, at, lane? } | null
  *
  * `land` is kept only for a manufactured home. `by` says who decided: "you"
- * (picked on the offer or the deal) or "underwrite" (read off Zillow).
+ * (picked on the offer or the deal) or "underwrite" (read off Zillow). `lane`
+ * is kept only when it's a lane we run ("luxury"), and only on a house.
  */
 export function normalizeAsset(v) {
   if (!v || typeof v !== "object") return null;
@@ -70,7 +79,8 @@ export function normalizeAsset(v) {
   if (!type) return null;
   const land = type === "manufactured" && MH_LAND.includes(v.land) ? v.land : "";
   const by = v.by === "underwrite" ? "underwrite" : "you";
-  return { type, land, by, ...(v.at ? { at: String(v.at) } : {}) };
+  const lane = type === "sfr" && LANES.includes(v.lane) ? v.lane : "";
+  return { type, land, by, ...(v.at ? { at: String(v.at) } : {}), ...(lane ? { lane } : {}) };
 }
 
 // The subject record the underwrite saved — the same place the blast and the
@@ -97,22 +107,38 @@ export function assetOf(offer = {}) {
   return normalizeAsset(offer?.asset) || assetFromSnapshot(offer);
 }
 
+/** isLuxuryLot(offer) → true when the offer's asset carries the luxury lane. */
+export const isLuxuryLot = (offer = {}) => assetOf(offer)?.lane === LUXURY_LANE;
+
+/**
+ * goesToBuilders(asset) → true for land and for a luxury lot: the deal is a
+ * lot to build on, so it goes to the buyers who build, never to flippers
+ * (1538 NW 61st St, 2026-10-20; 4334 130th Pl SE, 2026-11-09).
+ */
+export function goesToBuilders(asset) {
+  const a = normalizeAsset(asset);
+  return Boolean(a && (a.type === "land" || a.lane === LUXURY_LANE));
+}
+
 /** assetLabel(asset) → "Manufactured / mobile · in a park" | "" */
 export function assetLabel(asset) {
   const a = normalizeAsset(asset);
   if (!a) return "";
   const land = a.land === "park" ? "in a park" : a.land === "own_lot" ? "own lot" : "";
-  return [ASSET_TYPE_LABELS[a.type], land].filter(Boolean).join(" · ");
+  const lane = a.lane === LUXURY_LANE ? "luxury lot" : "";
+  return [ASSET_TYPE_LABELS[a.type], land, lane].filter(Boolean).join(" · ");
 }
 
 /**
  * assetPhrase(asset) → the words a buyer reads: "mobile home in a park",
  * "mobile home on its own lot", "mobile home", "multi-family". Single family
- * says nothing, so every house blast reads exactly as it always has.
+ * says nothing, so every house blast reads exactly as it always has. A luxury
+ * lot is "teardown lot": a builder reads the lot, not the house.
  */
 export function assetPhrase(asset) {
   const a = normalizeAsset(asset);
   if (!a) return "";
+  if (a.lane === LUXURY_LANE) return "teardown lot";
   if (a.type === "manufactured") {
     return a.land === "park" ? "mobile home in a park" : a.land === "own_lot" ? "mobile home on its own lot" : "mobile home";
   }
@@ -174,10 +200,12 @@ export function buyerTypeFit(buyer = {}, asset = null) {
     return { wants, refuses: false, reason: wants ? "buys mobile homes" : "" };
   }
   // Land goes to whoever builds (1538 NW 61st St, 2026-10-20: wave 1 went to
-  // twenty-five flippers — "I'm not a land guy").
-  const wants = types.includes(a.type) || (a.type === "land" && (buyer?.markets?.types || []).includes("new-construction"));
+  // twenty-five flippers — "I'm not a land guy"). A luxury lot is land to a
+  // buyer: the house on it is coming down.
+  const dirt = goesToBuilders(a);
+  const wants = (dirt ? types.includes("land") : types.includes(a.type)) || (dirt && (buyer?.markets?.types || []).includes("new-construction"));
   if (said.mobileOnly) return { wants: false, refuses: true, reason: "buys mobile homes only" };
-  return { wants, refuses: false, reason: wants && a.type === "land" ? "builds" : "" };
+  return { wants, refuses: false, reason: wants && dirt ? "builds" : "" };
 }
 
 /* ---------- what we're buying right now ---------- */

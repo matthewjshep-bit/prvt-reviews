@@ -80,3 +80,26 @@ test("land shows the value from sold comps and the offer after site work", () =>
   expect(html).toContain(`$${run.result.maxOffer.toLocaleString("en-US")}`);
   expect(html).not.toContain("NaN");
 });
+
+test("the sample teardown lot shows the offer, what the seller saves, and the spread for us only", async () => {
+  const { default: LotUnderwriter } = await import("../LotUnderwriter.jsx");
+  const { sampleLotDeal, underwriteLot } = await import("@shared/lot-underwrite.js");
+  const deal = sampleLotDeal();
+  const run = underwriteLot(deal);
+  const html = render(<LotUnderwriter deal={deal} setDeal={noop} run={run} asking={1250000} priceOverride="" setPriceOverride={noop} fmtTyped={fmt} />);
+  expect(html).toContain("Lot offer");
+  expect(html).toContain("$1,196,000");
+  expect(html).toContain("put lots here at about $1,300,000");
+  expect(html).toContain("leaving a $104,000 spread");
+  expect(html).toContain("Sets offer");
+  expect(html).toContain("example figures");
+});
+
+test("a lot whose spread is under the floor asks for a lower floor instead of pricing", async () => {
+  const { default: LotUnderwriter } = await import("../LotUnderwriter.jsx");
+  const { blankLotDeal, underwriteLot } = await import("@shared/lot-underwrite.js");
+  const deal = { ...blankLotDeal(), comps: [{ label: "", price: 900000, lotSqft: 0, yearBuilt: 0, houseSqft: 0, soldAt: "" }] };
+  const html = render(<LotUnderwriter deal={deal} setDeal={noop} run={underwriteLot(deal)} asking={0} priceOverride="" setPriceOverride={noop} fmtTyped={fmt} />);
+  expect(html).toContain("under your $75k minimum");
+  expect(html).not.toContain("NaN");
+});

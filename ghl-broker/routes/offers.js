@@ -162,7 +162,7 @@ import { syncAgentCard } from "../tier-check.js";
 import { startCallIntake, listCallJobs } from "../call-intake.js";
 import { dealToQuery } from "../dispo.js";
 import { normalizeBuybox, buyboxIsEmpty, matchBuybox } from "../shared/buybox.js";
-import { normalizeAsset, assetFromSnapshot, assetOf, assetLabel } from "../shared/asset-type.js";
+import { normalizeAsset, assetFromSnapshot, assetOf, assetLabel, goesToBuilders } from "../shared/asset-type.js";
 import { DEAL_SENT_TYPES, sentTo } from "../shared/buyer-score.js";
 import { buildUnderwriteCalc, underwriteModel } from "../shared/underwrite-model.js";
 import { recordEvent, recordEvents, learnFacts, ensureProfile } from "../contact-record.js";
@@ -2523,7 +2523,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       scope,
       snapshot,
       calc,
-      // How it was priced: "income" or "land", absent for comps. On the lean
+      // How it was priced: "income", "land" or "lot", absent for comps. On the lean
       // row so the machines that re-price houses can see to leave it alone.
       underwriteModel: model === "comps" ? undefined : model,
       // What the buyer-view checks did to this offer, compact for lean rows
@@ -3634,7 +3634,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const m = await dispoDeps.matchForDeal(locationId, offer, { exclude: "blasted" });
       // Each pick carries how to reach them (a text, or an email with no phone).
       const picked = m.results || [];
-      const where = m.target?.asset?.type === "manufactured" ? "who buy mobile homes" : m.target?.asset?.type === "land" ? "who build" : "who buy in the area";
+      const where = m.target?.asset?.type === "manufactured" ? "who buy mobile homes" : goesToBuilders(m.target?.asset) ? "who build" : "who buy in the area";
       if (!picked.length) { console.log(`auto-blast: no buyers fit ${offer.address} (nobody ${where} is left)`); return; }
       // The deal is minted before its fee is typed in (7034 S K St went out
       // at the default 30k fee four seconds after promote). The first text
@@ -4329,7 +4329,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const type = String(req.body?.type || "").trim();
       const before = { ...offer };
       if (type) {
-        const picked = normalizeAsset({ type, land: req.body?.land, by: "you", at: ts });
+        const picked = normalizeAsset({ type, land: req.body?.land, lane: req.body?.lane, by: "you", at: ts });
         if (!picked) return res.status(400).json({ error: "type must be sfr, multi_family, manufactured, commercial or land" });
         offer.asset = picked;
       } else {

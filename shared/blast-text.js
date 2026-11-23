@@ -15,7 +15,7 @@
 // touches deal.contractPrice and deal.assignmentFee at no point.
 
 import { buyerFacts } from "./underwrite-checks.js";
-import { assetOf, assetPhrase } from "./asset-type.js";
+import { assetOf, assetPhrase, goesToBuilders } from "./asset-type.js";
 import { carrierFlags } from "./carrier-words.js";
 
 const kText = (n) => {
@@ -350,11 +350,14 @@ export function dealFacts(offer = {}, { price = 0, note = "" } = {}) {
   // Land is sold as a lot: no ARV, no rehab, no house (1538 NW 61st St,
   // 2026-10-20, went out as "Buyer price 911k, ARV around 925k" — the ARV was
   // the asking price, and two builders read it back as a joke).
-  if (assetOf(offer)?.type === "land") {
+  // A luxury teardown lot reads the same way, plus the year the house was
+  // built: a builder wants to know it's a 1960s house, not a remodel.
+  if (goesToBuilders(assetOf(offer))) {
     return {
       address: offer.address || "", city,
       price: Math.round(Number(price) || 0),
-      beds: 0, baths: 0, sqft: 0, yearBuilt: 0, arv: 0, repairs: 0, rehab: "",
+      beds: 0, baths: 0, sqft: 0, arv: 0, repairs: 0, rehab: "",
+      yearBuilt: assetOf(offer)?.type === "land" ? 0 : Number(subject.yearBuilt || subject.year || snap?.subjectInfo?.yearBuilt) || 0,
       note: String(note || ""),
       kind: assetPhrase(assetOf(offer)),
       lotSqft: Number(subject.lotSqft || subject.lotSize || snap?.subjectInfo?.lotSqft) || 0,
