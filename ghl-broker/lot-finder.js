@@ -51,10 +51,11 @@ const RETRY_GAP_MS = 20 * 60000;
 const MAX_DAILY_TRIES = 4;
 const PULL_EVERY_MS = 7 * 86400000;
 const PAGE = 250;
-const MAX_PAGES = 4;
+// A pocket's parcels in one pass (Matt, 2026-11-23: "no cap"): 20 pages is 5,000, more than any pocket.
+const MAX_PAGES = 20;
 const STEP_KIND = { open: "lot_owner_open", follow: "lot_owner_follow" };
 // Builder lookups a run (registry + county are free; a skip trace counts against the day's cap).
-const BUILDER_LOOKUPS_PER_RUN = 60;
+const BUILDER_LOOKUPS_PER_RUN = 300;
 // The tags a listing agent wrongly carried as a "builder" (2026-11-23), taken back.
 const AGENT_UNTAG = ["investor", "builder", "dispo-type-new-construction", "dispo-source-builder-exits"];
 const PROPERTY_SEARCH_URL = "https://api.realestateapi.com/v2/PropertySearch";
@@ -234,7 +235,7 @@ export async function runLotFinder({ client, locationId, saved = {}, store = def
   // in the contractor registry, by the entity on the county's sale record, or
   // the person behind a one-off LLC through the skip trace. Never the agent.
   out.builderLookups = { looked: 0, found: 0, traced: 0, credits: 0 };
-  let traceRoom = Math.max(0, f.traceDailyCap - tracesToday);
+  let traceRoom = f.traceDailyCap > 0 ? Math.max(0, f.traceDailyCap - tracesToday) : Infinity;
   if (!dryRun) {
     const resolve = deps.resolveBuilderContact || resolveBuilderContact;
     const pending = (await store.listLotBuilders(locationId, { limit: 5000 })).filter((r) => byPocket.get(r.pocketId)?.enabled && !r.doc?.builderContact && r.doc?.reach !== "agent").slice(0, BUILDER_LOOKUPS_PER_RUN);
@@ -256,7 +257,8 @@ export async function runLotFinder({ client, locationId, saved = {}, store = def
   // 2. The cell numbers, up to the day's cap. Never on a dry run (it's money).
   const all = await store.listLotOwners(locationId, { limit: 20000 });
   const fresh = all.filter((r) => byPocket.get(r.pocketId)?.enabled);
-  const room = Math.max(0, f.traceDailyCap - tracesToday);
+  // 0 = no cap (Matt, 2026-11-23: "no cap pls"; the outreach cap works the same way).
+  const room = f.traceDailyCap > 0 ? Math.max(0, f.traceDailyCap - tracesToday) : Infinity;
   const toTrace = pickToTrace(fresh, { cap: room });
   if (dryRun) out.traced.would = toTrace.length;
   else if (!traceKey) out.traced.stopped = toTrace.length ? "no skip-trace key (TRACERFY_API_KEY)" : "";
@@ -292,7 +294,7 @@ export async function runLotFinder({ client, locationId, saved = {}, store = def
   const read = deps.getContact || ((id) => getContact(client, id));
   const traced = (await store.listLotOwners(locationId, { status: "traced", limit: 5000 })).filter((r) => byPocket.get(r.pocketId)?.enabled && pocketReady(byPocket.get(r.pocketId)));
   const importedToday = all.filter((r) => r.status === "imported" && r.importedAt && pacificDay(Date.parse(r.importedAt)) === day).length;
-  for (const row of traced.slice(0, Math.max(0, f.dailyNew - importedToday))) {
+  for (const row of traced.slice(0, f.dailyNew > 0 ? Math.max(0, f.dailyNew - importedToday) : traced.length)) {
     const pocket = byPocket.get(row.pocketId);
     const phone = reachable(row.doc?.phones || [])[0]?.number;
     if (!phone) { await store.setLotOwner(locationId, row.ownerKey, { status: "no_phone" }); continue; }

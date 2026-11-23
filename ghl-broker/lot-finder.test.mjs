@@ -195,10 +195,12 @@ test("the weekly pass reads the new builds that sold in the pocket and puts thei
     assert.equal(out.builders.created, 1, "the builder the registry knows");
     assert.equal(out.builderLookups.looked - out.builderLookups.found, 1, "the other build has no builder number, and the listing agent's is never used");
     assert.equal((await store.listLotBuilders("L8")).filter((x) => x.status === "no_phone").length, 1);
-    assert.equal(g.created[0].companyName, "Mystery Homes LLC");
-    assert.equal(g.created[0].firstName, "Sam");
-    assert.equal(g.created[0].phone, "+14255550100", "the registry's number, not the agent's");
-    assert.deepEqual(g.tagged[0].tags, ["investor", "builder", "dispo-type-new-construction", "dispo-source-builder-exits", "lot-pocket-clyde-hill", "dispo-source-lni", "dispo-city-clyde-hill"]);
+    const b = g.created.find((c) => c.companyName);
+    assert.equal(b.companyName, "Mystery Homes LLC");
+    assert.equal(b.firstName, "Sam");
+    assert.equal(b.phone, "+14255550100", "the registry's number, not the agent's");
+    assert.ok(!g.created.some((c) => c.phone === "+14255550177"), "the listing agent's number is never used");
+    assert.deepEqual(g.tagged.find((t) => t.tags.includes("builder")).tags, ["investor", "builder", "dispo-type-new-construction", "dispo-source-builder-exits", "lot-pocket-clyde-hill", "dispo-source-lni", "dispo-city-clyde-hill"]);
     const rows = await store.listLotBuilders("L8");
     assert.equal(rows.find((r) => r.builderKey === "nb:12-summit-dr-clyde-hill-wa-98004").doc.priorLotPrice, 1100000);
     // A week later the same pocket isn't scanned again.
@@ -233,13 +235,13 @@ test("a listing agent imported as a builder on the first pass is retired: builde
     const row = (await store.listLotBuilders("L9"))[0];
     assert.equal(row.status, "new", "waits for the builder's own number");
     assert.equal(row.doc.reach, "agent_retired");
-    assert.equal(g.created.length, 0, "nobody imported off the agent's number");
+    assert.ok(!g.created.some((c) => c.phone === "+14255550177"), "nobody imported off the agent's number");
     // The next run looks the builder up; nothing found, so the row is no_phone, still not in the book.
     await runLotFinder({ client: {}, locationId: "L9", saved, store, deps: { fetch: fetchStub(PHONES), scanPocketZillow: async () => ({ suggest: {}, teardowns: [], newBuilds: [] }), resolveBuilderContact: async () => ({ entity: "Summit 14 LLC", phone: "", principal: "", source: "county" }), removeContactTags: async () => {}, ...g.deps }, now: T0 + 86400000 });
     const later = (await store.listLotBuilders("L9"))[0];
     assert.equal(later.status, "no_phone");
     assert.equal(later.doc.reach, "none");
-    assert.equal(g.created.length, 0);
+    assert.ok(!g.created.some((c) => c.phone === "+14255550177"));
   } finally { delete process.env.OUTREACH_IMPORTS_ENABLED; }
 });
 

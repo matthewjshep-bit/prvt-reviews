@@ -13,6 +13,8 @@ const pocket = { id: "clyde-hill", name: "Clyde Hill", lat: 47.63, lng: -122.21,
 test("the finder ships off, dry, with texts waiting for Matt, and the settings come back the same twice", () => {
   const d = normalizeLotFinder(undefined);
   assert.equal(d.enabled, false);
+  assert.equal(d.traceDailyCap, 0, "0 = no cap");
+  assert.equal(d.dailyNew, 0);
   assert.equal(d.dryRun, true);
   assert.equal(d.autoSend, false);
   assert.deepEqual(d.pockets, []);
