@@ -215,9 +215,10 @@ export async function runLotFinder({ client, locationId, saved = {}, store = def
     try {
       const scan = await (deps.scanPocketZillow || scanPocketZillow)({ lat: p.lat, lng: p.lng, radiusMiles: p.radiusMiles, apifyToken, now, deps });
       const rows = scan.newBuilds.map((b) => builderFromNewBuild({ row: b, facts: b.facts, pocket: p, now })).filter(Boolean);
+      const before = new Map((await store.listLotBuilders(locationId, { pocketId: p.id, limit: 5000 })).map((r) => [r.builderKey, r.status]));
       const up = await store.upsertLotBuilders(locationId, rows);
       // A builder read again with a number this time goes back to new, so the import below takes it.
-      for (const r of rows) if (r.doc?.agent?.phone) { const cur = await store.getLotBuilder?.(locationId, r.builderKey).catch(() => null); if (cur?.status === "no_phone") await store.setLotBuilder(locationId, r.builderKey, { status: "new" }); }
+      for (const r of rows) if (r.doc?.agent?.phone && before.get(r.builderKey) === "no_phone") await store.setLotBuilder(locationId, r.builderKey, { status: "new" });
       line.builders = rows.length; line.buildersCreated = up.created;
       scans[p.id] = iso(now);
     } catch (e) { line.builders = `scan failed: ${String(e?.message || e).slice(0, 120)}`; }
