@@ -171,8 +171,8 @@ export default function LotsTab() {
           </label>
         </details>
         <div className="mt-3 grid gap-2 sm:grid-cols-3">
-          {num("dailyNew", "Owners texted per day", 0, 200)}
-          {num("traceDailyCap", "Skip-trace lookups per day (about 10¢ each)", 0, 500)}
+          {num("dailyNew", "Owners texted per day (0 = no cap)", 0, 100000)}
+          {num("traceDailyCap", "Skip-trace lookups per day, about 10¢ each (0 = no cap)", 0, 100000)}
           {num("followUpDays", "Follow-up, days after the first text", 0, 14)}
         </div>
         <div className="mt-3 flex flex-wrap gap-2 text-xs">

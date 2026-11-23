@@ -61,8 +61,8 @@ export const LOT_FINDER_DEFAULTS = Object.freeze({
   enabled: false,
   dryRun: true,                  // says what it would do; spends and writes nothing
   autoSend: false,               // off: every text waits in the outbox for Matt
-  dailyNew: 10,                  // owners texted per day, per location
-  traceDailyCap: 25,             // skip-trace lookups per day (money)
+  dailyNew: 0,                   // owners texted per day; 0 = no cap (Matt, 2026-11-23)
+  traceDailyCap: 0,              // skip-trace lookups per day (money); 0 = no cap
   followUpDays: 1,
   // The bot's part once an owner writes back: "draft" writes the reply for Matt
   // to send; "send" lets the agent-side auto-send rules apply; "off" leaves
@@ -103,8 +103,8 @@ export function normalizeLotFinder(raw) {
     enabled: r.enabled === true,
     dryRun: r.dryRun !== false,
     autoSend: r.autoSend === true,
-    dailyNew: int(r.dailyNew, D.dailyNew, 0, 200),
-    traceDailyCap: int(r.traceDailyCap, D.traceDailyCap, 0, 500),
+    dailyNew: int(r.dailyNew, D.dailyNew, 0, 100000),
+    traceDailyCap: int(r.traceDailyCap, D.traceDailyCap, 0, 100000),
     followUpDays: int(r.followUpDays, D.followUpDays, 0, 14),
     bot: ["draft", "send", "off"].includes(r.bot) ? r.bot : D.bot,
     ownerPlaybook: String(r.ownerPlaybook || "").trim().slice(0, 4000),
