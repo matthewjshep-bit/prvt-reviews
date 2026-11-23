@@ -45,8 +45,7 @@ export const e164 = (p) => (digits(p).length === 10 ? `+1${digits(p)}` : "");
 
 export const POCKET_DEFAULTS = Object.freeze({
   id: "", name: "", address: "", lat: 0, lng: 0, radiusMiles: 1,
-  lotSqftMin: 30000, yearBuiltMax: 1980, yearsOwnedMin: 5,
-  bandLo: 0, bandHi: 0,          // the lot value band the first text names, in dollars
+XX  bandLo: 0, bandHi: 0,          // the lot value band the first text names, in dollars
   enabled: true,
 });
 

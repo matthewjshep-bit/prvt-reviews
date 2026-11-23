@@ -406,8 +406,8 @@ text", on the acquisition side and the disposition side. Rules in
 `/api/lot-finder` (`routes/lot-finder.js`); settings in `settings.lotFinder`
 (saved through PATCH `/api/offers/settings`).
 
-**A pocket** is a circle around an address: lots at least `lotSqftMin` (30,000
-sqft), built before `yearBuiltMax` (1980), owned `yearsOwnedMin` years (5),
+**A pocket** is a circle around an address: lots at least `lotSqftMin` (10,000 sqft to
+start; Suggest sets the real band off the builders' lots), built before `yearBuiltMax` (1980), owned `yearsOwnedMin` years (5),
 and the price band the first text names (`bandLo`–`bandHi`). **Suggest from
 Zillow** fills it from two sold searches through the Apify scraper
 (`scanPocketZillow`): the new builds that sold nearby (built in the last 3
