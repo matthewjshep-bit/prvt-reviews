@@ -74,7 +74,7 @@ export const getLotFinderJob = (locationId) => jobs.get(locationId) || null;
 export function _resetJobs() { jobs.clear(); }
 
 // A stable pick among the eight first texts, so a retry writes the same one.
-const variantOf = (key) => [...String(key)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
+export const variantOf = (key) => [...String(key)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
 
 /* ---------- 1. the parcels ---------- */
 

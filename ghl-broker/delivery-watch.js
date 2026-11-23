@@ -40,6 +40,9 @@ import { slackApi } from "./slack-notify.js";
 import { normalizeSlack, slackOn, streamOn, firstName } from "./shared/slack-notify.js";
 import { answersInbound } from "./shared/follow-up.js";
 import { dealIsOver, dealOutreachStopped } from "./shared/offer-status.js";
+import { normalizeLotFinder, lotOwnerText, LOT_OWNER_PARTY } from "./shared/lot-finder.js";
+import { carrierFlags } from "./shared/carrier-words.js";
+import { variantOf, OWNER_SMS_ENABLED } from "./lot-finder.js";
 import {
   DELIVERY_CURSOR, SEND_FAILED, SEND_RETRIED, PHONE_OK, PHONE_EVENT_TYPES, PHONE_DEAD_TAG, RETRY_KINDS, retryKey,
   DELIVERY_MIN_AGE_MS, DELIVERY_MAX_AGE_MS, DELIVERY_MAX_PER_RUN,
@@ -150,6 +153,13 @@ export async function runDeliveryWatch({
     }
     if (da.retryBlocked && channel === "sms" && cls === "carrier_block" && RETRY_KINDS.has(kind)) {
       const r = await queueRetry({ store, locationId, saved, da, draft: d, now, sendsEnabled, blastsEnabled }).catch((e) => ({ skipped: scrubMessage(e) }));
+      if (r?.queued) out.retried++;
+    }
+    // A lot owner's first text the carrier blocked goes once more in another
+    // of the first-text variants (Matt, 2026-11-23: "bake this into future
+    // sends" — 15 blocked, 15 resent by hand, 0 blocked the second time).
+    if (channel === "sms" && cls === "carrier_block" && kind === "lot_owner_open") {
+      const r = await queueLotOwnerRetry({ store, locationId, saved, draft: d, now, sendsEnabled }).catch((e) => ({ skipped: scrubMessage(e) }));
       if (r?.queued) out.retried++;
     }
   }
@@ -281,6 +291,62 @@ export async function queueRetry({ store = defaultStore, locationId, saved = {},
     party: "investor", partySource: "deal", matchedTags: { agent: [], investor: [] }, contextSummary: { deal: offerId }, offersInContext: 0,
     autoSend: { decided: schedule, reason: schedule ? "" : why }, humanActive: null, actions: [], supersededIds: [], warnings: [],
     noteOnAutoSend: config.notes?.onAutoSend !== false, promptVersion: 3,
+    ...(schedule ? { sendAt, scheduledAt: ts } : {}), updatedAt: ts,
+  });
+  return { queued: true, draftId: record.id, scheduled: schedule, reason: why };
+}
+
+/**
+ * queueLotOwnerRetry({ store, locationId, saved, draft, now, sendsEnabled }) → { queued, draftId, scheduled, reason } | { skipped }
+ *
+ * The one retry of a lot owner's first text the carrier blocked: the next
+ * first-text variant (never the one that bounced, never a carrier word),
+ * claimed once per owner. Scheduled the way the lane sends: by itself only
+ * when the first one went by itself and autoSend, sends and OWNER_SMS_ENABLED
+ * still allow it; otherwise a draft waiting for Matt's Send. The follow-up
+ * clock runs from the retry's send (shared/lot-finder.js nextOwnerStep).
+ */
+export async function queueLotOwnerRetry({ store = defaultStore, locationId, saved = {}, draft, now = Date.now(), sendsEnabled = false }) {
+  const d = draft;
+  if (d?.outbound?.kind !== "lot_owner_open" || !d.contactId) return { skipped: "not a lot owner's first text" };
+  const ownerKey = d.outbound.ownerKey || "";
+  const f = normalizeLotFinder(saved?.lotFinder);
+  const pocket = f.pockets.find((p) => p.id === d.outbound.pocketId) || null;
+  const row = ownerKey && store.getLotOwner ? await store.getLotOwner(locationId, ownerKey).catch(() => null) : null;
+  if (!row || !pocket) return { skipped: "no owner row or pocket for it" };
+  const events = await store.listContactEvents(locationId, d.contactId, { types: ["lot_owner_replied", "unsubscribed", "hand_reply", "call_summary"], limit: 20 }).catch(() => []);
+  if (events.length) return { skipped: "they answered, or the thread is a person's" };
+  const claim = await recordEvent({
+    store, locationId, contactId: d.contactId, party: LOT_OWNER_PARTY, type: SEND_RETRIED, at: iso(now), address: d.outbound.address || "",
+    source: "ghl", ref: d.id, dedupeKey: `retry:lot:${d.contactId}`, data: { draftId: d.id, kind: "lot_owner_open", code: "30007" },
+  });
+  if (!claim.inserted) return { skipped: "already retried once" };
+  const docs = row.doc || {};
+  // The next variant along: the one that bounced is never sent again.
+  let text = "";
+  for (let i = 1; i <= 8 && !text; i++) {
+    const t = lotOwnerText({ step: "open", variant: variantOf(ownerKey) + i, first: docs.first, street: docs.house?.street, pocket: pocket.name });
+    if (t && t !== (d.sentText || d.reply) && !carrierFlags(t).length) text = t;
+  }
+  if (!text) return { skipped: "no clean variant to send" };
+  const config = conversationConfig(saved);
+  const schedule = Boolean(d.autoSent) && f.autoSend && sendsEnabled && OWNER_SMS_ENABLED() && config.enabled;
+  const why = !d.autoSent ? "the first one waited for your Send, so this one does too"
+    : !f.autoSend ? "owner texts wait for you (Autopilot → Lots)"
+      : !OWNER_SMS_ENABLED() ? "owner texts are off on the broker (OWNER_SMS_ENABLED)"
+        : !sendsEnabled ? "sends are off on the broker (CARD_SENDS_ENABLED)" : !config.enabled ? "Conversation AI is switched off" : "";
+  const quiet = machineHours(config.autoSend);
+  const sendAt = schedule ? nextSendTime({ now: Date.parse(spreadAcrossDay({ now, quietHours: quiet, hours: 2, weekends: "none", offDays: config.autoSend?.offDays || [] })), delayMs: 0, quietHours: quiet }) : null;
+  const ts = iso(now);
+  const record = await store.createReplyDraft({
+    locationId, contactId: d.contactId, contactName: d.contactName || "", status: schedule ? "scheduled" : "draft", channel: "sms", jobId: null,
+    inbound: "", outbound: { ...d.outbound, retryOf: d.id, step: "open" }, reply: text, intent: "lot_owner_open", confidence: "high", needsHuman: false, humanReason: "",
+    summary: `Lot owner · first text again, another variant: the carrier blocked the first · ${pocket.name}`,
+    propertyAddress: d.propertyAddress || d.outbound.address || "", counterAmount: null, autoSendable: true,
+    flags: ["the carrier blocked the first text: one retry in another variant, never another"],
+    party: LOT_OWNER_PARTY, partySource: "lot-finder", matchedTags: { agent: [], investor: [] }, contextSummary: {}, offersInContext: 0,
+    autoSend: { decided: schedule, reason: schedule ? "" : why }, humanActive: null, actions: [], supersededIds: [], warnings: [],
+    noteOnAutoSend: false, promptVersion: 1,
     ...(schedule ? { sendAt, scheduledAt: ts } : {}), updatedAt: ts,
   });
   return { queued: true, draftId: record.id, scheduled: schedule, reason: why };

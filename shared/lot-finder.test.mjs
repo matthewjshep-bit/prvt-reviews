@@ -223,3 +223,16 @@ test("no owner text says investor, local investor, or any other word the carrier
     assert.deepEqual(carrierFlags(t.replace(/\{[a-z]+\}/g, "x")), [], t);
   }
 });
+
+test("a first text the carrier bounced doesn't start the follow-up clock; the retry's send does", () => {
+  const T0 = Date.parse("2026-11-24T18:00:00Z");
+  const evs = [
+    { type: "import", at: new Date(T0).toISOString() },
+    { type: "lot_owner_queued", at: new Date(T0 + 1000).toISOString(), data: { step: "open" } },
+    { type: "lot_owner_sent", at: new Date(T0 + 2000).toISOString(), data: { step: "open", draftId: "d1" } },
+    { type: "send_failed", at: new Date(T0 + 7200000).toISOString(), data: { draftId: "d1", code: "30007" } },
+  ];
+  assert.match(nextOwnerStep({ events: evs, now: T0 + 3 * 86400000 }).why, /hasn't gone yet/);
+  const retried = [...evs, { type: "lot_owner_sent", at: new Date(T0 + 8000000).toISOString(), data: { step: "open", draftId: "d2" } }];
+  assert.equal(nextOwnerStep({ events: retried, now: T0 + 8000000 + 90000000 }).step, "follow");
+});
