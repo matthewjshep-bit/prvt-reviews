@@ -2082,6 +2082,12 @@ dismissed at the send (`dismissedBy: "opt_out"`, "they opted out, not sent").
 Nothing sets DND in GHL on the other channel: that would block your own
 texts.
 
+**A bot-off tag holds the emails too (2026-11-23 audit, FT-7).** `stop bot`
+is still not an opt-out, but the intro and check-in emails are the bot's:
+they skip a contact carrying a bot-off tag when queued ("bot is off for this
+contact (tag: …)"), and one queued before the tag went on waits for your
+Send instead of sending, like a deal text.
+
 **What still goes.** You pressing Send, always: a hand text from the app
 (the composer's dry run says they opted out, `optedOut { via, at }`), and a
 held reply you send. If they write back after opting out, the bot drafts its
@@ -3750,6 +3756,43 @@ last run): its cursor stays behind, and nothing would pass. Each house is
 re-read the way the runner re-reads it before a pass, so one you priced or
 floated since its last read isn't listed. It rides on the daily stream, so
 there is no new switch.
+
+#### The promise clock, and the number they asked for (2026-11-23)
+
+**Why.** The 2026-11-23 audit: bot texts that promised a number went unkept
+108 times in October (56 kept) and 34 in November (16 kept). Some of the
+words were never read as a promise at all, a second stall pushed Needs Matt
+back a day, and an agent who asked what we'd pay and got a question back was
+owed nothing on the record.
+
+- **More words read as our number** (`detectPromise`): "let me run the
+  numbers on it", "I'll run numbers this afternoon", "running numbers now",
+  "I'll get you / send you a number today", "I'll let you know where we
+  land". First person only. "Circle back today", "let you know today", "be in
+  touch shortly" read as an answer with a time.
+- **A named time is the deadline** (`promiseDeadline`, shared/follow-up.js):
+  "today", "this afternoon", end of day: 5pm Pacific; "tonight" 8pm;
+  "tomorrow" or a weekday: 5pm that day; "by noon", "by 3pm": that hour. Said
+  after it passed, two hours on. `owedPromises` is due at the sooner of that
+  and a day after the first promise (`dueAt` on the `number_owed` row), and
+  the Needs Matt price card lands then. A second "still working on it" never
+  moves it. The 72-hour `promise_owed` row lands at the sooner of its day's
+  wait and the named time.
+- **Their ask is owed too.** A reply of ours to a text that asks our number
+  (`asksOurNumber`: "what would you offer", "what's your max") that gives no
+  price and no pass writes `promise_made { what: "number", by: "their_ask" }`.
+  It becomes a `number_owed` row and a Needs Matt price card a day on. Like
+  your own promises (`by: "you"`), the sweep, the driver and the "still
+  working on it" text leave it alone: the machine never sends a number for
+  it. A held answer to such an ask lands as a price card ("They asked what
+  we'd pay on <street>: price it or pass") after the day's wait.
+- **No check-in while we owe it.** While a number or the written offer we
+  promised (or they asked for) is open, the agent check-in and the cold
+  ladder's rungs wait (`numberOwedHolds`, shared/agent-focus.js, asked at
+  every door and by the check-in planner), the way they wait for a call we
+  owe. A price, a pass, the offer, their pass or a dismissal ends it.
+- Slack: the Needs Matt cards ping `#needs-matt` as before; nothing new to
+  switch on.
 
 ### A call, a time to walk it, the earnest money: promises we keep (2026-10-15)
 
@@ -6772,6 +6815,31 @@ Matt's answers the same day kept it shorter:
   - The card's "the bot passes it …" date in the contact pane
     (`GET /api/dashboard/ghl/card` `needsMatt.passAt`) uses the same clock,
     and is empty for a house the engine priced at grade A or B.
+
+**Land, a lot, a teardown, a canned close-out (2026-11-23 audit).**
+`shared/lane-holds.js`, read by `evaluateReplyGates`:
+
+- A reply to an agent that turns down land, a lot, a teardown, a
+  multi-unit or a development site ("outside our lane", "not land
+  development", "we don't do teardowns", "we only buy single-family"), or
+  that passes on a text offering one, is held, never rewritten, closes
+  nothing on the house, and lands here as paper: "They offered land, a lot,
+  a teardown or a multi-unit on <street>: the bot's no is held, it's yours
+  to look at". One such decline went to land that became a ~$4M contract.
+- A canned close-out ("keep me in mind", "sounds lighter than what we
+  usually go for", "anything rougher") to a text that named another house,
+  a link, an address, a price or real work is held; one rewrite may ask for
+  the details instead, else it lands here: "They handed us a house on
+  <street> and the bot's canned pass is held". A text that calls the house
+  turnkey, cosmetic, not a flip or in great shape still gets the pass.
+
+**The float gate (2026-11-23 audit, neg-5).** `shared/float-hold.js`, asked
+by `startProactive` before a price float and by the clean-underwrite send
+(and its retry): no machine number on a house whose agent's latest word on
+it is turnkey, remodeled, not a flip or excellent condition, and none within
+12 hours of our own condition question unless they answered. Nothing goes
+instead; the turnkey screen above passes the house with its note. A person
+pressing Float still decides.
 
 Nothing else lands there: counters, booked calls, calls (Manual Actions), passes,
 promises, check-ins, closing tasks (the card stays in Contract) and buyers
