@@ -39,6 +39,7 @@ import { recordError } from "./app-errors.js";
 import { fetchZillowPhotos, fetchListingPhotos, fetchZillowFacts, MAX_FACT_LOOKUPS, scanRehabFromPhotos, anthropicErrorToHttp } from "./rehab-scan.js";
 import { kindHold, ruralHold } from "./shared/asset-type.js";
 import { normalizeLotFinder, pocketFor, lotHold, LOT_OWNER_TAG_PATTERNS } from "./shared/lot-finder.js";
+import { blankLotDeal, normalizeLotDeal } from "./shared/lot-underwrite.js";
 import { matchTagPatterns } from "./conversation-party.js";
 import { deriveArv, timeTrend, SIZE_TOLERANCE_PCT } from "./shared/arv.js";
 import { scoreComp, similarity, inPool, compareByMatch, milesBetween, markRenovatedByPrice, PRICE_PROXY_MIN_POOL } from "./shared/comp-match.js";
@@ -3010,7 +3011,7 @@ async function saveDraft(job, ctx, { extraction, held, partial, cleared = false 
   if (offSignal && job.contactId && ctx.client) await addTag(ctx.client, job.contactId, OFF_MARKET_TAG, job.warnings || []);
   const draft = {
     ...buildSnapshot({
-      extraction, partial,
+      extraction, partial, lane: job.lane || "",
       contact: { id: job.contactId, name: job.contactName || "", phone: "", email: "" },
     }),
     cashPreview: null,
@@ -3069,11 +3070,27 @@ async function draftToWriteOver(job, { locationId, store }, address) {
 // upward. Getting this shape wrong doesn't error — it silently opens to an
 // empty comps board and drops the comps out of the comps PDF, which is the
 // one failure you'd only notice with an agent on the phone.
-function buildSnapshot({ extraction, partial, contact = null }) {
+// A luxury lot opens priced by the lot (2026-11-24): the editor's model and
+// pick, and a lot deal with this lot's own facts in it. No comps and no number:
+// those are Matt's (luxury-lane rules).
+function lotSnapshot({ extraction, subject, subjectSqft }) {
+  const deal = normalizeLotDeal({
+    ...blankLotDeal(),
+    name: String(extraction?.address || "").split(",")[0].trim(),
+    askingPrice: Number(extraction?.askingPrice) || 0,
+    lotSqft: Number(subject?.lotSqft) || 0,
+    yearBuilt: Number(subject?.yearBuilt) || 0,
+    houseSqft: Number(subject?.sqft) || Number(subjectSqft) || 0,
+  });
+  return { model: "lot", assetPick: { type: "sfr", land: "", lane: "luxury" }, underwrite: { model: "lot", deal } };
+}
+
+function buildSnapshot({ extraction, partial, contact = null, lane = "" }) {
   const { compsData, subject, subjectSqft, grades, rehabbed, arv, rehabState, scope, repairs, checks = null, checksContext = null, bricked = null } = partial;
   const cx = checksContext || {};
   const center = subject?.lat != null ? { lat: subject.lat, lng: subject.lng } : null;
   return {
+    ...(lane === "luxury" ? lotSnapshot({ extraction, subject, subjectSqft }) : {}),
     // What the buyer-view checks did to this house (shared/underwrite-checks.js),
     // and what a person removed — read back on a retry so a removal sticks.
     checks,

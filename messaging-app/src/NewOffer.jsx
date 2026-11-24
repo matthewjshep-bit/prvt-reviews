@@ -960,8 +960,14 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
   // The kind of house you picked (shared/asset-type.js), or null to go by
   // what Zillow said on the subject record. Kept in the workspace so a draft
   // reopens on it; a pick already saved on the offer is the starting point.
+  // A row in the luxury lane, whoever stamped it: auto-underwrite stamps the
+  // draft it held (by "underwrite") without an asset pick in its snapshot, so
+  // the lane is read off the row itself (2026-11-24: a held lot draft opened in
+  // the flip calculator). A pick saved without the lane means it was turned off.
+  const rowLuxury = restore?.asset?.lane === "luxury" && !(snap?.assetPick && snap.assetPick.lane !== "luxury");
   const [assetPick, setAssetPick] = useState(() => snap?.assetPick
     || (fromOffer?.asset?.by === "you" ? { type: fromOffer.asset.type, land: fromOffer.asset.land || "", ...(fromOffer.asset.lane ? { lane: fromOffer.asset.lane } : {}) } : null)
+    || (rowLuxury ? { type: "sfr", land: "", lane: "luxury" } : null)
     // A new offer on the Luxury page starts as a luxury lot (OfferApp.jsx startLane).
     || (!restore && startLane === "luxury" ? { type: "sfr", land: "", lane: "luxury" } : null));
   const zillowAsset = assetFromHomeType(subjectInfo?.homeType);
@@ -973,6 +979,8 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
   const [uwModel, setUwModel] = useState(() => {
     const m = snap?.model || fromOffer?.calc?.model;
     if (m === "income" || m === "land" || m === "lot") return m;
+    // A luxury lot is priced by the lot; comps only once the lane is turned off.
+    if (rowLuxury) return "lot";
     return !restore && startLane === "luxury" ? "lot" : "comps";
   });
   // The luxury teardown lane (shared/asset-type.js): a single-family house

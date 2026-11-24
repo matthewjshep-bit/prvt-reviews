@@ -180,3 +180,29 @@ test("a house on a quarter acre goes on to the comps", async () => {
     await until(() => job.status !== "running");
   } finally { restore(); }
 });
+
+// 2026-11-24 audit: a house a lot owner brings is held for Matt's lot pricing
+// with the luxury lane on the row, but the draft's snapshot had no model or
+// pick, so it reopened in the flip calculator. Now it opens priced by the lot,
+// with the lot's own facts already in.
+test("a luxury lot the machine held saves a draft that opens in the lot analyzer", async () => {
+  _resetJobs();
+  const { calls, restore } = stubFetch("SINGLE_FAMILY", { lotAreaValue: 34000, lotAreaUnits: "Square Feet", yearBuilt: 1962, livingArea: 2300 });
+  const ownerClient = { call: async (p) => (/^\/contacts\/owner-1$/.test(p) ? { contact: { id: "owner-1", firstName: "Pat", tags: ["lot-owner"] } } : {}) };
+  try {
+    const { job } = await startUnderwrite({ client: ownerClient, locationId: "LOC-kind-lot", saved: { ...saved, lotFinder: { pockets: [] } }, store, contactId: "owner-1", address: ADDRESS,
+      deps: { createOffer: async () => { throw new Error("a lot is never priced by the machine"); } } });
+    assert.ok(await until(() => ["held", "done", "error"].includes(job.status)), `still ${job.status}/${job.phase}`);
+    assert.equal(job.status, "held", job.error || "");
+    assert.equal(calls.search, 0, "no flip comps bought for a lot");
+    const draft = await store.getOffer(job.offerId);
+    assert.equal(draft.asset?.lane, "luxury");
+    assert.equal(draft.draft.model, "lot");
+    assert.deepEqual(draft.draft.assetPick, { type: "sfr", land: "", lane: "luxury" });
+    assert.equal(draft.draft.underwrite?.model, "lot");
+    assert.equal(draft.draft.underwrite.deal.kind, "lot");
+    assert.equal(draft.draft.underwrite.deal.yearBuilt, 1962);
+    assert.equal(draft.draft.underwrite.deal.houseSqft, 2300);
+    assert.deepEqual(draft.draft.underwrite.deal.comps, [], "comps are Matt's to add");
+  } finally { restore(); }
+});

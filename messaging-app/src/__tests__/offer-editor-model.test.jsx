@@ -49,3 +49,24 @@ test("a new offer on the Luxury page starts as a luxury lot, priced by the lot",
   expect(html).toContain("Sold teardowns nearby");
   expect(html).not.toContain("After-repair value");
 });
+
+// 2026-11-24 audit: auto-underwrite holds a house in a pocket (or from a lot
+// owner) and stamps asset.lane "luxury" on the draft row, but its snapshot
+// carries no model or asset pick, so the draft reopened in the flip
+// calculator: ARV, repairs and the "about 70% fixed up" letter for a lot.
+test("a luxury lot the machine held opens in the lot analyzer", async () => {
+  const NewOffer = await editor();
+  const held = { id: "d9", status: "draft", contactId: "c1", address: "9 Lakeview Ln, Hillcrest, WA 98004",
+    asset: { type: "sfr", land: "", lane: "luxury", by: "underwrite" },
+    draft: { mode: "existing", inputs: { address: "9 Lakeview Ln, Hillcrest, WA 98004", arv: 0, repairs: 0, askingPrice: 0 },
+      subjectInfo: { lotSqft: 34000, yearBuilt: 1962, sqft: 2300 }, subjectSqft: 2300 } };
+  const html = renderToStaticMarkup(<NewOffer settings={{}} restore={held} />);
+  expect(html).toContain("Priced by lot value");
+  expect(html).not.toContain("After-repair value");
+  // A draft the bug autosaved on comps, with no lane picked, still opens as a lot.
+  const stale = { ...held, draft: { ...held.draft, model: "comps", assetPick: null } };
+  expect(renderToStaticMarkup(<NewOffer settings={{}} restore={stale} />)).toContain("Priced by lot value");
+  // Matt turned the lane off on it: it stays a house, priced by comps.
+  const off = { ...held, draft: { ...held.draft, model: "comps", assetPick: { type: "sfr", land: "" } } };
+  expect(renderToStaticMarkup(<NewOffer settings={{}} restore={off} />)).toContain("After-repair value");
+});
