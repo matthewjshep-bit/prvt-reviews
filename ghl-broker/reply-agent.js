@@ -7895,6 +7895,8 @@ export async function previewConversation({
     quotes: quotesFor(context.offers?.numbers, draft.propertyAddress, { sellerAsk: sellerAskIn(draft) }),
     formsState: party === "agent" ? formsStateOf(draft.propertyAddress) : "",
     voice: config.checkIns?.lint !== false ? { kind: "reply", prior: voicePrior(a.transcript), signOff: config.persona?.signOff, channel: channel === "email" ? "email" : "sms" } : null,
+    // The preview reads a buyer reply the way the live run does (shared/buyer-reply.js).
+    buyer: party === "investor" ? { inbound: theirLatestWords(a.transcript, message), deal: dealRowFor(context?.deals, draft.propertyAddress), prior: voicePrior(a.transcript), mattSent: a.mattSentLink || null } : null,
   });
   const auto = decideAutoSend({ gate, party, intent: draft.intent, channel, config, sendsEnabled, humanActive: a.humanActive, hold: a.hold });
   const plan = playbook ? planActions({ party, intent: draft.intent, confidence: draft.confidence, playbook, minConfidence: config.autoSend?.minConfidence }) : { auto: [], suggested: [] };
