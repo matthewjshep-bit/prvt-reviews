@@ -23,7 +23,7 @@ import ThreadView from "./ThreadView.jsx";
 import { BTN_PRIMARY } from "./ui.jsx";
 import { useLoad } from "./work-data.js";
 import { AnswerBox } from "./RowOps.jsx";
-import { COMPOSE_EVENT } from "./work-queue.js";
+import { COMPOSE_EVENT, takeCompose } from "./work-queue.js";
 
 export const REPLY_BOX_ID = "work-reply";
 export const threadKey = (contactId) => (contactId ? `thread:${contactId}` : null);
@@ -38,7 +38,7 @@ export function HandReply({ contactId, offerId, name, sendsEnabled, onSent }) {
   // Hold under a counter (OfferPanel CounterAnswers) writes here
   // (COMPOSE_EVENT); nothing sends until Send.
   useEffect(() => {
-    const onCompose = (e) => { if (e?.detail?.text) { setText(String(e.detail.text)); setNote(null); document.getElementById(REPLY_BOX_ID)?.focus(); } };
+    const onCompose = (e) => { const t = takeCompose(e); if (t) { setText(t); setNote(null); document.getElementById(REPLY_BOX_ID)?.focus(); } };
     window.addEventListener(COMPOSE_EVENT, onCompose);
     return () => window.removeEventListener(COMPOSE_EVENT, onCompose);
   }, []);

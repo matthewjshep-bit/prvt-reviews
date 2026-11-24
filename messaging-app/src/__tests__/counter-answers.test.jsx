@@ -6,7 +6,8 @@
 import { test, expect, vi, afterEach } from "vitest";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { OfferPanelBody, meetSeed } from "../OfferPanel.jsx";
+import { OfferPanelBody, meetSeed, meetValue, parseAmount } from "../OfferPanel.jsx";
+import { composeInReplyBox, takeCompose, COMPOSE_EVENT } from "../work-queue.js";
 
 const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
@@ -42,4 +43,34 @@ test("rendering the answers reads nothing and sends nothing", () => {
   globalThis.fetch = vi.fn();
   renderToStaticMarkup(<OfferPanelBody offer={offer()} item={{ offerId: "o1" }} onRequote={() => ({})} />);
   expect(globalThis.fetch).not.toHaveBeenCalled();
+});
+
+// Review 2026-11-23: with their counter under a thousand above ours, the box
+// was filled with "300k", our own number, so Meet did nothing.
+test("Meet's box never shows our own number when their counter is only a few hundred above", () => {
+  const close = meetSeed(offer({ counter: { amount: 300500 } }));
+  expect(close).toEqual({ amount: 300500, cap: 300500 });
+  expect(parseAmount(meetValue(close.amount))).toBe(300500);
+  expect(parseAmount(meetValue(320000))).toBe(320000);
+  expect(meetValue(320000)).toBe("320k");
+  // Every seed reads back as itself, above ours and never above the cap.
+  for (const amount of [300100, 300999, 301000, 301500, 339999]) {
+    const s = meetSeed(offer({ counter: { amount } }));
+    expect(parseAmount(meetValue(s.amount))).toBe(s.amount);
+    expect(s.amount).toBeGreaterThan(300000);
+    expect(s.amount).toBeLessThanOrEqual(amount);
+  }
+});
+
+// Review 2026-11-23: Hold said "In the reply box" even when no reply box was
+// on screen to take the words.
+test("Hold knows whether a reply box took the words", () => {
+  const nobody = new EventTarget();
+  expect(composeInReplyBox("We're holding at our number.", nobody)).toBe(false);
+  const box = new EventTarget();
+  let got = null;
+  box.addEventListener(COMPOSE_EVENT, (e) => { got = takeCompose(e); });
+  expect(composeInReplyBox("We're holding at our number.", box)).toBe(true);
+  expect(got).toBe("We're holding at our number.");
+  expect(composeInReplyBox("", box)).toBe(false);
 });

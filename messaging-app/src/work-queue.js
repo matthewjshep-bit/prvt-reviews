@@ -98,6 +98,27 @@ export function keyIntent(e) {
 export const COMPOSE_EVENT = "work-compose";
 
 /**
+ * composeInReplyBox(text, target) → true when a reply box on screen took the
+ * words. Each reply box (HandReply, DraftComposer) takes them with
+ * takeCompose, which marks them taken; with none mounted nothing does, and
+ * the caller says so instead of pointing at a box that isn't there.
+ */
+export function composeInReplyBox(text, target = typeof window !== "undefined" ? window : null) {
+  if (!target || !text) return false;
+  const detail = { text: String(text), taken: false };
+  target.dispatchEvent(new CustomEvent(COMPOSE_EVENT, { detail }));
+  return detail.taken;
+}
+
+/** takeCompose(e) → the words for this reply box (marked taken), or null. */
+export function takeCompose(e) {
+  const text = e?.detail?.text;
+  if (!text) return null;
+  e.detail.taken = true;
+  return String(text);
+}
+
+/**
  * allInPct({ price, repairs, arv }) → number | null
  *
  * What a buyer is in for, as a share of the after-repair value. Buyers pay

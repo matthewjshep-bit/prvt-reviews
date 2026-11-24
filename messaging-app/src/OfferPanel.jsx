@@ -18,7 +18,7 @@ import { BTN, BTN_DANGER, ChecksLine, CurrentPill, HotPill, Menu, PaperHeldBanne
 import { AiProvenance, RehabScope } from "./OfferDetailModal.jsx";
 import { forget, useLoad } from "./work-data.js";
 import { concerns, onOfferChanged } from "./offer-sync.js";
-import { COMPOSE_EVENT, allInPct, allInTone } from "./work-queue.js";
+import { allInPct, allInTone, composeInReplyBox } from "./work-queue.js";
 
 const LABEL = "text-xs font-semibold uppercase tracking-wide text-slate-500";
 const money = (n) => (Number(n) > 0 ? fmtMoney(n) : "—");
@@ -85,7 +85,7 @@ function OurOffer({ offer, onRequote, seed = null }) {
   const [cap, setCap] = useState(0);
   useEffect(() => {
     if (!seed?.nonce) return;
-    setValue(`${Math.floor(seed.amount / 1000)}k`); setCap(seed.cap || 0); setError(""); setEditing(true);
+    setValue(meetValue(seed.amount)); setCap(seed.cap || 0); setError(""); setEditing(true);
   }, [seed?.nonce]);   // eslint-disable-line react-hooks/exhaustive-deps
   const ours = Number(offer.cashAmount) || 0;
   const why = offer.deal ? "It's a deal — change the price on the deal"
@@ -161,6 +161,16 @@ export function meetSeed(offer) {
 }
 
 /**
+ * meetValue(amount) → what the re-quote box shows for a Meet seed: "320k" on
+ * a whole thousand, the exact dollars otherwise ("300,500"), so a counter a
+ * few hundred above ours never reads back as our own number.
+ */
+export const meetValue = (amount) => {
+  const n = Math.round(Number(amount) || 0);
+  return n % 1000 === 0 ? `${n / 1000}k` : n.toLocaleString("en-US");
+};
+
+/**
  * <CounterAnswers offer onMeet /> — three answers under their counter, as
  * the Desk had them (Matt, 2026-10-02), each reusing what already exists and
  * none sending anything:
@@ -180,8 +190,10 @@ function CounterAnswers({ offer, onMeet }) {
     setBusy("hold"); setNote(null);
     try {
       const r = await getHoldText(offer.id);
-      window.dispatchEvent(new CustomEvent(COMPOSE_EVENT, { detail: { text: r.text } }));
-      setNote({ tone: "green", text: `In the reply box at ${fmtMoney(r.amount)}. Read it, then Send.` });
+      setNote(composeInReplyBox(r.text)
+        ? { tone: "green", text: `In the reply box at ${fmtMoney(r.amount)}. Read it, then Send.` }
+        // No reply box on screen took it: show the words to copy instead.
+        : { tone: "amber", text: `No reply box is open here. The hold words at ${fmtMoney(r.amount)}: ${r.text}` });
     } catch (e) { setNote({ tone: "red", text: e.message || "No hold words for this one." }); }
     finally { setBusy(""); }
   };
@@ -206,7 +218,7 @@ function CounterAnswers({ offer, onMeet }) {
           trigger={<span className={BTN_DANGER}>{busy === "walk" ? "…" : "Walk"}</span>} />
         <span className="text-[11px] text-slate-400">Nothing sends from here.</span>
       </div>
-      {note && <p className={`text-xs ${note.tone === "red" ? "text-red-700" : "text-emerald-800"}`}>{note.text}</p>}
+      {note && <p className={`select-text text-xs ${note.tone === "red" ? "text-red-700" : note.tone === "amber" ? "text-amber-800" : "text-emerald-800"}`}>{note.text}</p>}
     </div>
   );
 }
