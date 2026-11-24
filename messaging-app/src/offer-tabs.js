@@ -9,8 +9,8 @@
 //
 // Every current row is in exactly one stage. A row a newer one on the same
 // house replaced (supersededBy) is in none; "All offers" still shows it.
-// Off-market, no follow-up and AI review stay under one "Other" menu — they
-// cut across the stages rather than being one.
+// Off-market, no follow-up, AI review and Needs you stay under one "Other"
+// menu — they cut across the stages rather than being one.
 //
 // Pure, so the tabs can be tested without the page.
 
@@ -40,6 +40,9 @@ export const OTHER = [
   { key: "nofollow", label: "No follow-up", title: "Live offers with nothing scheduled, or a follow-up that's overdue",
     test: (o) => needsFollowUp(o) },
   { key: "ai", label: "AI review", title: "Auto-underwritten offers nobody has acted on yet", test: needsAiReview, onlyWhenUsed: true },
+  // GHL's Needs Matt stage, on the rows it is about (needs-view.js attaches
+  // `needsMatt`). A filter, never the default: the pill's "Needs you" opens it.
+  { key: "needs", label: "Needs you", title: "On GHL's Needs Matt stage: only you can do these", test: (o) => current(o) && Boolean(o.needsMatt), onlyWhenNeeds: true },
 ];
 
 export const ALL_VIEWS = [...TABS, ...SUBS, ...OTHER];

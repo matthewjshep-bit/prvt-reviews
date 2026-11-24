@@ -18,7 +18,7 @@
 // Status lives in shared/offer-status.js; nothing here decides what a status
 // means, only how it looks and how you change it.
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronLeft, ChevronRight, ExternalLink, Pencil, Plus, Send, Sparkles, Trash2, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
 import { assetLabel, normalizeAsset } from "@shared/asset-type.js";
@@ -52,8 +52,9 @@ import { onOfferChanged } from "./offer-sync.js";
 import NextFollowUp, { groupNext, nextSortKey } from "./NextFollowUp.jsx";
 import { TABS, SUBS, OTHER, viewFor, defaultTab, tabOf, notSentAge, waitingSince } from "./offer-tabs.js";
 import PipelineStrip from "./PipelineStrip.jsx";
+import { attachNeeds, needsCounts } from "./needs-view.js";
 import {
-  ActivityStamp, AiPill, AttachWarning, BTN, BTN_ICON, BTN_PRIMARY, EmptyState, ErrorBar, FilterChips, KpiRow, Menu,
+  ActivityStamp, AiPill, AttachWarning, BTN, BTN_ICON, BTN_PRIMARY, EmptyState, ErrorBar, FilterChips, KpiRow, Menu, NeedsPill,
   SearchInput, SkeletonRows, SortHeader, StatusDots, StatusMenu, TableCard, passNoteLine,
   compareBy, rowActivation, useSort,
 } from "./ui.jsx";
@@ -143,7 +144,11 @@ function byHouse(list) {
 
 // `only`: a predicate that narrows the book to one lane (the Luxury page
 // shows luxury lots alone; shared/asset-type.js isLuxuryLot).
-export default function OffersHistory({ onEdit, onNew = null, onDeal, settings: appSettings = null, only = null }) {
+// `needs`: GHL's Needs Matt list (OfferApp reads it once; needs-view.js) —
+// each matched row carries its reason, `onNeedsCount` hears how many agents
+// on it have a row here, and `focusNeeds` asks once for the Needs you filter.
+export default function OffersHistory({ onEdit, onNew = null, onDeal, settings: appSettings = null, only = null,
+  needs = [], onNeedsCount = null, focusNeeds = false, onNeedsFocused = null }) {
   const [offers, setOffers] = useState(null);
   // The split: the offer open beside the rail, and the rail's rows — the
   // table's order, frozen when it opened (re-frozen when the filter, search or
@@ -195,6 +200,19 @@ export default function OffersHistory({ onEdit, onNew = null, onDeal, settings: 
       .then(setOffers)
       .catch((e) => setError(e.message));
   }, []);
+
+  // "Needs you · N" on the Offers pill: this page, filtered to them.
+  useEffect(() => {
+    if (!focusNeeds) return;
+    setQ(""); setFilter("needs");
+    onNeedsFocused?.();
+  }, [focusNeeds]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // How many agents on the Needs Matt list have a row here, and a live deal
+  // (the Deals pill's count until that page loads its own).
+  const needCounts = useMemo(() => (offers && needs?.length
+    ? needsCounts(attachNeeds(annotateCurrent(typeof only === "function" ? offers.filter(only) : offers), needs))
+    : { offers: 0, deals: 0 }), [offers, needs, only]);
+  useEffect(() => { onNeedsCount?.(needCounts); }, [needCounts.offers, needCounts.deals]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // The selection describes the CURRENT view — narrowing it must never leave
   // hidden rows in the batch, or "mark 12 passed" quietly touches rows you
@@ -451,7 +469,8 @@ export default function OffersHistory({ onEdit, onNew = null, onDeal, settings: 
 
   // Every row told whether it is its house's current offer. Derived here, not
   // stored, so a status change or a pin patched into `offers` re-reads.
-  const book = annotateCurrent(typeof only === "function" ? offers.filter(only) : offers);
+  // And told why it's on GHL's Needs Matt stage, when it is (needs-view.js).
+  const book = attachNeeds(annotateCurrent(typeof only === "function" ? offers.filter(only) : offers), needs);
   const needle = q.trim().toLowerCase();
   const searched = !needle
     ? book
@@ -477,7 +496,8 @@ export default function OffersHistory({ onEdit, onNew = null, onDeal, settings: 
       {tabOf(view) === "responded" && <FilterChips value={view} onChange={setFilter} options={subChips} label="Filter responded offers by answer" />}
     </>
   );
-  const others = OTHER.filter((f) => !f.onlyWhenUsed || usesAi);
+  const hasNeeds = book.some((o) => o.needsMatt);
+  const others = OTHER.filter((f) => (!f.onlyWhenUsed || usesAi) && (!f.onlyWhenNeeds || hasNeeds || filter === "needs"));
   const activeFilter = viewFor(view);
   const inOther = others.some((f) => f.key === view);
   const otherMenu = (
@@ -750,6 +770,8 @@ export default function OffersHistory({ onEdit, onNew = null, onDeal, settings: 
               // AI queue: you'd click the chip, see agent names, and have to
               // open each one to find which offer is waiting on you.
               const aiPending = g.offers.filter(needsAiReview).length;
+              // Folded, the agent still says what's waiting on Matt.
+              const need = g.offers.find((o) => o.needsMatt)?.needsMatt || null;
               return (
                 <React.Fragment key={g.key}>
                   <tr {...rowActivation(() => toggleGroup(g.key))}
@@ -777,6 +799,7 @@ export default function OffersHistory({ onEdit, onNew = null, onDeal, settings: 
                         <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
                           {g.offers.length} offer{g.offers.length === 1 ? "" : "s"}
                         </span>
+                        <NeedsPill need={need} />
                       </span>
                     </td>
                     <td className="whitespace-nowrap px-4 py-2.5 text-slate-500">
@@ -850,6 +873,7 @@ export default function OffersHistory({ onEdit, onNew = null, onDeal, settings: 
                   <span className="flex items-center gap-1.5">
                     <span className="truncate" title={o.address || undefined}>{o.address || "—"}</span>
                     <AiPill offer={o} />
+                    <NeedsPill need={o.needsMatt} />
                     {normalizeAsset(o.asset) && normalizeAsset(o.asset).type !== "sfr" && (
                       <span className="shrink-0 rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-semibold text-violet-900">{assetLabel(o.asset)}</span>
                     )}

@@ -106,9 +106,12 @@ export function activePill({ lane, view }) {
 /** The More menu's label while one of its pages shows. */
 export const moreLabel = (view) => MORE.find((m) => m.view === view)?.label || "";
 
-// What the pages' `only` filter is in each lane (shared/asset-type.js).
+// What the pages' `only` filter is in each lane (shared/asset-type.js). The
+// same function every render, so a page can memo on it.
+const negations = new WeakMap();
 export function laneFilter(lane, isLuxuryLot) {
   if (lane === "luxury") return isLuxuryLot;
-  if (lane === "agents") return (o) => !isLuxuryLot(o);
-  return null;
+  if (lane !== "agents") return null;
+  if (!negations.has(isLuxuryLot)) negations.set(isLuxuryLot, (o) => !isLuxuryLot(o));
+  return negations.get(isLuxuryLot);
 }

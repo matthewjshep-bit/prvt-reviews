@@ -28,6 +28,7 @@ import ContactSearch from "./ContactSearch.jsx";
 import DealTimeline from "./DealTimeline.jsx";
 import DealParties from "./DealParties.jsx";
 import DealAccess from "./DealAccess.jsx";
+import { attachNeeds, needsCounts } from "./needs-view.js";
 import DealKind from "./DealKind.jsx";
 import { assetLabel, normalizeAsset } from "@shared/asset-type.js";
 import { resolveChecklist, dueWords } from "@shared/deal-checklist.js";
@@ -38,7 +39,7 @@ import { updateDealFeedback } from "./api.js";
 import { resolveParties } from "@shared/deal-parties.js";
 import { buyerMoneyLine } from "@shared/buybox.js";
 import {
-  BTN, DEAL_STAGES, EmptyState, ErrorBar, KpiRow, STAGE, SkeletonRows, StagePill, TableCard,
+  BTN, DEAL_STAGES, EmptyState, ErrorBar, KpiRow, NeedsPill, STAGE, SkeletonRows, StagePill, TableCard,
   rowActivation,
 } from "./ui.jsx";
 
@@ -1070,8 +1071,12 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
 }
 
 // `only`: a predicate that narrows the deals to one lane (the Luxury page).
-export default function DealsView({ settings, onEdit, only = null }) {
+// `needs`: GHL's Needs Matt list (OfferApp; needs-view.js): a deal it names
+// carries the reason, `onNeedsCount` hears how many, and `focusNeeds` asks
+// once for just those deals (the Deals pill's "Needs you").
+export default function DealsView({ settings, onEdit, only = null, needs = [], onNeedsCount = null, focusNeeds = false, onNeedsFocused = null }) {
   const [deals, setDeals] = useState(null);
+  const [needsOnly, setNeedsOnly] = useState(false);
   const [error, setError] = useState("");
   const [selectedId, setSelectedId] = useState(() => {
     try { return new URLSearchParams(window.location.search).get("deal_id") || null; } catch { return null; }
@@ -1087,6 +1092,13 @@ export default function DealsView({ settings, onEdit, only = null }) {
   useEffect(() => {
     listDeals().then(setDeals).catch((e) => setError(e.message));
   }, []);
+  useEffect(() => {
+    if (!focusNeeds) return;
+    setNeedsOnly(true);
+    onNeedsFocused?.();
+  }, [focusNeeds]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const needDeals = deals ? needsCounts(attachNeeds(typeof only === "function" ? deals.filter(only) : deals, needs)).deals : null;
+  useEffect(() => { if (needDeals != null) onNeedsCount?.(needDeals); }, [needDeals]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const patchDeal = (updated) => {
     setDeals((list) => (list || []).map((o) => (o.id === updated.id ? updated : o)));
@@ -1113,7 +1125,8 @@ export default function DealsView({ settings, onEdit, only = null }) {
   const fell = deals.filter((o) => o.deal.stage === "fell_through");
   const potentialFees = active.reduce((s, o) => s + (Number(o.deal.assignmentFee) || 0), 0);
   const isSfr = (o) => normalizeAsset(o.asset)?.type === "sfr";
-  const shown = (showTerminal ? deals : active).filter((o) => (typeof only !== "function" || only(o)) && (!sfrOnly || isSfr(o)));
+  const shown = attachNeeds((showTerminal ? deals : active).filter((o) => (typeof only !== "function" || only(o)) && (!sfrOnly || isSfr(o))), needs)
+    .filter((o) => !needsOnly || o.needsMatt);
   const selected = selectedId ? deals.find((o) => o.id === selectedId) : null;
 
   const kpis = [
@@ -1168,6 +1181,7 @@ export default function DealsView({ settings, onEdit, only = null }) {
                       <td className="max-w-[24rem] truncate px-4 py-2.5 font-medium" title={o.address || undefined}>
                         {o.address || "—"}
                         <KindBadge asset={o.asset} />
+                        {o.needsMatt && <span className="ml-1.5 align-middle"><NeedsPill need={o.needsMatt} /></span>}
                       </td>
                       <td className="whitespace-nowrap px-4 py-2.5">
                         {o.contactId ? (
@@ -1229,6 +1243,12 @@ export default function DealsView({ settings, onEdit, only = null }) {
               </tbody>
             </table>
           </TableCard>
+          {(needsOnly || needDeals > 0) && (
+            <button type="button" onClick={() => setNeedsOnly((v) => !v)} aria-pressed={needsOnly}
+              className="mr-4 mt-2 text-xs font-medium text-rose-700 underline decoration-rose-300 underline-offset-2 hover:text-rose-900">
+              {needsOnly ? "Show every deal" : `Only the ones on GHL's Needs Matt stage (${needDeals})`}
+            </button>
+          )}
           {(closed.length > 0 || fell.length > 0) && (
             <button type="button" onClick={() => setShowTerminal((v) => !v)}
               className="mt-2 text-xs font-medium text-slate-500 underline decoration-slate-300 underline-offset-2 hover:text-slate-900">
