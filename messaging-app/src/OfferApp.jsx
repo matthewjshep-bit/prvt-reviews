@@ -136,10 +136,21 @@ export default function OfferApp() {
   const [initialContactId, setInitialContactId] = useState(() => readParam("contact_id"));
   const [editing, setEditing] = useState(null); // draft/offer being reopened in the form
   const [formNonce, setFormNonce] = useState(0); // bump to remount NewOffer blank
-  const go = (next) => setRouteState((cur) => {
-    const r = LEGACY_NAV ? { lane: "agents", view: next.view } : resolveView(next.lane ?? cur.lane, next.view);
-    return sameRoute(cur, r) ? cur : r;
-  });
+  const go = (next) => {
+    // Another lane is another book: the Offers table's tab and search
+    // (?tab=, ?q=) belong to the one being left.
+    if (next.lane && next.lane !== route.lane) {
+      try {
+        const p = new URLSearchParams(window.location.search);
+        p.delete("tab"); p.delete("q");
+        window.history.replaceState(window.history.state, "", `${window.location.pathname}?${p}`);
+      } catch { /* the GHL iframe can refuse history calls */ }
+    }
+    setRouteState((cur) => {
+      const r = LEGACY_NAV ? { lane: "agents", view: next.view } : resolveView(next.lane ?? cur.lane, next.view);
+      return sameRoute(cur, r) ? cur : r;
+    });
+  };
 
   const resetForm = () => {
     setEditing(null);
