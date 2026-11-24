@@ -9831,6 +9831,18 @@ None of the committed buyers had a price on file, and the fee lesson compared th
 - **The scorecard** (`dealScorecard`, `shared/post-mortem.js`). `askedPrice` is contract plus the deal's fee. For a deal that sold (Buyer found, Assigned, Closed), `buyerPrice` is what the buyer paid, from `realizedSale`: the outcome, then an assignment a person generated, then the committed buyer's agreed price, then a fee a person typed (`assignmentFeeSource: "you"`, stamped by the deal-texts work). The machine's own assignment draft at commit, and a fee with no source, are not prices: `buyerPrice` is null and the deal drops out of **What buyers paid** and the 70% lesson until somebody records one. A deal that died is still scored on what buyers were asked.
 - **`fee_reality`** uses `realizedFee` from sold deals only.
 
+#### The Deals page shows how each dispo is going (2026-11-23)
+
+From the 2026-11-23 audit (D3, D4, D5, D6, D8, D11, D12, nav-5). Display only: nothing here sends.
+
+- **List.** The Buyers cell (`DispoCell`, `shared/deal-pulse.js dispoPulse`) reads: sent N, on it, interested, passed, walking, walked it, best number, and "last buyer move Nd ago" (amber after 3 days with no committed buyer). **Sent** is `deal.sends`, which `GET /api/offers/deals` adds from one grouped read (`store.dealSendCounts`, both backends): distinct buyers with `blast_sent` or `deal_hand_sent` on the offer. It never reads `deal.blasts[].count`, because that is what a blast queued, including one Matt stopped. **Best number**, most trusted first: the committed buyer's agreed price, then the highest agreed price from a buyer still in it, then `buyerRead.price`, then the highest price named in the cached `feedbackPackage`, with its age. The list never rebuilds the package. One "contract → buyer · fee" cell (`moneyLine`) replaces the three money columns. It is amber over `deal.ceilingAtPromote.noFee`.
+- **Inspection call.** `inspectionCall` uses `inspectionDecision`'s window (3 days before to 2 after), so it matches the pipeline row and Slack. It puts a chip on the row and a strip at the top of the deal: the date, whether a buyer is committed, sent/on it/interested/walked, pass reasons (one per buyer per code), and the price range buyers named. Its buttons tick the inspection item, open the feedback page, jump to the date, or open the fell-through form.
+- **Promote.** Promoting from Offers opens the new deal (`DealsView focus`, `?deal_id=&confirm=1` on the standalone page) on Terms & paperwork, under a "Confirm the deal" card. The card shows the fee (amber when it is the Settings default), the dates with `datesNote`, kind and access, and the promote's warnings.
+- **Tiles.** The KPI tiles count only the lane on screen (`dealsBook`). The standalone /deals page still shows every kind, on purpose.
+- **Buyers tab.** It holds the dataroom button, the feedback page, "what buyers said it's worth", and per-buyer facts (`buyerFacts`). It makes one dataroom read when the tab opens. A deal opens on Buyers while under contract and on Overview once a buyer is found. A `?tab=` link still wins.
+- **No Save buttons.** Terms, buyer read, access, parties and walkthrough windows save on blur, and a pick or date saves on change (`messaging-app/src/deal-autosave.js`). Closing the modal saves what is still open. The clear and far-off (409) confirms still ask, and a no restores the field.
+- **Small fixes.** A document upload answers with the offer, so the checklist line it ticked shows at once. Find buyers says "N queued / M waiting in the outbox", or why nothing went (`blastResultLine`). It also has Select strong fits and Select all.
+
 ### Buyer walkthrough (2026-09-29)
 
 The goal of every text to a buyer about a deal under contract is a time they
