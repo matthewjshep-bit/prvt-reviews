@@ -19,7 +19,7 @@
 // means, only how it looks and how you change it.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronLeft, ChevronRight, ExternalLink, Pencil, Plus, Send, Sparkles, Trash2, X } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, FileText, MoreHorizontal, Pencil, Plus, Send, Sparkles, Trash2, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
 import { assetLabel, normalizeAsset } from "@shared/asset-type.js";
 import { annotateCurrent, houseKey } from "@shared/current-offer.js";
@@ -58,8 +58,8 @@ import { MAX_CONTACT_REREADS, mergeLean } from "./offers-refresh.js";
 import { useLightPoll } from "./light-poll.js";
 import {
   ActivityStamp, AiPill, AttachWarning, BTN, BTN_ICON, BTN_PRIMARY, EmptyState, ErrorBar, FilterChips, KpiRow, Menu, NeedsPill,
-  SearchInput, SkeletonRows, SortHeader, StatusDots, StatusMenu, TableCard, passNoteLine,
-  compareBy, rowActivation, useSort,
+  SearchInput, SkeletonRows, SortHeader, StagePill, StatusDots, StatusMenu, StatusPill, TableCard, passNoteLine,
+  compareBy, rowActivation, useMediaQuery, useSort,
 } from "./ui.jsx";
 
 // The agent's last communication, across all their offers. Per-agent is the
@@ -72,11 +72,18 @@ const groupActivity = (offers) =>
 const sendLabel = (s) =>
   `${s.channels.map((c) => CHANNEL_LABELS[c] || c).join("+")} · ${(s.ts || "").slice(5, 10)}`;
 
+// The last send on the offer failed on some channel.
+const lastSendFailed = (o) => {
+  const sends = o?.sends || [];
+  const last = sends[sends.length - 1];
+  return Boolean(last) && Object.values(last.results || {}).some((r) => !r.ok);
+};
+
 function SentBadge({ offer }) {
   const sends = offer.sends || [];
   if (!sends.length) return null;
   const last = sends[sends.length - 1];
-  const failed = Object.values(last.results || {}).some((r) => !r.ok);
+  const failed = lastSendFailed(offer);
   const title = sends
     .map((s) => `${(s.ts || "").slice(0, 16).replace("T", " ")} — ${s.channels
       .map((c) => `${CHANNEL_LABELS[c] || c}${s.results?.[c]?.ok === false ? ` (failed: ${s.results[c].error})` : ""}`)
@@ -155,8 +162,10 @@ const VIEW_KEYS = new Set(ALL_VIEWS.map((v) => v.key));
 const urlSlice = () => (typeof window !== "undefined" ? readTableParams(window.location.search, VIEW_KEYS) : { tab: null, q: "" });
 
 export default function OffersHistory({ onNew = null, onDeal, settings: appSettings = null, only = null,
-  needs = [], onNeedsCount = null, focusNeeds = false, onNeedsFocused = null }) {
-  const [offers, setOffers] = useState(null);
+  needs = [], onNeedsCount = null, focusNeeds = false, onNeedsFocused = null, initialOffers = null }) {
+  // `initialOffers`: a book handed in (the tests' static render); the page
+  // itself always loads its own.
+  const [offers, setOffers] = useState(initialOffers);
   // The split: the offer open beside the rail, and the rail's rows — the
   // table's order, frozen when it opened (re-frozen when the filter, search or
   // sort changes) so recording an outcome doesn't renumber it under you.
@@ -186,6 +195,8 @@ export default function OffersHistory({ onNew = null, onDeal, settings: appSetti
   // (2026-11-23 audit, edit-leaves-the-table): the tab, search, sort and
   // unfolded agents stay as they were. Same sheet as the split's Edit offer.
   const [sheet, setSheet] = useState(null); // { offer } | null
+  // A phone gets cards, not the wide table (offers-mobile).
+  const isPhone = useMediaQuery("(max-width: 767px)");
   const [sort, toggleSort] = useSort({ key: "date", dir: "desc" }); // newest first, as the API returns them
   const [queueIds, setQueueIds] = useState(null); // the rows the popout's arrows walk, frozen at open
   const [expanded, setExpanded] = useState(() => new Set()); // group keys open
@@ -208,6 +219,7 @@ export default function OffersHistory({ onNew = null, onDeal, settings: appSetti
   // the KPI strip alike. The row is ~1KB, so the whole book fits; a fat field
   // is fetched on demand by hydrate().
   useEffect(() => {
+    if (initialOffers) return;
     listOffers({ limit: 2000, lean: true, activity: true, next: true })
       .then(setOffers)
       .catch((e) => setError(e.message));
@@ -232,8 +244,8 @@ export default function OffersHistory({ onNew = null, onDeal, settings: appSetti
   // hidden rows in the batch, or "mark 12 passed" quietly touches rows you
   // can't see. Same rule Agent Outreach uses.
   useEffect(() => { setPicked(new Set()); }, [q, filter]);
-  // Hot and Not sent open every agent (each row's Send is the point); the
-  // others start folded. A new tab starts from its own default.
+  // Hot and Draft open every agent (autoOpen below: each row's Send is the
+  // point); the others start folded. A new tab starts from its own default.
   useEffect(() => { setExpanded(new Set()); }, [filter]);
 
   /* ---------- the split ---------- */
@@ -627,6 +639,132 @@ export default function OffersHistory({ onNew = null, onDeal, settings: appSetti
   // the popout leaves you looking at the row you stopped on.
   const stepTo = (o) => { openGroup(groupKeyOf(o)); openDetail(o); };
 
+  // An agent's name, opening their record.
+  const agentName = (g) => (g.contactId ? (
+    <ContactLink contactId={g.contactId} name={g.contactName || g.contactId} party="agent" className="font-semibold" stopPropagation>
+      {g.contactName || g.contactId}
+    </ContactLink>
+  ) : (
+    <span className="font-semibold">{g.contactName || "No contact"}</span>
+  ));
+  // Another house for this agent, whatever they already have.
+  const newOfferButton = (g) => (g.contactId && onNew ? (
+    <button type="button" onClick={() => onNew(g.contactId)}
+      className={`${BTN_ICON} text-blue-600 hover:bg-blue-50 hover:text-blue-700`}
+      aria-label={`New offer for ${g.contactName || "this contact"}`}
+      title="New offer for this agent">
+      <Plus size={15} />
+    </button>
+  ) : null);
+  // The occasional actions, out of the way of a mis-click (row-action-noise):
+  // the documents are in Details, AI enrichment and Delete under ⋯.
+  const enrichItem = (g) => (g?.contactId
+    ? [{ key: "enrich", label: "AI enrichment: summarize the thread, fill CRM fields", icon: <Sparkles size={13} aria-hidden="true" />,
+        onSelect: () => setEnriching({ contactId: g.contactId, contactName: g.contactName }) }]
+    : []);
+  const moreTrigger = <span className={BTN_ICON}><MoreHorizontal size={15} aria-hidden="true" /></span>;
+  const agentMenu = (g) => (g.contactId
+    ? <Menu label={`More for ${g.contactName || "this agent"}`} items={enrichItem(g)} trigger={moreTrigger} />
+    : null);
+  const rowMenu = (o, group = null) => (
+    <Menu label={`More for the offer on ${o.address || "this property"}`} trigger={moreTrigger} items={[
+      { key: "details", label: "Details and documents", icon: <FileText size={13} aria-hidden="true" />, onSelect: () => openDetail(o) },
+      ...enrichItem(group),
+      { divider: true, key: "d" },
+      { key: "delete", label: "Delete this offer…", danger: true, icon: <Trash2 size={13} aria-hidden="true" />, onSelect: () => remove(o) },
+    ]} />
+  );
+
+  // One offer's row: under its agent's header, or on its own (`group`) when
+  // the agent has only this one, with the agent's name and actions on it.
+  const offerRow = (o, { group = null } = {}) => {
+    const draft = o.status === "draft";
+    const old = Boolean(o.supersededBy);
+    return (
+      <tr key={o.id}
+        {...rowActivation(() => (draft ? openEdit(o) : openSplit(o)))}
+        data-offer-row={o.id}
+        aria-label={`${o.address || "Offer"} — ${OFFER_STATUS[effectiveStatus(o)]?.label || ""}`}
+        aria-busy={opening === o.id || undefined}
+        className={`group cursor-pointer border-b border-slate-100 last:border-0 hover:bg-slate-50 ${
+          picked.has(o.id) ? "bg-blue-50/60" : ""} ${opening === o.id || old ? "opacity-60" : ""}`}>
+        <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
+          {!draft && !o.deal && (
+            <input type="checkbox" checked={picked.has(o.id)} onChange={() => togglePick(o.id)}
+              aria-label={`Select the offer on ${o.address || "this property"}`} />
+          )}
+        </td>
+        <td className="whitespace-nowrap px-4 py-2.5">
+          {group ? (
+            <span className="inline-flex items-center gap-1.5 pl-[21px]">{agentName(group)}</span>
+          ) : (
+            <span className="ml-5 block border-l-2 border-slate-200 pl-3 text-[11px] uppercase tracking-wide text-slate-400">
+              {" "}
+            </span>
+          )}
+        </td>
+        <td className="whitespace-nowrap px-4 py-2.5 text-slate-500">
+          {(o.createdAt || "").slice(0, 10)}
+        </td>
+        <td className="max-w-[20rem] px-4 py-2.5">
+          <span className="flex items-center gap-1.5">
+            <span className="truncate" title={o.address || undefined}>{o.address || "—"}</span>
+            <AiPill offer={o} />
+            <NeedsPill need={o.needsMatt} />
+            {normalizeAsset(o.asset) && normalizeAsset(o.asset).type !== "sfr" && (
+              <span className="shrink-0 rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-semibold text-violet-900">{assetLabel(o.asset)}</span>
+            )}
+          </span>
+          {old && (
+            <span className="block text-[11px] text-slate-400">
+              superseded by {fmtMoney(o.supersededBy.cashAmount)} · {(o.supersededBy.at || "").slice(5, 10)}
+            </span>
+          )}
+        </td>
+        <td className="whitespace-nowrap px-4 py-2.5 text-right font-semibold tabular-nums">
+          {o.cashAmount != null ? fmtMoney(o.cashAmount) : "—"}
+        </td>
+        <td className="whitespace-nowrap px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
+          {/* A draft is marked from here too (2026-10-19): "We passed"
+              on a house an agent sent, and the bot tells them why. */}
+          <StatusMenu offer={o} busy={statusBusy === o.id}
+            onSelect={(s) => changeStatus(o, s)} onDealNav={onDeal} />
+          <AttachWarning offer={o} />
+          <SentBadge offer={o} />
+          {!draft && !o.deal && !old && effectiveStatus(o) === "new" && (
+            <span className={`ml-1.5 whitespace-nowrap text-[11px] ${floatedAt(o) ? "text-amber-700" : "text-slate-400"}`}
+              title={floatedAt(o) ? "Our number went out by text — the written offer hasn't" : "Priced, never floated or sent"}>
+              {notSentAge(o)}
+            </span>
+          )}
+        </td>
+        {/* Muted on the child rows: it is a fact about the agent,
+            inherited by every offer of theirs, not about this house. */}
+        <td className="whitespace-nowrap px-4 py-2.5">
+          <ActivityStamp activity={o.lastActivity} enriched={o.lastActivity !== undefined} muted={!group} />
+        </td>
+        <td className="px-4 py-2.5">
+          <NextFollowUp next={o.nextFollowUp} enriched={o.nextFollowUp !== undefined} muted={old} />
+        </td>
+        <td className="sticky right-0 whitespace-nowrap bg-white px-4 py-2.5 text-right group-hover:bg-slate-50" onClick={(e) => e.stopPropagation()}>
+          {group && newOfferButton(group)}
+          {!draft && o.contactId && (
+            <button type="button" onClick={() => setSending(o)} className={`${BTN} mr-1`}
+              title="Text or email the offer documents">
+              <Send size={13} aria-hidden="true" /> Send
+            </button>
+          )}
+          <button type="button" onClick={() => openEdit(o)} className={`${BTN} mr-1`}
+            disabled={opening === o.id}
+            title={draft ? "Continue editing draft" : "Open this offer to revise and save it"}>
+            <Pencil size={13} aria-hidden="true" /> Edit
+          </button>
+          {rowMenu(o, group)}
+        </td>
+      </tr>
+    );
+  };
+
   // The windows the table and the split share (Details, Send, the generators).
   const modals = (
     <>
@@ -772,11 +910,38 @@ export default function OffersHistory({ onNew = null, onDeal, settings: appSetti
           {view !== "all" && needle ? ` in ${activeFilter.label.toLowerCase()}` : ""}.
         </EmptyState>
       ) : (
+      isPhone ? (
+        // On a phone the table is a list of cards: street, agent, our number,
+        // where it stands and what's next (offers-mobile, nav-11). A tap
+        // opens the same split the table does.
+        <ul className="space-y-2" aria-label="Offers">
+          {rowsInOrder.filter((o) => !o.supersededBy || view === "all").map((o) => (
+            <li key={o.id}>
+              <button type="button" data-offer-row={o.id} aria-busy={opening === o.id || undefined}
+                onClick={() => (o.status === "draft" ? openEdit(o) : openSplit(o))}
+                className={`block w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-left hover:bg-slate-50 ${opening === o.id ? "opacity-60" : ""}`}>
+                <span className="flex items-baseline justify-between gap-2">
+                  <span className="min-w-0 truncate font-semibold text-slate-900">{String(o.address || "Untitled").split(",")[0]}</span>
+                  <span className="shrink-0 font-semibold tabular-nums">{o.cashAmount != null ? fmtMoney(o.cashAmount) : "—"}</span>
+                </span>
+                <span className="block truncate text-xs text-slate-500">{o.contactName || "No contact"}</span>
+                <span className="mt-1.5 flex flex-wrap items-center gap-1">
+                  {o.deal ? <StagePill stage={o.deal.stage} small /> : <StatusPill offer={o} small />}
+                  <AiPill offer={o} />
+                  <NeedsPill need={o.needsMatt} />
+                  {lastSendFailed(o) && <span className="text-[11px] font-semibold text-amber-700">⚠ send failed</span>}
+                </span>
+                {o.needsMatt?.why && <span className="mt-1 block text-xs text-rose-800">{o.needsMatt.why}</span>}
+                <span className="mt-1 block text-xs"><NextFollowUp next={o.nextFollowUp} enriched={o.nextFollowUp !== undefined} /></span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
       <TableCard>
         {/* min-w scrolls the card rather than crushing columns on narrow
-            screens; the document links wrap (below) rather than run under the
-            opaque sticky action cell when the table is merely tight. */}
-        <table className="w-full min-w-[80rem] text-sm">
+            screens. The documents live in Details (the ⋯ menu), not a column. */}
+        <table className="w-full min-w-[64rem] text-sm">
           <thead>
             <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
               <th scope="col" className="px-3 py-2.5">
@@ -793,12 +958,15 @@ export default function OffersHistory({ onNew = null, onDeal, settings: appSetti
                   the agent. */}
               <SortHeader label="Last activity" sortKey="activity" sort={sort} onSort={toggleSort} naturalDir={SORTS.activity.natural} />
               <SortHeader label="Next follow-up" sortKey="next" sort={sort} onSort={toggleSort} naturalDir={SORTS.next.natural} />
-              <th scope="col" className="w-44 px-4 py-2.5">Document</th>
               <th scope="col" className="sticky right-0 bg-white px-4 py-2.5"><span className="sr-only">Actions</span></th>
             </tr>
           </thead>
           <tbody>
             {groups.map((g) => {
+              // An agent with one offer is one row: the fold hid that row
+              // behind a click, and with it a failed send or a float's age
+              // (2026-11-23 audit, collapsed-groups-hide-alerts).
+              if (g.offers.length === 1) return offerRow(g.offers[0], { group: g });
               const isOpen = needle ? true : autoOpen ? !expanded.has(g.key) : expanded.has(g.key);
               // The offer that put this agent where they are in the list —
               // their newest by default, their priciest when you sort by cash.
@@ -808,8 +976,10 @@ export default function OffersHistory({ onNew = null, onDeal, settings: appSetti
               // AI queue: you'd click the chip, see agent names, and have to
               // open each one to find which offer is waiting on you.
               const aiPending = g.offers.filter(needsAiReview).length;
-              // Folded, the agent still says what's waiting on Matt.
+              // Folded, the agent still says what's waiting on Matt, and that
+              // a send failed.
               const need = g.offers.find((o) => o.needsMatt)?.needsMatt || null;
+              const failed = g.offers.filter((o) => !o.supersededBy && lastSendFailed(o)).length;
               return (
                 <React.Fragment key={g.key}>
                   <tr {...rowActivation(() => toggleGroup(g.key))}
@@ -820,13 +990,7 @@ export default function OffersHistory({ onNew = null, onDeal, settings: appSetti
                     <td className="whitespace-nowrap px-4 py-2.5">
                       <span className="inline-flex items-center gap-1.5">
                         {isOpen ? <ChevronDown size={15} className="text-slate-400" aria-hidden="true" /> : <ChevronRight size={15} className="text-slate-400" aria-hidden="true" />}
-                        {g.contactId ? (
-                          <ContactLink contactId={g.contactId} name={g.contactName || g.contactId} party="agent" className="font-semibold" stopPropagation>
-                            {g.contactName || g.contactId}
-                          </ContactLink>
-                        ) : (
-                          <span className="font-semibold">{g.contactName || "No contact"}</span>
-                        )}
+                        {agentName(g)}
                         {aiPending > 0 && (
                           <span
                             className="rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-semibold text-violet-800"
@@ -852,6 +1016,11 @@ export default function OffersHistory({ onNew = null, onDeal, settings: appSetti
                     </td>
                     <td className="whitespace-nowrap px-4 py-2.5">
                       <StatusDots offers={g.offers} />
+                      {failed > 0 && (
+                        <span className="ml-1.5 text-[11px] font-semibold text-amber-700" title="The last send on one of their offers failed: open the agent to see which">
+                          ⚠ {failed === 1 ? "a send failed" : `${failed} sends failed`}
+                        </span>
+                      )}
                     </td>
                     <td className="whitespace-nowrap px-4 py-2.5">
                       <ActivityStamp activity={groupActivity(g.offers)} enriched={g.offers.some((o) => o.lastActivity !== undefined)} />
@@ -859,144 +1028,20 @@ export default function OffersHistory({ onNew = null, onDeal, settings: appSetti
                     <td className="px-4 py-2.5">
                       <NextFollowUp next={groupNext(g.offers)} enriched={g.offers.some((o) => o.nextFollowUp !== undefined)} />
                     </td>
-                    <td className="px-4 py-2.5" />
                     <td className="sticky right-0 whitespace-nowrap bg-slate-50/60 px-4 py-2.5 text-right group-hover:bg-slate-100"
                       onClick={(e) => e.stopPropagation()}>
-                      {/* Another house for this agent, whatever they already have. */}
-                      {g.contactId && onNew && (
-                        <button type="button" onClick={() => onNew(g.contactId)}
-                          className={`${BTN_ICON} text-blue-600 hover:bg-blue-50 hover:text-blue-700`}
-                          aria-label={`New offer for ${g.contactName || "this contact"}`}
-                          title="New offer for this agent">
-                          <Plus size={15} />
-                        </button>
-                      )}
-                      {g.contactId && (
-                        <button type="button"
-                          onClick={() => setEnriching({ contactId: g.contactId, contactName: g.contactName })}
-                          className={`${BTN_ICON} text-amber-500 hover:bg-amber-50 hover:text-amber-600`}
-                          aria-label={`AI enrichment for ${g.contactName || "this contact"}`}
-                          title="AI enrichment — summarize the conversation and fill CRM fields">
-                          <Sparkles size={15} />
-                        </button>
-                      )}
+                      {newOfferButton(g)}
+                      {agentMenu(g)}
                     </td>
                   </tr>
-                  {isOpen && byHouse(g.offers).map((o) => {
-                    const draft = o.status === "draft";
-                    const old = Boolean(o.supersededBy);
-                    return (
-              <tr key={o.id}
-                {...rowActivation(() => (draft ? openEdit(o) : openSplit(o)))}
-                data-offer-row={o.id}
-                aria-label={`${o.address || "Offer"} — ${OFFER_STATUS[effectiveStatus(o)]?.label || ""}`}
-                aria-busy={opening === o.id || undefined}
-                className={`group cursor-pointer border-b border-slate-100 last:border-0 hover:bg-slate-50 ${
-                  picked.has(o.id) ? "bg-blue-50/60" : ""} ${opening === o.id || old ? "opacity-60" : ""}`}>
-                <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
-                  {!draft && !o.deal && (
-                    <input type="checkbox" checked={picked.has(o.id)} onChange={() => togglePick(o.id)}
-                      aria-label={`Select the offer on ${o.address || "this property"}`} />
-                  )}
-                </td>
-                <td className="px-4 py-2.5">
-                  <span className="ml-5 block border-l-2 border-slate-200 pl-3 text-[11px] uppercase tracking-wide text-slate-400">
-                    {" "}
-                  </span>
-                </td>
-                <td className="whitespace-nowrap px-4 py-2.5 text-slate-500">
-                  {(o.createdAt || "").slice(0, 10)}
-                </td>
-                <td className="max-w-[20rem] px-4 py-2.5">
-                  <span className="flex items-center gap-1.5">
-                    <span className="truncate" title={o.address || undefined}>{o.address || "—"}</span>
-                    <AiPill offer={o} />
-                    <NeedsPill need={o.needsMatt} />
-                    {normalizeAsset(o.asset) && normalizeAsset(o.asset).type !== "sfr" && (
-                      <span className="shrink-0 rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-semibold text-violet-900">{assetLabel(o.asset)}</span>
-                    )}
-                  </span>
-                  {old && (
-                    <span className="block text-[11px] text-slate-400">
-                      superseded by {fmtMoney(o.supersededBy.cashAmount)} · {(o.supersededBy.at || "").slice(5, 10)}
-                    </span>
-                  )}
-                </td>
-                <td className="whitespace-nowrap px-4 py-2.5 text-right font-semibold tabular-nums">
-                  {o.cashAmount != null ? fmtMoney(o.cashAmount) : "—"}
-                </td>
-                <td className="whitespace-nowrap px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
-                  {/* A draft is marked from here too (2026-10-19): "We passed"
-                      on a house an agent sent, and the bot tells them why. */}
-                  <StatusMenu offer={o} busy={statusBusy === o.id}
-                    onSelect={(s) => changeStatus(o, s)} onDealNav={onDeal} />
-                  <AttachWarning offer={o} />
-                  <SentBadge offer={o} />
-                  {!draft && !o.deal && !old && effectiveStatus(o) === "new" && (
-                    <span className={`ml-1.5 whitespace-nowrap text-[11px] ${floatedAt(o) ? "text-amber-700" : "text-slate-400"}`}
-                      title={floatedAt(o) ? "Our number went out by text — the written offer hasn't" : "Priced, never floated or sent"}>
-                      {notSentAge(o)}
-                    </span>
-                  )}
-                </td>
-                {/* Muted on the child rows: it is a fact about the agent,
-                    inherited by every offer of theirs, not about this house. */}
-                <td className="whitespace-nowrap px-4 py-2.5">
-                  <ActivityStamp activity={o.lastActivity} enriched={o.lastActivity !== undefined} muted />
-                </td>
-                <td className="px-4 py-2.5">
-                  <NextFollowUp next={o.nextFollowUp} enriched={o.nextFollowUp !== undefined} muted={old} />
-                </td>
-                <td className="w-44 px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
-                  {/* shrink-0 on the links: flex items shrink before they wrap,
-                      which clips a label mid-word instead of moving it down. */}
-                  <span className="flex flex-wrap gap-x-2 text-slate-600 [&>a]:shrink-0">
-                    {o.pdfUrl && (
-                      <a href={o.pdfUrl} target="_blank" rel="noreferrer" className="underline hover:text-slate-900">PDF</a>
-                    )}
-                    {o.scopePdfUrl && (
-                      <a href={o.scopePdfUrl} target="_blank" rel="noreferrer" className="underline hover:text-slate-900">SOW</a>
-                    )}
-                    {o.compsPdfUrl && (
-                      <a href={o.compsPdfUrl} target="_blank" rel="noreferrer" className="underline hover:text-slate-900">Comps</a>
-                    )}
-                    {o.imageUrl && (
-                      <a href={o.imageUrl} target="_blank" rel="noreferrer" className="underline hover:text-slate-900">Image</a>
-                    )}
-                    {o.contractPdfUrl && (
-                      <a href={o.contractPdfUrl} target="_blank" rel="noreferrer" className="underline hover:text-slate-900">Contract</a>
-                    )}
-                    {o.assignmentPdfUrl && (
-                      <a href={o.assignmentPdfUrl} target="_blank" rel="noreferrer" className="underline hover:text-slate-900">Assignment</a>
-                    )}
-                  </span>
-                </td>
-                <td className="sticky right-0 whitespace-nowrap bg-white px-4 py-2.5 text-right group-hover:bg-slate-50" onClick={(e) => e.stopPropagation()}>
-                  {!draft && o.contactId && (
-                    <button type="button" onClick={() => setSending(o)} className={`${BTN} mr-1`}
-                      title="Text or email the offer documents">
-                      <Send size={13} aria-hidden="true" /> Send
-                    </button>
-                  )}
-                  <button type="button" onClick={() => openEdit(o)} className={`${BTN} mr-1`}
-                    disabled={opening === o.id}
-                    title={draft ? "Continue editing draft" : "Open this offer to revise and save it"}>
-                    <Pencil size={13} aria-hidden="true" /> Edit
-                  </button>
-                  <button type="button" onClick={() => remove(o)} className={BTN_ICON}
-                    aria-label={`Delete the offer on ${o.address || "this property"}`} title="Delete">
-                    <Trash2 size={15} />
-                  </button>
-                </td>
-              </tr>
-                    );
-                  })}
+                  {isOpen && byHouse(g.offers).map((o) => offerRow(o))}
                 </React.Fragment>
               );
             })}
           </tbody>
         </table>
       </TableCard>
+      )
       )}
       {modals}
     </>

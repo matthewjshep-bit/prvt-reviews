@@ -392,6 +392,25 @@ export function NeedsChip({ count, page, onClick }) {
   );
 }
 
+/**
+ * useMediaQuery(query) → whether the window matches it now, kept current.
+ * False where there is no window (the server-rendered tests).
+ */
+export function useMediaQuery(query) {
+  const read = () => { try { return typeof window !== "undefined" && Boolean(window.matchMedia?.(query).matches); } catch { return false; } };
+  const [on, setOn] = useState(read);
+  useEffect(() => {
+    let mq;
+    try { mq = window.matchMedia?.(query); } catch { return undefined; }
+    if (!mq) return undefined;
+    const fn = () => setOn(mq.matches);
+    fn();
+    mq.addEventListener?.("change", fn);
+    return () => mq.removeEventListener?.("change", fn);
+  }, [query]);
+  return on;
+}
+
 /* ---------- time ---------- */
 
 // "3h ago". Lived in ConversationOutbox.jsx, which meant other views imported
