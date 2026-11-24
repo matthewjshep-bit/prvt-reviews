@@ -696,6 +696,11 @@ export const getDashboardAutopilot = () =>
 export const getDashboardDigest = (hours = 24) =>
   fetch(`${API_BASE}/api/dashboard/digest?${locq()}&hours=${hours}`).then(j);
 export const getDashboardAudit = () => fetch(`${API_BASE}/api/dashboard/audit?${locq()}`).then(j);
+// Who is on GHL's "Needs Matt" stage, from the runner's last read: one cursor
+// read, no GHL call — [{ contactId, kind, offerId, why, passAt }]. The Offers
+// and Deals pages put the reason on the row (needs-view.js).
+export const getNeedsMatt = () =>
+  fetch(`${API_BASE}/api/dashboard/needs-matt?${locq()}`).then(j).then((r) => r.needs || []);
 // Close an "Owed a number" row by hand. `reason` is { code, note } from
 // PROMISE_DISMISS_REASONS; the nightly coach reads it.
 export const dismissPromise = (contactId, address = "", reason = null) => post(`/api/dashboard/promises/dismiss`, { contactId, address, reason });
