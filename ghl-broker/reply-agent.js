@@ -62,7 +62,7 @@ import { OUTREACH_NUDGE_WINDOW_DAYS } from "./shared/follow-up.js";
 // shared/voice.js's reader returns { text, at, channel } for the voice check; this file's own
 // ourLastTexts (below, the cold ladder's) returns plain text, so the voice one goes by voicePrior.
 import { voiceFlags, hardVoiceKeys, voiceLine, ourLastTexts as voicePrior, VOICE_LINE_RX, EVENT_KINDS as TIME_SET_KINDS } from "./shared/voice.js";
-import { buyerReplyFlags, dealRowFor, offersPackage, SITUATION_FLAG_RX, BUYER_HUMAN_ACTIVE_MIN, BUYER_HAND_LINK_MIN, handSentLink, buyerReferral } from "./shared/buyer-reply.js";
+import { buyerReplyFlags, dealRowFor, offersPackage, SITUATION_FLAG_RX, BUYER_HUMAN_ACTIVE_MIN, BUYER_HAND_LINK_MIN, handSentLink, buyerReferral, PACKAGE_INVITE_RX } from "./shared/buyer-reply.js";
 import { BOOKING_RETIRED, CALL_ASK_RETIRED, callWordsFlags, CALL_WORDS_FLAG_RX, callWanted, CALL_WANTED_EVENT } from "./shared/call-words.js";
 import { checkInPack, routeCheckIn, routesCheckIn, normalizeCheckInRoute, asksIfBot, onlyAsksIfBot, botAskFlags, BOT_ASK_REASON, goesBySaid, goesByOf,
   strictNoHouse, checkInFlags, namesBookHouse, namesAHouse, composeRoute, composes, checkInStamp, openingIndex, nothingToSay, normalizeCheckInComposer, spentHookKeys } from "./shared/check-in.js";
@@ -2591,7 +2591,7 @@ export async function handLines({ store, locationId, contactId, transcript, minu
     const said = norm(l.text);
     if (l.channel !== "call") {
       if (sent.some((t) => t === said || said.startsWith(t))) continue;
-      if (OUR_OFFER_TEXT_RX.test(l.text) || OUTREACH_OPEN_RX.test(l.text) || WORKFLOW_FOOTER_RX.test(l.text)) continue;
+      if (OUR_OFFER_TEXT_RX.test(l.text) || OUTREACH_OPEN_RX.test(l.text) || WORKFLOW_FOOTER_RX.test(l.text) || PACKAGE_INVITE_RX.test(l.text)) continue;
     }
     out.push({ at: new Date(l.ts).toISOString(), minutesAgo: Math.max(0, Math.round((now - l.ts) / 60000)), text: l.text, channel: l.channel });
   }

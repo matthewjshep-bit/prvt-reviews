@@ -69,7 +69,7 @@ const UNDELIVERABLE_RX = [
   { what: "an answer from someone else", rx: new RegExp(String.raw`\b${WE}\s+(?:\w+\s+){0,2}?(?:check|ask|confirm|verify|find\s+out|hear\s+back|follow\s+up|run\s+it\s+by|touch\s+base|circle\s+back|get\s+(?:an\s+)?answer|get\s+clarity|double[-\s]check)\b[^.?!\n]{0,30}?\b(?:with|from|by)\s+${THIRD_PARTY}\b`, "i") },
   { what: "an answer from someone else", rx: new RegExp(String.raw`\b(?:waiting\s+(?:on|for|to\s+hear(?:\s+back)?\s+from)|hear(?:ing)?\s+back\s+from|once\s+i\s+hear\s+(?:back\s+)?from)\s+${THIRD_PARTY}\b`, "i") },
   { what: "an answer you'd have to go find", rx: /\b(?:let\s+me|lemme|i'?ll|i\s+will|i'?m\s+going\s+to)\s+(?:go\s+)?(?:find\s+out|look\s+into\s+(?:it|that|this)|dig\s+into\s+(?:it|that|this)|get\s+back\s+to\s+you\s+on\s+(?:that|this|it))\b/i },
-  { what: "a contact the app doesn't add", rx: /\b(?:i'?ll|i\s+will|let\s+me|happy\s+to|i\s+can|we\s+can|we'?ll)\s+(?:also\s+)?(?:add|text|loop\s+in|reach\s+out\s+to|contact|send\s+(?:it|this|them|the\s+\w+)\s+(?:to|over\s+to))\s+(?:your|him|her|them\s+(?:directly|too|as\s+well)|them\b)/i },
+  { what: "a contact the app doesn't add", rx: /\b(?:i'?ll|i\s+will|let\s+me|happy\s+to|i\s+can|we\s+can|we'?ll)\s+(?:also\s+)?(?:add|text|loop\s+in|reach\s+out\s+to|contact|send\s+(?:it|this|them|the\s+\w+)\s+(?:to|over\s+to))\s+(?:your(?!\s+(?:e-?mail|number|info|address|cell|phone))|him|her|them\s+(?:directly|too|as\s+well)|them\b)/i },
 ];
 
 /**
@@ -264,6 +264,11 @@ export function dealRowFor(deals = null, address = "") {
 export const BUYER_HUMAN_ACTIVE_MIN = 60;
 export const BUYER_HAND_LINK_MIN = 120;
 const HAND_LINK_RX = /https?:\/\/|www\.|\b(?:photos?|pics?|pictures?|package|video|link)\b/i;
+
+// The package text the app sends itself (ghl-broker/dataroom.js
+// inviteMessage): "Hi Dana, here's the package on 1820 Alder Way …". Not
+// Matt's hand, so it neither makes the bot stand aside nor stops a link.
+export const PACKAGE_INVITE_RX = /^(?:hi\s+[^,\n]{1,40},\s+)?here'?s\s+the\s+package\s+on\b/i;
 
 /** handSentLink(text) → true when a text of Matt's carried a link or photos. */
 export const handSentLink = (text = "") => HAND_LINK_RX.test(String(text || ""));

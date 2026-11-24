@@ -111,3 +111,8 @@ test("a buyer who names a partner or their acquisitions person to get deals is r
   assert.equal(buyerReferral("My wife and I are looking at it this weekend"), null, "no ask to send them anything");
   assert.equal(buyerReferral("I'll run it by my partner"), null, "checking with a partner is not adding one");
 });
+
+test("saving the buyer's own email is not a promise to add someone", () => {
+  assert.equal(undeliverablePromise("Got it, I'll add your email so deals come that way too."), null);
+  assert.ok(undeliverablePromise("I'll add your partner to the list."));
+});

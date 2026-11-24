@@ -9993,3 +9993,16 @@ test("a buyer Matt sent the photo link to 90 minutes ago doesn't get the package
   assert.ok(!(d.actions || []).some((x) => x.type === "send_dataroom_invite" && x.mode === "auto"));
   assert.match(d.flags.join(" · "), /you sent them photos or a link 9\d minutes ago/);
 });
+
+// The package text the app sent itself is not Matt's hand: after the bot's
+// own link, the buyer's next question is still the bot's to answer.
+test("the package link the app texted a buyer doesn't make the bot stand aside as if Matt sent it", async () => {
+  const { inviteMessage } = await import("./dataroom.js");
+  const at = (min) => new Date(Date.now() - min * 60000).toISOString().slice(0, 16).replace("T", " ");
+  const room = { address: "1820 Alder Way, Kentwood, WA 98000", snapshot: { numbers: { investorPrice: 250000 } } };
+  for (const name of ["Dana Quill", ""]) {
+    const sent = inviteMessage({ room, invite: { name }, link: "https://deals.example/d/abc" }).split("\n")[0];
+    const transcript = `[${at(20)}] US sms: ${sent}\n[${at(2)}] THEM sms: what's the ARV?`;
+    assert.deepEqual(await handLines({ store: fakeStore([]), locationId: "LOC", contactId: "c1", transcript, minutes: 120 }), [], sent);
+  }
+});
