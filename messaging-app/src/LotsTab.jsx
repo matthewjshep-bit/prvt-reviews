@@ -14,11 +14,42 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { Loader2, Plus, Sparkles, Trash2 } from "lucide-react";
 import { normalizeLotFinder, normalizePocket, OWNER_STATUSES, OWNER_PLAYBOOK, BUILDER_PLAYBOOK } from "@shared/lot-finder.js";
-import { getLotFinder, getLotOwners, getLotBuilders, setLotOwnerStatus, suggestLotPocket, runLotFinder, patchSettings } from "./api.js";
+import { getLotFinder, getLotFinderJob, getLotOwners, getLotBuilders, setLotOwnerStatus, suggestLotPocket, runLotFinder, patchSettings } from "./api.js";
 import { BTN, BTN_PRIMARY, ErrorBar, Pill } from "./ui.jsx";
 
 const INPUT = "w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100";
 const STATUS_LABEL = { new: "Found", tracing: "Tracing", traced: "Has a cell", no_phone: "No cell", imported: "In GHL", skipped: "Skipped", do_not_contact: "Do not contact" };
+/**
+ * lotRunMessage(r) → one line on a run, from the run's result or the saved
+ * `last` (GET /api/lot-finder), which carry the same counts.
+ */
+export function lotRunMessage(r = {}) {
+  const parcels = (r.pockets || []).map((p) => `${p.id}: ${p.parcels ?? "?"} parcel${p.parcels === 1 ? "" : "s"}${p.skipped ? ` (${p.skipped})` : ""}${p.error ? ` (${p.error})` : ""}`).join("; ");
+  return r.dryRun
+    ? `Dry run — ${parcels || "no pockets"}. Would trace ${r.traced?.would || 0}, would import ${r.imported?.would || 0}, would text ${r.texts?.would || 0}.`
+    : `Ran — ${parcels || "no pockets"}. Traced ${r.traced?.looked || 0} (${r.traced?.reachable || 0} with a cell${r.traced?.credits ? `, ${r.traced.credits} credits` : ""}${r.traced?.stopped ? `; ${r.traced.stopped}` : ""}); owners imported ${r.imported?.created || 0}${r.imported?.dry ? ` (dry: ${r.imported.would} would)` : ""}; builders imported ${r.builders?.created || 0}${r.builders?.would ? ` (dry: ${r.builders.would} would)` : ""}; texts ${r.texts?.scheduled || 0} scheduled, ${r.texts?.drafted || 0} waiting for you.`;
+}
+
+/**
+ * waitForLotRun(runId, { get, sleep, everyMs, maxMs, now }) → the lot finder's info once the run is over
+ *
+ * Polls GET /api/lot-finder/job (the light read) until the run is no longer running and its result
+ * is saved (last.id is this run's), or it errored, or the broker no longer
+ * knows the run (a restart). A failed poll is tried again. Past `maxMs` it
+ * returns with the run still going.
+ */
+export async function waitForLotRun(runId, { get = getLotFinderJob, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), everyMs = 5000, maxMs = 20 * 60000, now = Date.now } = {}) {
+  const t0 = now();
+  let info = null;
+  for (;;) {
+    info = await get().catch(() => null) || info;
+    const j = info?.job;
+    if (info && (!j || (j.status !== "running" && (j.status === "error" || !runId || info.last?.id === runId)))) return info;
+    if (now() - t0 >= maxMs) return info;
+    await sleep(everyMs);
+  }
+}
+
 const money = (n) => (n > 0 ? (n >= 1000000 ? `$${(n / 1000000).toFixed(2).replace(/\.?0+$/, "")}M` : `$${Math.round(n / 1000)}k`) : "—");
 
 function PocketCard({ p, onChange, onRemove, counts, canSuggest }) {
@@ -112,16 +143,23 @@ export default function LotsTab() {
       setMsg("Saved.");
     } catch (e) { setErr(e.message || "Not saved."); } finally { setBusy(""); }
   };
+  // Starts the run and polls for it (a real run takes minutes; Render's proxy
+  // cuts a waiting request off and the run goes on regardless). A run already
+  // going (409) is waited on the same way.
   const run = async (dryRun) => {
-    setBusy("run"); setMsg(""); setErr("");
+    setBusy("run"); setErr("");
+    setMsg(dryRun ? "Dry run going…" : "Running: pulling parcels, tracing and importing. This can take a few minutes; you can leave the page.");
     try {
-      const r = await runLotFinder({ dryRun });
-      const j = r.job || {};
-      if (j.error) throw new Error(j.error);
-      const parcels = (j.pockets || []).map((p) => `${p.id}: ${p.parcels ?? "?"} parcel${p.parcels === 1 ? "" : "s"}${p.skipped ? ` (${p.skipped})` : ""}${p.error ? ` (${p.error})` : ""}`).join("; ");
-      setMsg(dryRun
-        ? `Dry run — ${parcels || "no pockets"}. Would trace ${j.traced?.would || 0}, would import ${j.imported?.would || 0}, would text ${j.texts?.would || 0}.`
-        : `Ran — ${parcels}. Traced ${j.traced?.looked || 0} (${j.traced?.reachable || 0} with a cell${j.traced?.credits ? `, ${j.traced.credits} credits` : ""}${j.traced?.stopped ? `; ${j.traced.stopped}` : ""}); owners imported ${j.imported?.created || 0}${j.imported?.dry ? ` (dry: ${j.imported.would} would)` : ""}; builders imported ${j.builders?.created || 0}${j.builders?.would ? ` (dry: ${j.builders.would} would)` : ""}; texts ${j.texts?.scheduled || 0} scheduled, ${j.texts?.drafted || 0} waiting for you.`);
+      let runId = "";
+      try {
+        const r = await runLotFinder({ dryRun });
+        if (r.job?.error) throw new Error(r.job.error);
+        runId = r.job?.id || "";
+      } catch (e) { if (e?.status !== 409) throw e; }
+      const done = await waitForLotRun(runId);
+      if (done?.job?.status === "running") { setMsg("Still running. The last-run line below updates when it's done."); }
+      else if (done?.last?.error || done?.job?.error) throw new Error(done.last?.error || done.job.error);
+      else setMsg(done?.last ? lotRunMessage(done.last) : "Done.");
       await load();
     } catch (e) { setErr(e.message || "The run failed."); } finally { setBusy(""); }
   };
@@ -130,6 +168,8 @@ export default function LotsTab() {
   };
   const sw = info?.switches || {};
   const last = info?.last;
+  // A run already going (the 10am one, or a press from another tab): the buttons wait.
+  const running = info?.job?.status === "running";
   const state = !f.enabled ? "off" : f.dryRun ? "on, dry run" : f.autoSend && sw.ownerSms && sw.sends ? "on, texts send themselves" : "on, texts wait for you";
 
   return (
@@ -138,8 +178,8 @@ export default function LotsTab() {
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-sm font-bold text-slate-800">Lots: {state}</h2>
           <div className="flex flex-wrap gap-2">
-            <button type="button" className={BTN} disabled={Boolean(busy)} onClick={() => run(true)}>{busy === "run" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null} Dry run now</button>
-            <button type="button" className={BTN} disabled={Boolean(busy) || f.dryRun || !f.enabled} title={f.dryRun ? "Turn off Dry run and save first" : "Pulls, traces and imports now, as the settings allow"} onClick={() => run(false)}>Run now</button>
+            <button type="button" className={BTN} disabled={Boolean(busy) || running} title={running ? "A run is going" : undefined} onClick={() => run(true)}>{busy === "run" || running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null} Dry run now</button>
+            <button type="button" className={BTN} disabled={Boolean(busy) || running || f.dryRun || !f.enabled} title={running ? "A run is going" : f.dryRun ? "Turn off Dry run and save first" : "Pulls, traces and imports now, as the settings allow"} onClick={() => run(false)}>Run now</button>
             <button type="button" className={BTN_PRIMARY} disabled={Boolean(busy)} onClick={save}>{busy === "save" ? "Saving…" : "Save"}</button>
           </div>
         </div>

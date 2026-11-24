@@ -325,3 +325,26 @@ test("an owner who answered and has no lot offer yet is on the Luxury page's lis
   ]);
   assert.equal(rows[0].at, new Date(T0 - 30 * 60000).toISOString(), "their newest answer");
 });
+
+// The Lots tab polls a light read while a run goes, and the Luxury page reads
+// the owners who answered; neither lists every owner row (GET / does).
+test("the lot finder's light reads answer without listing every owner", async () => {
+  const { default: createLotFinderRouter } = await import("./routes/lot-finder.js");
+  await recordEvent({ store, locationId: "L14", contactId: "c-z", party: "owner", type: "lot_owner_replied", at: new Date().toISOString(),
+    address: "3 Cedar Ct", source: "conversation", ref: "ra-z", dedupeKey: "lot_owner_replied:ra-z" });
+  const router = createLotFinderRouter({ resolveLocation: () => ({ locationId: "L14" }), getSettings: async () => ({}) });
+  const call = async (p) => {
+    const layer = router.stack.find((l) => l.route?.path === p && l.route.methods.get);
+    let body = null;
+    const res = { status() { return this; }, json(b) { body = b; return this; } };
+    const listed = store.listLotOwners;
+    store.listLotOwners = async () => { throw new Error("listed every owner"); };
+    try { await layer.route.stack[0].handle({ query: {}, body: {} }, res, () => {}); } finally { store.listLotOwners = listed; }
+    return body;
+  };
+  const job = await call("/job");
+  assert.deepEqual(Object.keys(job).sort(), ["job", "last"]);
+  const answered = await call("/answered");
+  assert.ok(Array.isArray(answered.owners), JSON.stringify(answered));
+  assert.deepEqual(answered.owners.map((o) => [o.contactId, o.street]), [["c-z", "3 Cedar Ct"]]);
+});

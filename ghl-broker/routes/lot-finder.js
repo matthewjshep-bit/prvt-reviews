@@ -6,7 +6,9 @@
 //   GET  /api/lot-finder/answered        → owners who answered with no lot offer yet (the Luxury page)
 //   POST /api/lot-finder/owners/:key/status   { status: skipped | do_not_contact | new }
 //   POST /api/lot-finder/suggest         { address, radiusMiles? } → the pocket's numbers off Zillow
-//   POST /api/lot-finder/run             { dryRun, wait } → run the day now
+//   GET  /api/lot-finder/job             → { job, last }: the light read the tab polls during a run
+//   POST /api/lot-finder/run             { dryRun, wait } → run the day now (the tab sends
+//                                        wait:false and polls GET /job until last.id is this job's)
 //
 // Settings are saved through PATCH /api/offers/settings { lotFinder }. Nothing
 // here sends a text: the run writes drafts, and they schedule themselves only
@@ -55,8 +57,20 @@ export default function createLotFinderRouter({ resolveLocation, getSettings = (
         switches: { ownerSms: OWNER_SMS_ENABLED(), imports: OUTREACH_IMPORTS_ENABLED(), sends: process.env.CARD_SENDS_ENABLED === "true",
           traceKey: Boolean(traceKeyOf(saved)), propertyKey: Boolean(propertyKeyOf(saved)), apifyToken: Boolean(String(saved.apifyToken || "").trim()) },
         last: cursor?.doc?.last || null, lastDaily: cursor?.doc?.lastDaily || null, failed: Boolean(cursor?.doc?.failed), error: cursor?.doc?.error || null,
-        job: job ? { status: job.status, trigger: job.trigger, startedAt: job.startedAt, finishedAt: job.finishedAt, error: job.error } : null,
+        job: job ? { id: job.id, status: job.status, trigger: job.trigger, startedAt: job.startedAt, finishedAt: job.finishedAt, error: job.error } : null,
       });
+    } catch (err) { fail(res, err); }
+  });
+
+  // The run's state and last result only, for the tab to poll while a run
+  // goes: GET / reads every owner row, too heavy to ask for every few seconds.
+  router.get("/job", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const cursor = await store.getJobCursor(locationId, CURSOR_NAME).catch(() => null);
+      const job = getLotFinderJob(locationId);
+      res.json({ last: cursor?.doc?.last || null,
+        job: job ? { id: job.id, status: job.status, trigger: job.trigger, startedAt: job.startedAt, finishedAt: job.finishedAt, error: job.error } : null });
     } catch (err) { fail(res, err); }
   });
 
@@ -119,7 +133,7 @@ export default function createLotFinderRouter({ resolveLocation, getSettings = (
       const dryRun = req.body?.dryRun === false ? null : true;
       const job = startLotFinder({ client, locationId, saved, store, sendsEnabled: process.env.CARD_SENDS_ENABLED === "true", deps, dryRun, trigger: "manual", rescan: req.body?.rescan === true });
       if (req.body?.wait) await job.done;
-      res.json({ ok: true, job: { status: job.status, startedAt: job.startedAt, error: job.error,
+      res.json({ ok: true, job: { id: job.id, status: job.status, startedAt: job.startedAt, error: job.error,
         ...(job.result ? { dryRun: job.result.dryRun, pockets: job.result.pockets, traced: job.result.traced, imported: job.result.imported, texts: job.result.texts, rows: job.result.rows.slice(0, 100) } : {}) } });
     } catch (err) { fail(res, err); }
   });
