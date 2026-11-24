@@ -470,9 +470,9 @@ the numbers before switching a pocket on.
    contact = the principal, company = the entity. Someone already
    in GHL as an agent or a buyer is left as they are. Dry unless
    `OUTREACH_IMPORTS_ENABLED`, like every import.
-5. **Texts**: the first text names the street and the price band in the
-   method's shape (eight variants, `OPEN_TEXTS`: who we are, the address,
-   respect for their time, the band, cash and no agent fees, one soft ask);
+5. **Texts**: the first text names the street and the neighborhood, never a
+   number (Matt, 2026-11-23: no price band in the first text; eight variants,
+   `OPEN_TEXTS`: who we are, the builders we work with, the address, one soft ask);
    one follow-up `followUpDays` after the first actually went
    (`lot_owner_sent`, never the draft); then nothing (`nextOwnerStep`). House
    rules hold: no dollar sign, one question, no "following up"; a text that
@@ -494,8 +494,9 @@ wearing the **owner playbook** (party `agent`, `partySource lot_owner`, lane
 `owner`; `OWNER_PLAYBOOK` in `shared/lot-finder.js`, Matt's own words added
 from Autopilot → Lots): a homeowner, not an agent; we work with builders and
 say so; only the lot and what they need, never the roof or the kitchen; the
-price band and the eight percent openly, the Zestimate line, a counter is a
-number not a no; privacy, certainty, a couple of months after closing; no
+price is Matt's (never a number, a range or a band; Matt prices every lot), the
+eight percent a listing would cost them, the Zestimate line, a number from
+them is a counter not a no; privacy, certainty, a couple of months after closing; no
 "cash", no assign/fee words, no "other fixers". The listing-agent blocks that
 don't fit are left out of the system prompt (`buildSystemPrompt({ lane })`),
 the range-only float and the "a person prices it" line are off for them, and

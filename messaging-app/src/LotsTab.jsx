@@ -1,9 +1,11 @@
 // LotsTab.jsx — Autopilot → Lots (2026-11-23): the luxury teardown lane's
 // front end. A pocket is a circle around an address; the finder pulls the
 // old houses on big lots in it, looks up the owners' cell numbers, puts them
-// in GHL tagged apart from agents, and texts each one once with the price
-// band, then a follow-up a day later. A reply is yours: the bot never
-// answers a homeowner, and the Desk says call now.
+// in GHL tagged apart from agents, and texts each one once (their street and
+// neighborhood, never a number), then a follow-up a day later. Matt prices
+// every lot. A reply pings #needs-matt in Slack and lists the owner under
+// "Owners who answered" on the Luxury page; the bot drafts (or, if chosen,
+// sends) an answer that never names a number.
 //
 // Everything ships off. Texts send themselves only when "Texts send
 // themselves" is on here AND the broker has CARD_SENDS_ENABLED and
@@ -66,7 +68,7 @@ function PocketCard({ p, onChange, onRemove, counts, canSuggest }) {
       </div>
       <p className="text-xs text-slate-500">
         {p.lat && p.lng ? "On the map. " : "Not on the map yet: press Suggest, or save and the first run places it. "}
-        {p.bandLo > 0 ? `Comps for the reply: ${money(p.bandLo)} to ${money(p.bandHi)}. The first text names the neighborhood, not a number.` : "No price band yet: the first text still goes (it names the neighborhood, not a number); the bot has no comps to quote until Suggest sets one."}
+        {p.bandLo > 0 ? `Your price band: ${money(p.bandLo)} to ${money(p.bandHi)}, for your own pricing. The bot never quotes it, and the first text names the neighborhood, not a number.` : "No price band yet: Suggest sets one for your own pricing. The first text still goes (it names the neighborhood, not a number)."}
         {c.total ? ` · ${c.total} found, ${c.traced || 0} with a cell, ${c.imported || 0} in GHL, ${c.no_phone || 0} no cell.` : ""}
       </p>
       {note && <p className="text-xs text-blue-800" role="status">{note}</p>}
@@ -142,7 +144,7 @@ export default function LotsTab() {
           </div>
         </div>
         <p className="max-w-3xl text-xs text-slate-600">
-          Each weekday at 10am: pull the old houses on big lots in each pocket (weekly), look up the owners' cell numbers up to the day's cap, put the day's new ones in GHL tagged <code>lot-owner</code>, and write each a first text that names the price band, then one follow-up a day later. A reply is yours: the bot never answers a homeowner, and the Desk says call now. The same weekly pass reads the new builds that sold in the pocket and finds the builders behind them, by their own number: the contractor registry by name, the county's sale record for the company, a skip trace for a one-off LLC. Only the builder goes into the buyer book, never the listing agent.
+          Each weekday at 10am: pull the old houses on big lots in each pocket (weekly), look up the owners' cell numbers up to the day's cap, put the day's new ones in GHL tagged <code>lot-owner</code>, and write each a first text that names their street and neighborhood, never a number, then one follow-up a day later. When an owner writes back you get a ping in Slack's #needs-matt and they show under Owners who answered on the Luxury page. The bot's reply (a draft for you, unless you pick otherwise below) never names a number: you price every lot. The same weekly pass reads the new builds that sold in the pocket and finds the builders behind them, by their own number: the contractor registry by name, the county's sale record for the company, a skip trace for a one-off LLC. Only the builder goes into the buyer book, never the listing agent.
         </p>
         {err && <ErrorBar>{err}</ErrorBar>}
         {msg && <p className="mt-2 text-sm text-blue-800" role="status">{msg}</p>}
@@ -162,7 +164,7 @@ export default function LotsTab() {
         </div>
         <details className="mt-3 rounded-lg border border-slate-200 p-3">
           <summary className="cursor-pointer text-xs font-semibold text-slate-700">How the bot talks to owners and builders</summary>
-          <p className="mt-2 text-xs text-slate-500">The bot already knows the method: no condition questions, the price band and the eight percent openly, privacy and certainty, a couple of months after closing; to a builder, the lot and the envelope, never ARV or rehab. Add your own words here and they ride along with it.</p>
+          <p className="mt-2 text-xs text-slate-500">The bot already knows the method: no condition questions, never a number, a range or a band (you price every lot), the eight percent a listing would cost them, privacy and certainty, a couple of months after closing; to a builder, the lot and the envelope, never ARV or rehab. Add your own words here and they ride along with it.</p>
           <label className="mt-2 block text-xs font-semibold text-slate-600">Your words for owners (blank = the default below)
             <textarea className={INPUT} rows={4} value={f.ownerPlaybook} placeholder={OWNER_PLAYBOOK.slice(0, 220) + "…"} onChange={(e) => set({ ownerPlaybook: e.target.value })} />
           </label>
