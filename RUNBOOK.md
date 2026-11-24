@@ -6951,6 +6951,49 @@ never-texted, off-market). Check: `GET /api/dashboard/line` → `supply`.
 
 **Last night's leaks on Today.** The nightly audit runs `lineFor` after its sweep and keeps `leakSummary` on its result (`audit.leaks`). Today's status strip shows "Leaks last night: N", linking to this tab, with the backlog beside it ("· M waiting for a check-in seat"). N counts what fell off, not what waits on you or waits for a seat.
 
+## Machine health — the keys, the stoppers, the red line (2026-11-23)
+
+The 11-11 Apify outage ran a week before anyone saw it: the only warnings
+were a #machine line nobody was tagged on and Reports → Line. Now:
+
+- **Key check** (`ghl-broker/key-health.js`, off until `keyHealth.enabled`;
+  turn it on with `PATCH /api/offers/settings { "keyHealth": { "enabled": true } }`).
+  From 7am Pacific on the tick: Apify `GET /v2/users/me` and
+  `/v2/users/me/limits`, and Anthropic's models list (one row). All free.
+  RentCast, Tracerfy, RealEstateAPI and Bricked have no free signed-in read,
+  so they are not checked. A key its provider rejects (401/402/403) is read
+  again every hour until it works. Kept on the `keyHealth` cursor; on the
+  Line as "Key check".
+- **#machine**: a rejected key is an @Matt line the first day and every day
+  it lasts; Apify past 80% of its monthly limit is its own line. Failures that
+  stop the business (`shared/machine-health.js`: an auth failure in a revenue
+  lane, or a switched-on revenue job that stopped, failed twice today, or
+  failed on a rejected key) @mention Matt once a day while they last. Other
+  errors are told as before, untagged.
+- **The red line** on Offers and Deals (`MachineTrouble.jsx`) reads
+  `GET /api/dashboard/machine`: two small cursors (`keyHealth`, and
+  `machineTrouble`, which the Slack runner writes each tick). Hidden when all
+  is well; stoppers older than an hour are dropped, so with Slack off only
+  the key lines show.
+- **The outreach listing check** asks Apify whether the token works before
+  the day's pull, so a rejected token stops the day before any RentCast
+  request is spent.
+- **Late jobs**: the switchboard (`job-switches.js`) now reads the switches
+  of the outreach sweep, follow-up sweep, both check-ins, price watch, the
+  delivery check (every 2 hours), the daytime pass, buyer waves, tier check,
+  lot finder and gatekeeper line, so one that stops is called late. A workday
+  with no finished outreach run by 1pm Pacific (or two hours after its start
+  hour, if later) gets the empty-day line.
+- **Underwrites a provider killed** (`shared/underwrite-retry.js`): the Today
+  timer (`driver.timers`) retries a book draft held "stopped early" on a
+  provider's error once — a network failure any time, a rejected key once the
+  key check reads that key good — stamped `autoUnderwrite.retriedAt`. Never
+  on a house with a hand-priced or priced row, a later row, a sent number or
+  a pass, on either spelling. Rows over 21 days old are left; five a pass at
+  most, through the same daily cap and dry-run switch as every conversation
+  underwrite. Until its retry the Needs Matt clock never passes the card;
+  after it, the clock counts from the retry.
+
 ## Follow-up (Reports → Follow-up, 2026-10-17)
 
 Matt couldn't see what follow-up the app was generating, or what was queued for any one agent, offer or buyer. The answer was spread over the Offers column (offers only, next touch only), the check-in plan, the follow-ups preview and the Line, and buyers had nothing. This page puts it in one place, laid out like his sketch. It only reads.
