@@ -747,7 +747,10 @@ ok("excludes unselected comps", !html.includes("not selected"));
 ok("shows the scope", html.includes("Kitchen refresh") && html.includes("$32,500"));
 ok("watermarks with the recipient", html.includes("Priya Raman · CONFIDENTIAL"));
 ok("spread computed", html.includes("Spread at ARV") && html.includes("$131,000"));
-ok("warns against forwarding", html.includes("yours alone"));
+// What went wrong (audit, 2026-11-23, dispo-8): "This link is yours only and
+// it's tracked, please don't forward it" read as cold to buyers who forward
+// deals to their partners anyway, and one answered with Stop.
+ok("never asks the buyer not to forward it, or warns that every view is logged", !html.includes("yours alone") && !/forward|every view is logged/i.test(html));
 
 console.log("\n== viewer: each invite is watermarked to its own recipient ==");
 r = await jget(`${B}/api/datarooms/${room.id}/invites`, {
@@ -905,7 +908,8 @@ r = await jget(`${B}/api/datarooms/${room.id}/invites`, {
 });
 ok("dry run previews the text", r.body?.send?.dryRun === true && r.body.send.preview.message.includes("/d/"), JSON.stringify(r.body?.send || {}).slice(0, 300));
 ok("dry run sends nothing", r.body.send.sent === undefined);
-ok("text asks them to keep it to themselves, in Matt's voice", /keep it to yourself/.test(r.body.send.preview.message) && !/[—–]/.test(r.body.send.preview.message));
+ok("text says they can pass it to a partner, in Matt's voice, and never to keep it to themselves",
+  /partner/.test(r.body.send.preview.message) && !/keep it to yourself|forward|tracked|yours only/i.test(r.body.send.preview.message) && !/[—–]/.test(r.body.send.preview.message));
 
 console.log("\n== the price follows the deal's terms ==");
 const { syncDealNumbers } = await import("./dataroom.js");
