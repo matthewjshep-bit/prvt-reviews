@@ -10165,7 +10165,10 @@ that check wasn't loosened.
 (`BUYER_HUMAN_ACTIVE_MIN`) after any text or call of Matt's to a buyer, not
 only when his was the last text of ours (`handLines` reads every line of ours
 in the window; a sent draft, the offer text or a GHL template isn't his). The
-stand-aside for agents is unchanged.
+stand-aside for agents is unchanged. Between one and two hours after photos
+or a link of his, no package link goes by itself from any path (the blast's
+link on reply, the dataroom guard, the reply's own offer), and a reply that
+offers them again is held.
 
 **A buyer's yes is a call now.** A buyer who wants to buy it
 (`wants_to_buy`), says yes to the walkthrough (`walkthrough: coming`), or

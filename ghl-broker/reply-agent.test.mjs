@@ -9939,3 +9939,57 @@ test("a buyer who names a partner to get deals puts a row in for Matt to add the
   assert.deepEqual([ev.data.name, ev.data.relation, ev.data.email, ev.data.buyer], ["Jo", "partner", "jo@example.com", true]);
   assert.equal(ev.data.phrase, undefined, "never their words");
 });
+
+const buyerThreadClient = (messages) => {
+  const base = buyerClient();
+  return { ...base, call: async (path, opts = {}) => {
+    if (path.startsWith("/conversations/search")) return { conversations: [{ id: "cv1" }] };
+    if (path.startsWith("/conversations/cv1/messages")) return { messages: { messages } };
+    return base.call(path, opts);
+  } };
+};
+const msgAgo = (id, direction, body, min) => ({ id, direction, messageType: "TYPE_SMS", body, dateAdded: new Date(Date.now() - min * 60000).toISOString() });
+
+// Investor-engaged-5 #155: Matt texted the photo link, the buyer wrote back
+// with their numbers 55 minutes later, and the bot answered by itself,
+// promising the photos again.
+test("a buyer Matt texted 50 minutes ago is left to Matt, not answered by the bot", async () => {
+  _resetJobs();
+  const store = buyerStore();
+  const client = buyerThreadClient([
+    msgAgo("m1", "inbound", "interested, got photos?", 70),
+    msgAgo("m2", "outbound", "Here you go https://photos.example/abc", 50),
+    msgAgo("m3", "inbound", "nice. what's the ARV on it?", 1),
+  ]);
+  const { job } = await startReply({ client, locationId: "LOC", saved: BUYER_SAVED, store, contactId: "c1", message: "nice. what's the ARV on it?", channel: "sms", sendsEnabled: true,
+    deps: { draft: async () => ({ ...DRAFT, intent: "question", confidence: "high", reply: "ARV is around 600k.", propertyAddress: "2010 NE 54th St", counterAmount: 0 }) } });
+  await settle();
+  // The thread is his (the stand-aside that already held for 45 minutes on
+  // the last text of ours): the bot holds, and nothing is sent.
+  assert.equal(job.status, "held");
+  assert.match(job.heldReason, /you replied to them 5\d minutes ago/);
+  assert.equal(((await store.listReplyDrafts("LOC", { contactId: "c1" })) || []).filter((d) => d.status === "sent" || d.status === "scheduled").length, 0);
+});
+
+test("a buyer Matt sent the photo link to 90 minutes ago doesn't get the package link again from the bot", async () => {
+  _resetJobs();
+  const store = buyerStore();
+  const client = buyerThreadClient([
+    msgAgo("m1", "inbound", "interested, got photos?", 100),
+    msgAgo("m2", "outbound", "Here you go https://photos.example/abc", 90),
+    msgAgo("m3", "inbound", "thanks, what are the beds?", 1),
+  ]);
+  const invites = [];
+  const { job } = await startReply({ client, locationId: "LOC", saved: BUYER_SAVED, store, contactId: "c1", message: "thanks, what are the beds?", channel: "sms", sendsEnabled: true,
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "interested", confidence: "high", reply: "3 bed, 2 bath. Here's the package too.", propertyAddress: "2010 NE 54th St", counterAmount: 0 }),
+      dataroomInviteGuard: async () => ({ ok: true, address: BUYER_DEAL.address, score: 90 }),
+      issueDataroomInvite: async (a) => { invites.push(a); return { sent: true, address: "2010 NE 54th St" }; },
+    } });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(invites.length, 0, "no link went");
+  assert.ok(!(d.actions || []).some((x) => x.type === "send_dataroom_invite" && x.mode === "auto"));
+  assert.match(d.flags.join(" · "), /you sent them photos or a link 9\d minutes ago/);
+});

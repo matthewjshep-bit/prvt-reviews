@@ -6592,6 +6592,12 @@ async function runReply(job, ctx) {
       else plan.suggested.push({ ...action, mode: "ask", why: `the reply offers the ${pkg} on ${where} — send it with your reply` });
     }
   }
+  // Photos or a link Matt sent by hand in the last two hours (dispo-11): no
+  // package link goes by itself on top of his, from any path above.
+  if (party === "investor" && a.mattSentLink && plan.auto.some((x) => x.type === "send_dataroom_invite")) {
+    plan.auto = plan.auto.filter((x) => x.type !== "send_dataroom_invite");
+    warnings.push(`no package link: you sent them photos or a link ${a.mattSentLink.minutesAgo} minutes ago`);
+  }
   if (a.stampTag) {
     plan.auto.unshift({ id: `a-route-${job.id}`, type: "add_tags", tags: [a.stampTag], mode: "auto", status: "pending", party, why: "routed by the message" });
   }
