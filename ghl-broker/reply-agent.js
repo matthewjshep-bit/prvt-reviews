@@ -114,7 +114,7 @@ import {
   getContact, createContactNote, addContactTags, removeContactTags, sendSms, sendEmail, smsUnsubscribed, emailUnsubscribed, DND_TAG,
   emailReplyText,
 } from "./ghl.js";
-import { optedOutLine, optOutTagsOf, promisesToStop, OPT_OUT_ACTION } from "./shared/opt-out.js";
+import { optedOutLine, optOutTagsOf, promisesToStop, OPT_OUT_ACTION, noToTakingYouOff, LAST_WORD_TEXT_RX } from "./shared/opt-out.js";
 import { optedOutFor, recordOptOut, machineStarted } from "./opt-out.js";
 import { listJobs as listUnderwriteJobs } from "./auto-underwrite.js";
 import { endsWithQuestionToThem } from "./shared/promise-resolver.js";
@@ -4269,6 +4269,9 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier, stanc
     ...(kind === "outreach_nudge" ? { home: homeFor({ county: subject?.county, address }, normalizeOpener(saved?.outreachAutopilot?.opener)),
       mode: normalizeOpener(saved?.outreachAutopilot?.opener).mode, followUps: normalizeOpener(saved?.outreachAutopilot?.opener).followUps,
       checkIns: normalizeOpener(saved?.outreachAutopilot?.opener).checkIns, ...repeatOf(subject),
+      // The cold ladder's last text, sent on its own (last-word.js): the
+      // "sorry for all the texts" one, whatever rung it would have been.
+      ...(subject?.lastWord ? { lastWord: true } : {}),
       // A recent lister's first text named a house that's gone: no follow-up asks about it.
       ...(subject?.pastListing ? { pastListing: true } : {}),
       // The check-ins after day 16 (2026-11-09): their town, off the house
@@ -5083,6 +5086,8 @@ async function runProactive(job, ctx) {
       ...(kind === "outreach_open" ? openerChoices(outbound) : {}),
       // Which of Matt's fixed texts went, when one did.
       ...(draft.standard ? { standard: draft.standard, ...(kind === "outreach_open" ? { style: "standard" } : {}) } : {}),
+      // The cold ladder's last text: their "no" to it is an opt-out (lastSentIsLastWord).
+      ...(kind === "outreach_nudge" && outbound.lastWord ? { lastWord: true } : {}),
       // The composer's arm and the one thing it named (shared/check-in.js
       // checkInStamp), read back by the check-ins report.
       ...(stamp ? { checkIn: stamp } : {}),
@@ -5224,6 +5229,24 @@ async function runReply(job, ctx) {
     job.contactName = a.contactName;
     await handleOptOut(job, { ...ctx, config: cfg, party: a.party, partySource: a.partySource, matchedTags: a.matchedTags, confidence: "high", reason: "an opt-out keyword",
       via: job.channel === "email" ? "email" : "sms_keyword", inbound: theirTexts.length > 1 ? theirTexts.join("\n") : job.message });
+    return;
+  }
+  // "No" to our cold ladder's last text (2026-11-24: "do you work with buyers
+  // who fix houses up? If not, happy to take you off my list"): they took the
+  // offer, so it is their opt-out, the same handling as STOP. Only when that
+  // text is the newest thing we sent them.
+  if (!isCall && theirTexts.length && theirTexts.every((t) => noToTakingYouOff(t))
+      && await lastSentIsLastWord({ store, locationId, contactId: job.contactId, now })) {
+    job.phase = "reading";
+    const a = await assembleConversation({
+      client, locationId, saved, store, contactId: job.contactId, message: job.message, channel: job.channel,
+      explicitParty: job.party, now, warnings, light: true,
+    });
+    job.party = a.party;
+    job.partySource = a.partySource;
+    job.contactName = a.contactName;
+    await handleOptOut(job, { ...ctx, config: cfg, party: a.party, partySource: a.partySource, matchedTags: a.matchedTags, confidence: "high",
+      reason: "they said no to \"should I take you off my list\"", via: "sms_keyword", inbound: theirTexts.length > 1 ? theirTexts.join("\n") : job.message });
     return;
   }
   // A longer text that opens with a keyword ("Stop, not interested"): the
@@ -7795,6 +7818,18 @@ const mediaDraft = (config) => ({
 // reads (opt-out.js), whichever channel it came on. A model read below high
 // writes none: its actions wait as asks, with an Opt out button that writes
 // it when you press it.
+// Is the newest text we sent them the cold ladder's last one, inside three
+// weeks? A read that fails says no: their "no" then goes to the model.
+const LAST_WORD_ANSWER_DAYS = 21;
+export async function lastSentIsLastWord({ store, locationId, contactId, now = Date.now() }) {
+  if (!contactId || typeof store?.listReplyDrafts !== "function") return false;
+  const sent = await store.listReplyDrafts(locationId, { contactId, status: "sent", limit: 10 }).catch(() => []);
+  const at = (d) => Date.parse(d?.sentAt || d?.updatedAt || d?.createdAt || "") || 0;
+  const newest = (sent || []).filter((d) => d?.channel !== "email").sort((x, y) => at(y) - at(x))[0];
+  if (!newest || now - at(newest) > LAST_WORD_ANSWER_DAYS * 86400000) return false;
+  return Boolean(newest.outbound?.lastWord || newest.outbound?.standard?.set === "cold_last" || LAST_WORD_TEXT_RX.test(String(newest.sentText || newest.reply || "")));
+}
+
 async function handleOptOut(job, ctx) {
   const { client, locationId, store, config, party, partySource, matchedTags, confidence, reason, via = "model", inbound = null, deps = {} } = ctx;
   const warnings = job.warnings;

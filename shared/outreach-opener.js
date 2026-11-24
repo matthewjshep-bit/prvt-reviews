@@ -193,10 +193,26 @@ export const PREVIOUS_DEFAULT_CHECK_IN_TEXTS = [
   "Hi {first}, any distressed or value-add properties come up lately, on or off market? Always happy to take a look.",
 ];
 // The ladder's last check-in (day 58 on the default ladder): says so.
+// The cold ladder's last text (Matt, 2026-11-24: "sorry I've been reaching
+// out so much, do you work with investors or not, happy to take off list if
+// not... more personable"). Generic "any fixers?" check-ins to agents who
+// never answered got 3% replies (1,712 sends, the 11-23 audit); this one owns
+// the volume and asks one yes/no. Never "investor" (carriers block it,
+// shared/carrier-words.js), and the yes/no question comes first so "yes" can
+// only mean they do. Never "I'll take you off": once that goes it reads as
+// their opt-out (shared/opt-out.js promisesToStop); "no" to it is one
+// (noToTakingYouOff). The last one is for a contact with no first name.
 export const COLD_LAST_RUNG_TEXTS = [
-  "Hi {first}, last one from me for a while. If a house near {town} ever needs real work, can I take a look?",
-  "{first}, I'll leave you be after this. If one of yours ever needs too much work for retail buyers, can I see it first?",
+  "Hey {first}, sorry for all the texts. Do you ever work with buyers who fix houses up? If not, happy to take you off my list.",
+  "{first}, don't want to keep blowing up your phone. Do you work with buyers who renovate? If not, I can take you off my list.",
+  "Hi {first}, sorry for the extra texts. Is working with buyers who fix up houses something you do? If not, happy to take you off my list.",
+  "Hey {first}, I've texted a few times, sorry about that. Do you ever work with buyers who renovate? Happy to take you off my list if not.",
+  "Hey, sorry for all the texts. Do you ever work with buyers who fix houses up? If not, happy to take you off my list.",
 ];
+// The follow-up step the last text is filed under when it goes outside the
+// ladder (ghl-broker/last-word.js): past any real rung, so the ladder counts
+// it as a repeat already sent and never sends a second one.
+export const LAST_WORD_STEP = 999;
 
 export const OPENER_MAX_EXAMPLES = 8;
 export const OPENER_EXAMPLE_MAX_CHARS = 400;

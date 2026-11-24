@@ -10745,3 +10745,54 @@ Two of them are load-bearing for the auto-underwrite and are easy to forget:
   same reason. **If you change the pricing, change it here** — the pane, the
   scope-of-work PDF and the automation all read this one function, and the
   whole point is that they can't quote different repair numbers.
+
+## The cold ladder ends on one honest text (2026-11-24)
+
+Matt: "some agents we've just been blasting with no reply, and the ones with
+no reply are only going to flag the 'any fixers' kind of messaging... hey
+sorry I've been reaching out so much, do you work with investors or not,
+happy to take off list if not." The 11-23 audit: to agents who never
+answered, generic check-ins ("any houses around Kent that need real work?",
+"any distressed or value-add properties…") got 3% replies over 1,712 sends,
+area asks 2%; the day-2 nudge about their listing 11–15%.
+
+- **The ladder:** first text, day 2 (names the street), then ONE last text
+  at the first repeat (day 16 with `steps [2]`, `repeatEvery 14`,
+  `maxRepeats 1`), then nothing. `maxRepeats` now stops the cold ladder
+  (follow-up-sweep.js `capped`, as it already did the offer nudge); until
+  now it only picked which rung said it was the last, and the texts ran on
+  to day 58. The sweep passes `maxRepeats` to the rung so `repeatOf` marks it
+  the last. After the ladder a cold agent hears only about a fresh listing
+  of theirs (agent-pulse, `coldMaxUnanswered`), as before.
+- **The last text** (shared/outreach-opener.js `COLD_LAST_RUNG_TEXTS`, picked
+  by shared/standard-texts.js, never a generic check-in in its place):
+  "Hey {first}, sorry for all the texts. Do you ever work with buyers who fix
+  houses up? If not, happy to take you off my list." and three more like it,
+  plus one with no name. No "investor" (carriers block it,
+  shared/carrier-words.js), the yes/no question first so "yes" means they do,
+  and never "I'll take you off": once sent that reads as their opt-out
+  (shared/opt-out.js `promisesToStop`).
+- **Their answer:** a plain no to it ("no", "nope", "not really", "please
+  do", "take me off"…; `noToTakingYouOff`) when that text is the newest we
+  sent them, inside 21 days (reply-agent.js `lastSentIsLastWord`), gets the
+  STOP handling: silence, the opt-out tags, no model call. "No but I have one
+  coming", "No worries" and "Yes" go to the model as any reply.
+- **The agents whose ladder ran before this** get it once from a queue
+  (ghl-broker/last-word.js, cursor `lastWord`, tick area "last-word"):
+  `POST /api/outreach/last-word { contactIds, perDay, notBefore, dryRun }`
+  (dryRun unless `dryRun: false`), `GET /api/outreach/last-word`,
+  `POST /api/outreach/last-word/clear`. Workdays 9am–3pm Pacific, not on
+  `autoSend.offDays`, from `notBefore`, 25 a tick up to `perDay` (default
+  160, 10–400). Each is claimed as a `follow_up_sent` at step 999
+  (`LAST_WORD_STEP`, `data.lastWord`) and started with `startProactive`
+  (every machine guard: Stop, dead number, opt-out, one voice, the lane
+  breaker, the spread). Someone who wrote back since is skipped. The ladder
+  never sends a rung after it. Nothing queued, nothing happens.
+- **Settings that go with it (live, 2026-11-24):**
+  `conversationAi.parties.agent.followUp.ladders.outreach_nudge.maxRepeats`
+  2 → 1; `outreachAutopilot.checkInEmail.enabled` → false (the check-in
+  email only ever went to agents who never answered, every 14 days with the
+  cold texts). The day-2 intro email stays.
+- **Check:** `GET /api/outreach/last-word` (queued, today's count, started,
+  skipped, the last results by contact id); replies by `outbound.lastWord`
+  on the sent drafts; the lane breaker covers `outreach_nudge`.

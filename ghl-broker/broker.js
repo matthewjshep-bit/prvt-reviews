@@ -28,6 +28,7 @@ import { checkObjectStore } from "./r2.js";
 import { sendDueDrafts, inFlightSends } from "./conversation-scheduler.js";
 import { recordBoot, sampleMemory, reportSchema, rootHandler, guarded, makeShutdown, untilIdle, BOOT_TICK_DELAY_MS, MEMORY_SAMPLE_MS, DRAIN_MS, TICK_STUCK_MS, SEND_LOOP_STUCK_MS, RESTART_NOTE as RESTART_LOG } from "./boot.js";
 import { maybeStartFollowUpSweep, FOLLOW_UP_UTC_HOUR } from "./follow-up-sweep.js";
+import { maybeRunLastWord } from "./last-word.js";
 import { sendReplyDraft, conversationConfig, startProactive } from "./reply-agent.js";
 import { maybeStartOutreachSweep } from "./outreach-sweep.js";
 import { maybeStartOutreachFollowUp } from "./outreach-followup.js";
@@ -287,6 +288,14 @@ const TICK_JOBS = [
     const nudged = await maybeStartFollowUpSweep({ client, locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE, utcHour: FOLLOW_UP_UTC_HOUR,
       deps: offersRouter.conversationDepsFor({ locationId, client, saved }) });
     if (nudged) console.log(`follow-up sweep started for ${locationId}`);
+  } },
+  // The cold ladder's last text, once, to the agents Matt queued (last-word.js,
+  // 2026-11-24): a few a tick, `perDay` a workday, in the machine's hours,
+  // each started like a follow-up rung. Nothing queued, nothing happens.
+  { area: "last-word", run: async ({ client, locationId, saved }) => {
+    const r = await maybeRunLastWord({ client, locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE,
+      deps: offersRouter.conversationDepsFor({ locationId, client, saved }) });
+    if (r?.ran) console.log(`last word for ${locationId}: ${r.started} started, ${r.skipped} skipped`);
   } },
   // The top of the funnel, same tick: pull, pick, import, say hello.
   { area: "outreach", run: async ({ client, locationId, saved }) => {
