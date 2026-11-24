@@ -385,6 +385,7 @@ export const LINE_JOBS = {
   ghlMirror: { label: "GHL mirror", every: "tick" },
   // Every two hours (shared/delivery.js DELIVERY_EVERY_MS), not every tick.
   deliveryWatch: { label: "Delivery check (only while on)", every: "tick", everyMs: 2 * 3600000 },
+  laneBreaker: { label: "Lane breaker", every: "tick" },
   outreachScorecard: { label: "Text scoreboard", every: "day" },
   // The broker's own start (ghl-broker/boot.js): "failed" when it restarted
   // without a new commit, which is a crash or a manual restart.

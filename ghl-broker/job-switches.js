@@ -84,5 +84,7 @@ export function jobSwitches(saved = {}) {
     gatekeepers: normalizeGatekeepers(saved?.outreachAutopilot?.gatekeepers).enabled,
     // key-health.js: settings.keyHealth.enabled.
     keyHealth: normalizeKeyHealth(saved?.keyHealth).enabled,
+    // lane-breaker.js: on unless switched off.
+    laneBreaker: Boolean(ai.laneBreaker?.enabled),
   };
 }

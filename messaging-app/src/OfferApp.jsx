@@ -20,6 +20,7 @@ import { PanelRight, Plus } from "lucide-react";
 import { brandMarkSvg } from "@shared/brand-mark.js";
 import NewOffer from "./NewOffer.jsx";
 import OffersHistory from "./OffersHistory.jsx";
+import LaneBreakerStrip from "./LaneBreakerStrip.jsx";
 import DealsView from "./DealsView.jsx";
 import AgentOutreach from "./AgentOutreach.jsx";
 import Dispositions from "./Dispositions.jsx";
@@ -373,6 +374,7 @@ export default function OfferApp() {
             startLane={APP_MODE === "luxury" ? "luxury" : ""}
           />
         )}
+        {(view === "history" || view === "deals") && <LaneBreakerStrip />}
         {view === "history" && (
           <OffersHistory onEdit={(o) => { setEditing(o); setView("new"); }}
             onNew={(contactId) => { setEditing(null); setInitialContactId(contactId); setFormNonce((n) => n + 1); setView("new"); }}

@@ -97,6 +97,64 @@ export function sentDraftInWindow(d, { locationId, fromIso, toIso }) {
     && Boolean(String(d.ghlMessageId || "")) && d.delivery == null;
 }
 
+// listLaneSends, both backends: the lane breaker's read (lane-breaker.js).
+// One kind's sent texts since `sinceIso` that answer nothing of theirs (no
+// inbound) and aren't emails, trimmed to what says how each went: newest
+// first ("desc", the rolling window) or oldest first ("asc", today's first
+// sends), and up to `untilIso` when given (the STOP window: sends old enough
+// for a STOP to have come). Change the SQL and laneSendRow/laneSendInWindow
+// together. reply_drafts_lane_sends_idx (schema.pg.sql) is this query's index.
+const LANE_SEND_FIELDS = ["id", "contactId", "sentAt", "ghlMessageId", "channel", "delivery", "laneRead", "autoSent"];
+export function laneSendsQuery({ locationId, kind, sinceIso, untilIso = null, order = "desc", limit = 50 }) {
+  const until = untilIso ? `\n         and (doc->>'sentAt') <= $5` : "";
+  return {
+    text: `select jsonb_build_object(${LANE_SEND_FIELDS.map((k) => `'${k}', doc->'${k}'`).join(", ")}, 'kind', doc #> '{outbound,kind}') as doc
+       from reply_drafts
+       where location_id = $1 and status = 'sent'
+         and (doc #>> '{outbound,kind}') = $2
+         and (doc->>'sentAt') >= $3${until}
+         and coalesce(length(btrim(doc->>'inbound')), 0) = 0
+         and coalesce(doc->>'channel', 'sms') <> 'email'
+       order by (doc->>'sentAt') ${order === "asc" ? "asc" : "desc"} limit $4`,
+    params: [locationId, kind, sinceIso, Math.max(1, Math.round(Number(limit) || 0)), ...(untilIso ? [untilIso] : [])],
+  };
+}
+export function laneSendInWindow(d, { locationId, kind, sinceIso, untilIso = null }) {
+  return d?.locationId === locationId && d.status === "sent" && d.outbound?.kind === kind
+    && Boolean(d.sentAt) && String(d.sentAt) >= sinceIso && (!untilIso || String(d.sentAt) <= untilIso)
+    && !String(d.inbound || "").trim() && (d.channel || "sms") !== "email";
+}
+
+// setLaneReadQuery, both backends: the breaker's verdict merged onto a sent
+// draft in one statement, only while neither verdict is on it, so it never
+// writes back a copy that loses the delivery check's own (delivery-watch.js
+// writes the whole draft on its own tick).
+export function setLaneReadQuery({ id, verdict }) {
+  return {
+    text: `update reply_drafts set doc = doc || jsonb_build_object('laneRead', $2::jsonb)
+     where id = $1 and status = 'sent'
+       and coalesce(jsonb_typeof(doc->'delivery'), 'null') = 'null'
+       and coalesce(jsonb_typeof(doc->'laneRead'), 'null') = 'null'
+     returning id`,
+    params: [id, JSON.stringify(verdict)],
+  };
+}
+export function laneSendRow(d = {}) {
+  return { ...Object.fromEntries(LANE_SEND_FIELDS.map((k) => [k, d[k] === undefined ? null : d[k]])), kind: d.outbound?.kind ?? null };
+}
+
+// updateReplyDraftIf, both backends: write the draft only while it is still
+// in `from` (the lane breaker turning a scheduled text back into a draft must
+// never land on one the send loop has just claimed or sent).
+export function updateReplyDraftIfQuery({ id, from, doc, at }) {
+  return {
+    text: `update reply_drafts set doc = $3, status = $4, updated_at = $5
+     where id = $1 and status = $2
+     returning doc`,
+    params: [id, from, doc, doc?.status || "draft", at],
+  };
+}
+
 /* ============================================================= *
  * Offer list query
  * ============================================================= */
@@ -756,6 +814,24 @@ const pgStore = {
     const { text, params } = sentDraftsBetweenQuery({ locationId, fromIso, toIso, limit });
     const { rows } = await query(text, params);
     return rows.map((r) => r.doc);
+  },
+  // The lane breaker's read (laneSendsQuery).
+  async listLaneSends(locationId, kind, { sinceIso, untilIso = null, order = "desc", limit = 50 } = {}) {
+    const { text, params } = laneSendsQuery({ locationId, kind, sinceIso, untilIso, order, limit });
+    const { rows } = await query(text, params);
+    return rows.map((r) => r.doc);
+  },
+  // The breaker's verdict, merged (setLaneReadQuery): true when written.
+  async setLaneRead(id, verdict) {
+    const { text, params } = setLaneReadQuery({ id, verdict });
+    const { rows } = await query(text, params);
+    return rows.length > 0;
+  },
+  // Only while it is still `from` (updateReplyDraftIfQuery): true when written.
+  async updateReplyDraftIf(id, from, doc) {
+    const { text, params } = updateReplyDraftIfQuery({ id, from, doc, at: doc?.updatedAt || nowIso() });
+    const { rows } = await query(text, params);
+    return rows.length > 0;
   },
   async getReplyDraft(id) {
     const { rows } = await query(`select doc from reply_drafts where id = $1`, [id]);
@@ -2315,6 +2391,33 @@ const fileStore = (() => {
         .filter((d) => sentDraftInWindow(d, { locationId, fromIso, toIso }))
         .sort((a, b) => String(a.sentAt).localeCompare(String(b.sentAt)))
         .slice(0, Math.max(1, Math.round(Number(limit) || 0)));
+    },
+    async listLaneSends(locationId, kind, { sinceIso, untilIso = null, order = "desc", limit = 50 } = {}) {
+      ensure();
+      const asc = order === "asc";
+      return Object.values(data.replyDrafts)
+        .filter((d) => laneSendInWindow(d, { locationId, kind, sinceIso, untilIso }))
+        .sort((a, b) => (asc ? 1 : -1) * String(a.sentAt).localeCompare(String(b.sentAt)))
+        .slice(0, Math.max(1, Math.round(Number(limit) || 0)))
+        .map(laneSendRow);
+    },
+    // The same check-and-merge as Postgres, with no await between them.
+    async setLaneRead(id, verdict) {
+      ensure();
+      const cur = data.replyDrafts[id];
+      if (!cur || cur.status !== "sent" || cur.delivery != null || cur.laneRead != null) return false;
+      data.replyDrafts[id] = { ...cur, laneRead: verdict };
+      persist();
+      return true;
+    },
+    // The same check-and-write as Postgres, with no await between them.
+    async updateReplyDraftIf(id, from, doc) {
+      ensure();
+      const cur = data.replyDrafts[id];
+      if (!cur || cur.status !== from) return false;
+      data.replyDrafts[id] = doc;
+      persist();
+      return true;
     },
     async getReplyDraft(id) {
       ensure();
