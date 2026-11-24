@@ -569,6 +569,20 @@ reports (Flow, Line, Follow-up, Lessons) and the Companion window.
   when any of that page's rows are on the list; a click filters to them. It
   is a filter over rows that already exist, not a queue, and never the
   default tab (Today was retired 2026-10-20 for refilling).
+- The Offers table: an agent with one house is one row (no fold); a folded
+  agent shows "a send failed"; documents, AI enrichment and Delete sit
+  behind each row's ⋯; Edit opens the offer in a sheet over the table, and
+  the tab and search ride in the URL (`?tab=`, `?q=`). On a phone the
+  table is a list of cards.
+- It re-reads itself every three minutes while the tab shows (and on coming
+  back to the tab): only the light `GET /api/offers?lean=1`, never the
+  activity read, then What's next for at most five agents whose rows moved,
+  one at a time (`offers-refresh.js`, `light-poll.js`).
+- Under their counter in the offer pane: **Hold ours** puts the hold words
+  (`GET /api/offers/:id/hold`, never above what we sent) in the reply box;
+  **Meet…** opens our number's re-quote pre-filled halfway, never above
+  their counter or the house's walk-away, and nothing changes until Re-quote;
+  **Walk** marks we passed with a reason. None of them sends anything.
 
 Netlify auto-builds from `main` via the root `netlify.toml`. The API base
 defaults to the live broker; override with `VITE_API_BASE` in Netlify env if
