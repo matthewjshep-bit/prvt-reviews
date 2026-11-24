@@ -622,7 +622,7 @@ export async function runSlackPings({ store = defaultStore, locationId, saved = 
     const empty = sweep?.doc?.emptyDay?.day === today ? sweep.doc.emptyDay : missedDayFor(sweep, saved, now);
     if (empty?.day === today && empty.text && sweep?.doc?.lastEmptyAlertDay !== today) {
       const key = slackClaimKey("empty", `${OUTREACH_CURSOR}:${today}`);
-      if (!claimed[key]) owed.push({ key, stream: "machine", kind: "empty_day", msg: renderEmptyDay(empty), after: () => markEmptyDayTold(store, locationId, today) });
+      if (!claimed[key]) owed.push({ key, stream: "machine", kind: "empty_day", msg: renderEmptyDay(empty, empty.missed ? cfg.mattUserId : ""), after: () => markEmptyDayTold(store, locationId, today) });
     }
   }
 
@@ -664,8 +664,9 @@ async function writeTrouble(store, locationId, stoppers, now) {
 
 // The outreach sweep's short day: its own line of counts and reason words
 // (outreach-sweep.js emptyDayFor), which never names a contact.
-function renderEmptyDay(e = {}) {
-  const text = `:warning: ${String(e.text || "").slice(0, 400)}`;
+// A day with no finished run at all stops new-agent outreach: @Matt (2026-11-23).
+function renderEmptyDay(e = {}, mattUserId = "") {
+  const text = `:warning: ${mattUserId ? `<@${mattUserId}> ` : ""}${String(e.text || "").slice(0, 400)}`;
   return { text: text.slice(0, 150), blocks: [{ type: "section", text: { type: "mrkdwn", text } }] };
 }
 

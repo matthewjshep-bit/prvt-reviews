@@ -805,7 +805,7 @@ test("a switched-on outreach sweep that hasn't run by 1pm is reported late", asy
   assert.equal(machinePosts(s).length, 0, "switched off, never");
   await runSlackPings({ store, locationId: LOC, saved: SWEEP_ON, deps: noPipeline, now: TUE(13, 15) });
   assert.equal(machinePosts(s).length, 1);
-  assert.match(said(machinePosts(s)[0]), /Agent sweep: no finished run by 1pm today.*the day's run never started/);
+  assert.match(said(machinePosts(s)[0]), /<@U012MATT34> Agent sweep: no finished run by 1pm today.*the day's run never started/);
   await runSlackPings({ store, locationId: LOC, saved: SWEEP_ON, deps: noPipeline, now: TUE(14) });
   assert.equal(machinePosts(s).length, 1, "once a day");
 });
