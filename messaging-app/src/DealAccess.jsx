@@ -2,7 +2,6 @@ import React, { useState } from "react";
 import { KeyRound } from "lucide-react";
 import { OCCUPANCY, OCCUPANCY_LABEL, ACCESS_METHODS, ACCESS_METHOD_LABEL, accessFor } from "@shared/deal-access.js";
 import { updateDeal } from "./api.js";
-import { BTN_PRIMARY } from "./ui.jsx";
 
 const inputCls = "w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm focus:border-blue-500 focus:outline-none";
 
@@ -17,16 +16,20 @@ export default function DealAccess({ offer, onUpdated }) {
   const [a, setA] = useState(saved);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const dirty = JSON.stringify(a) !== JSON.stringify(saved);
+  const [savedAt, setSavedAt] = useState(false);
   const lived = a.occupancy === "owner_occupied" || a.occupancy === "tenant_occupied";
 
-  async function save() {
-    setError(""); setBusy(true);
+  // Saves as you go (2026-11-23, no Save access button): a pick when you
+  // make it, the notice and the note when you leave the field.
+  async function save(next = a) {
+    if (JSON.stringify(next) === JSON.stringify(accessFor(offer.deal))) return;
+    setError(""); setBusy(true); setSavedAt(false);
     try {
-      const r = await updateDeal(offer.id, { access: a });
-      if (r?.offer) { onUpdated(r.offer); setA(accessFor(r.offer.deal)); }
+      const r = await updateDeal(offer.id, { access: next });
+      if (r?.offer) { onUpdated(r.offer); setA(accessFor(r.offer.deal)); setSavedAt(true); }
     } catch (e) { setError(e.message); } finally { setBusy(false); }
   }
+  const pick = (patch) => { const next = { ...a, ...patch }; setA(next); save(next); };
 
   return (
     <div className="space-y-2">
@@ -38,7 +41,7 @@ export default function DealAccess({ offer, onUpdated }) {
           <span className="mb-1 block text-xs text-slate-500">Occupancy</span>
           <div role="radiogroup" aria-label="Occupancy" className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
             {OCCUPANCY.map((o) => (
-              <button key={o || "unset"} type="button" role="radio" aria-checked={a.occupancy === o} onClick={() => setA((x) => ({ ...x, occupancy: o }))}
+              <button key={o || "unset"} type="button" role="radio" aria-checked={a.occupancy === o} onClick={() => pick({ occupancy: o })}
                 className={`rounded-lg border px-2 py-1.5 text-xs font-semibold transition-colors ${a.occupancy === o ? "border-blue-600 bg-blue-50 text-blue-800" : "border-slate-200 text-slate-600 hover:border-slate-300"}`}>
                 {o ? OCCUPANCY_LABEL[o] : "Not sure"}
               </button>
@@ -48,7 +51,7 @@ export default function DealAccess({ offer, onUpdated }) {
         <div className="grid grid-cols-[1fr_auto] items-end gap-2">
           <label className="block">
             <span className="mb-1 block text-xs text-slate-500">How buyers get in</span>
-            <select value={a.method} onChange={(e) => setA((x) => ({ ...x, method: e.target.value }))} className={inputCls}>
+            <select value={a.method} onChange={(e) => pick({ method: e.target.value })} className={inputCls}>
               {ACCESS_METHODS.map((m) => <option key={m || "unset"} value={m}>{ACCESS_METHOD_LABEL[m]}</option>)}
             </select>
           </label>
@@ -56,13 +59,13 @@ export default function DealAccess({ offer, onUpdated }) {
             <span className="mb-1 block text-xs text-slate-500">Notice</span>
             <span className="flex items-center gap-1">
               <input type="number" min="0" max="168" className={inputCls} value={a.noticeHours || ""} placeholder={lived ? "24" : "0"}
-                onChange={(e) => setA((x) => ({ ...x, noticeHours: Number(e.target.value) || 0 }))} />
+                onChange={(e) => setA((x) => ({ ...x, noticeHours: Number(e.target.value) || 0 }))} onBlur={() => save()} />
               <span className="text-xs text-slate-500">h</span>
             </span>
           </label>
         </div>
         <input className={inputCls} value={a.note} placeholder="Private: lockbox code, tenant's name, showing service…"
-          onChange={(e) => setA((x) => ({ ...x, note: e.target.value }))} />
+          onChange={(e) => setA((x) => ({ ...x, note: e.target.value }))} onBlur={() => save()} />
         <p className="text-xs text-slate-500">
           {!a.occupancy && !a.method
             ? "Not recorded, so the bot tells buyers you'll confirm access and never says it's open or vacant."
@@ -70,7 +73,7 @@ export default function DealAccess({ offer, onUpdated }) {
               ? "The bot tells buyers someone lives there: no drive-bys, no knocking, only at a set time."
               : "The bot says only what's set here. The private note is never shown to it."}
         </p>
-        {dirty && <button type="button" className={BTN_PRIMARY} disabled={busy} onClick={save}>Save access</button>}
+        {(busy || savedAt) && <p className="text-[11px] text-slate-500" aria-live="polite">{busy ? "Saving…" : "Saved"}</p>}
         {error && <p className="text-xs text-rose-700">{error}</p>}
       </div>
     </div>

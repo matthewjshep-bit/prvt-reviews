@@ -35,6 +35,7 @@ import { resolveChecklist, dueWords } from "@shared/deal-checklist.js";
 import { ymdLabel } from "@shared/deal-checklist.js";
 import { PASS_REASONS, PASS_REASON_LABEL } from "@shared/conversation-ai.js";
 import { updateDealFeedback } from "./api.js";
+import { termsFrom, termsChanges, settleTerms, revertTerms, savedLine } from "./deal-autosave.js";
 import { resolveParties } from "@shared/deal-parties.js";
 import { buyerMoneyLine } from "@shared/buybox.js";
 import { dispoPulse, bestWords, moneyLine, inspectionCall } from "@shared/deal-pulse.js";
@@ -510,7 +511,9 @@ function BuyerRead({ deal, busy, onSave, labelCls, inputCls }) {
   const field = (k, label, placeholder) => (
     <div>
       <span className={labelCls}>{label}</span>
-      <input className={inputCls} value={read[k]} placeholder={placeholder} onChange={(e) => setRead((r) => ({ ...r, [k]: e.target.value }))} />
+      <input className={inputCls} value={read[k]} placeholder={placeholder} aria-label={label}
+        onChange={(e) => setRead((r) => ({ ...r, [k]: e.target.value }))}
+        onBlur={() => { if (dirty) onSave(read); }} />
     </div>
   );
   return (
@@ -522,12 +525,7 @@ function BuyerRead({ deal, busy, onSave, labelCls, inputCls }) {
         {field("price", "They'd pay", "$")}
       </div>
       <div className="mt-2">{field("note", "From", "the walkthrough, a text, a call")}</div>
-      {dirty && (
-        <button type="button" disabled={busy} onClick={() => onSave(read)}
-          className="mt-2 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-60">
-          Save what buyers said
-        </button>
-      )}
+      <p className="mt-1.5 text-[11px] text-slate-500">{busy && dirty ? "Saving…" : "Saves when you leave a field."}</p>
     </div>
   );
 }
@@ -574,7 +572,7 @@ function ConfirmDealCard({ offer, warnings = [], onUpdated, onDone }) {
       <div className="mb-2 flex items-start justify-between gap-3">
         <div>
           <div className="text-sm font-semibold text-slate-900">Confirm the deal</div>
-          <div className="text-xs text-slate-600">Buyers are priced off these. Anything off, fix it on Terms &amp; paperwork below.</div>
+          <div className="text-xs text-slate-600">Buyers are priced off these. Anything off, fix it on Terms &amp; paperwork below; it saves as you go.</div>
         </div>
         <button type="button" className={BTN} onClick={onDone}>Looks right</button>
       </div>
@@ -610,13 +608,16 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
   const stopped = dealOutreachStopped(deal);
   const [pulledNote, setPulledNote] = useState("");
   const [resumedNote, setResumedNote] = useState("");
-  const [terms, setTerms] = useState(() => ({
-    contractPrice: deal.contractPrice ?? "",
-    assignmentFee: deal.assignmentFee ?? "",
-    closingDate: deal.closingDate || "",
-    inspectionDate: deal.inspectionDate || "",
-    notes: deal.notes || "",
-  }));
+  const [terms, setTerms] = useState(() => termsFrom(deal));
+  // Saves as you go (2026-11-23, no Save terms button): a field when you
+  // leave it, a date when it changes, and what's still open when the modal
+  // closes. One save at a time, in order, each reading the latest form.
+  const termsRef = useRef(terms);
+  termsRef.current = terms;
+  const dealRef = useRef(deal);
+  dealRef.current = deal;
+  const termsChain = useRef(Promise.resolve());
+  const [termsSave, setTermsSave] = useState({ phase: "" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   // Which tab: kept in ?tab= so a link from Today can open the right one.
@@ -644,12 +645,6 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
   const [postMortemOpen, setPostMortemOpen] = useState(() => {
     try { return new URLSearchParams(window.location.search).get("postmortem") === "1"; } catch { return false; }
   });
-  const termsDirty =
-    String(terms.contractPrice) !== String(deal.contractPrice ?? "") ||
-    String(terms.assignmentFee) !== String(deal.assignmentFee ?? "") ||
-    terms.closingDate !== (deal.closingDate || "") ||
-    terms.inspectionDate !== (deal.inspectionDate || "") ||
-    terms.notes !== (deal.notes || "");
 
   async function run(fn) {
     setError("");
@@ -708,23 +703,55 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
   // The broker reads "15k" as 15,000 and refuses what it can't read (400,
   // shown in the bar). An emptied price or fee is cleared only when you say
   // so, and a contract price under 10k or far off our number asks first (409).
+  // The form and the ref move together, so a save queued behind this one (or
+  // the one closing the modal runs) reads what's on screen now.
+  const putTerms = (next) => { termsRef.current = next; setTerms(next); };
   const saveTerms = async () => {
-    const clearing = ["contractPrice", "assignmentFee"].filter((k) => (String(terms[k] ?? "").trim() === "" || parseMoney(terms[k]) === 0) && deal[k] != null);
-    if (clearing.length && !window.confirm(`Clear the ${clearing.map((k) => (k === "contractPrice" ? "contract price" : "assignment fee")).join(" and ")}? Buyers are priced off ${clearing.length > 1 ? "them" : "it"}.`)) return;
-    const body = { ...terms, ...(clearing.length ? { clear: true } : {}) };
+    const t = termsRef.current;
+    const { body, clearing } = termsChanges(t, dealRef.current, { parse: parseMoney });
+    if (!body) return;
+    if (clearing.length && !window.confirm(`Clear the ${clearing.map((k) => (k === "contractPrice" ? "contract price" : "assignment fee")).join(" and ")}? Buyers are priced off ${clearing.length > 1 ? "them" : "it"}.`)) {
+      putTerms(revertTerms(termsRef.current, clearing, dealRef.current));
+      return;
+    }
+    const sent = { ...body };
+    if (clearing.length) body.clear = true;
     setError("");
-    setBusy(true);
+    setTermsSave({ phase: "saving" });
     try {
       let r;
       try { r = await updateDeal(offer.id, body); }
       catch (e) {
-        if (e.status !== 409 || !window.confirm(e.message)) throw e;
+        if (e.status !== 409) throw e;
+        if (!window.confirm(e.message)) {
+          // Not this number: the field goes back to what the deal holds.
+          putTerms(revertTerms(termsRef.current, Object.keys(sent), dealRef.current));
+          setTermsSave({ phase: "" });
+          return;
+        }
         r = await updateDeal(offer.id, { ...body, confirm: true });
       }
-      if (r?.offer) onUpdated(r.offer);
-    } catch (e) { setError(e.message); }
-    finally { setBusy(false); }
+      if (r?.offer) {
+        onUpdated(r.offer);
+        dealRef.current = r.offer.deal;
+        putTerms(settleTerms(termsRef.current, sent, r.offer.deal));
+      }
+      setTermsSave({ phase: "saved" });
+    } catch (e) { setError(e.message); setTermsSave({ phase: "error", error: e.message }); }
   };
+  const commitTerms = () => {
+    termsChain.current = termsChain.current.then(saveTerms, saveTerms);
+    return termsChain.current;
+  };
+  // A date or anything else that commits on change: the form state lands
+  // first, then the save reads it.
+  const setTermAndSave = (k, v) => {
+    termsRef.current = { ...termsRef.current, [k]: v };
+    setTerms((t) => ({ ...t, [k]: v }));
+    commitTerms();
+  };
+  // Closing saves what's still being typed; the modal goes at once.
+  const close = () => { commitTerms(); onClose(); };
 
   // Stop or resume outreach. Stopping pulls back what was already queued,
   // and resuming puts it back; the banner says how much either way, so
@@ -783,7 +810,7 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
   const labelCls = "mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500";
 
   return (
-    <div className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:p-8" onClick={onClose}>
+    <div className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:p-8" onClick={close}>
       <div className="w-full max-w-7xl rounded-2xl bg-white p-5 sm:p-7 shadow-xl" onClick={(e) => e.stopPropagation()}>
         <div className="mb-4 flex items-start justify-between gap-4">
           <div>
@@ -821,7 +848,7 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
               title="Open this offer in the editor — rehab scope, comps, document">
               <Pencil size={14} /> Open offer
             </button>
-            <button type="button" onClick={onClose} className="rounded p-1.5 text-slate-400 hover:bg-slate-100">
+            <button type="button" onClick={close} aria-label="Close" className="rounded p-1.5 text-slate-400 hover:bg-slate-100">
               <X size={18} />
             </button>
           </div>
@@ -839,7 +866,8 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
         {!stopped && resumedNote && (
           <p role="status" className="mb-4 rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-900">{resumedNote}</p>
         )}
-        {confirming && (
+        {/* Overview has its own kind and access pickers; two of each would disagree. */}
+        {confirming && tab !== "overview" && (
           <ConfirmDealCard offer={offer} warnings={confirmNew?.warnings || []} onUpdated={onUpdated} onDone={() => setConfirming(false)} />
         )}
         <InspectionCallStrip deal={deal} busy={busy}
@@ -1088,12 +1116,12 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
             <div>
               <span className={labelCls}>Contract price</span>
               <input className={inputCls} value={terms.contractPrice} placeholder="$"
-                onChange={(e) => setTerms((t) => ({ ...t, contractPrice: e.target.value }))} />
+                onChange={(e) => setTerms((t) => ({ ...t, contractPrice: e.target.value }))} onBlur={commitTerms} />
             </div>
             <div>
               <span className={labelCls}>Assignment fee</span>
               <input className={inputCls} value={terms.assignmentFee} placeholder={`$ — e.g. ${fmtMoney(settings?.wholesaleFee || 15000)}`}
-                onChange={(e) => setTerms((t) => ({ ...t, assignmentFee: e.target.value }))} />
+                onChange={(e) => setTerms((t) => ({ ...t, assignmentFee: e.target.value }))} onBlur={commitTerms} />
               {/* The setting's default filled it at promote: say so, since buyers are priced off it. */}
               {deal.assignmentFeeSource === "setting" && String(terms.assignmentFee) === String(deal.assignmentFee ?? "") && (
                 <div className="mt-1 text-xs font-medium text-amber-800">The default fee from Settings. Type the real one if it's different.</div>
@@ -1119,12 +1147,12 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
               <div>
                 <span className={labelCls}>Inspection ends</span>
                 <input type="date" className={inputCls} value={terms.inspectionDate}
-                  onChange={(e) => setTerms((t) => ({ ...t, inspectionDate: e.target.value }))} />
+                  onChange={(e) => setTermAndSave("inspectionDate", e.target.value)} />
               </div>
               <div>
                 <span className={labelCls}>Closing date</span>
                 <input type="date" className={inputCls} value={terms.closingDate}
-                  onChange={(e) => setTerms((t) => ({ ...t, closingDate: e.target.value }))} />
+                  onChange={(e) => setTermAndSave("closingDate", e.target.value)} />
               </div>
             </div>
             {datesNote(deal) && <p className="text-[11px] leading-snug text-slate-600">{datesNote(deal)}</p>}
@@ -1133,14 +1161,11 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
             <div>
               <span className={labelCls}>Notes</span>
               <textarea rows={3} className={inputCls} value={terms.notes} placeholder="Deal notes…"
-                onChange={(e) => setTerms((t) => ({ ...t, notes: e.target.value }))} />
+                onChange={(e) => setTerms((t) => ({ ...t, notes: e.target.value }))} onBlur={commitTerms} />
             </div>
-            {termsDirty && (
-              <button type="button" onClick={saveTerms} disabled={busy}
-                className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60">
-                Save terms
-              </button>
-            )}
+            <p className={`text-[11px] ${termsSave.phase === "error" ? "text-rose-700" : "text-slate-500"}`} aria-live="polite">
+              {savedLine(termsSave) || "Saves as you go: a field when you leave it, a date when you pick it."}
+            </p>
           </div>
           {/* Paperwork — generated documents, uploaded originals, stage history */}
           <div className="space-y-4">
