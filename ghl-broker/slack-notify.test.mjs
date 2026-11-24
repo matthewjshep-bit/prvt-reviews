@@ -786,3 +786,28 @@ test("an agent who asks for a call is one ping in Needs Matt, with their first n
   await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(3) });
   assert.equal(s.of("chat.postMessage").length, 1, "told once");
 });
+
+// The luxury lane (2026-11-23): a homeowner who answers a lot text is Matt's
+// call, and until now the only trace was a Desk row nobody opens. One ping in
+// #needs-matt a person a day, with the first name and the street only.
+test("a lot owner who answers is one ping in Needs Matt a day, with their first name and the street, never their number or words", async () => {
+  const LOC = "loc-owner-answered";
+  const s = slack();
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(0) });
+  await store.upsertContactProfile(LOC, "ow1", { party: "owner", name: "Hollis Quarrender", phone: "+14255550133" });
+  const owner = (minute, ref) => recordEvent({ store, locationId: LOC, contactId: "ow1", party: "owner", type: "lot_owner_replied", at: at(minute),
+    address: "4 Fenwick Ln", source: "conversation", ref, dedupeKey: `lot_owner_replied:${ref}`, data: { channel: "sms", call: false } });
+  await owner(1, "ra-1");
+  await owner(2, "ra-2");
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(3) });
+  const posts = s.of("chat.postMessage");
+  assert.equal(posts.length, 1, "two texts in a burst are one ping");
+  assert.equal(posts[0].body.channel, CH.needsMatt);
+  assert.equal(posts[0].body.thread_ts, undefined, "a post of its own");
+  const t = said(posts[0]);
+  assert.match(t, /<@U012MATT34> Hollis, the owner of \*4 Fenwick Ln\*, answered — call\./);
+  assert.doesNotMatch(t, /Quarrender|555/);
+  await owner(30, "ra-3");
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(31) });
+  assert.equal(s.of("chat.postMessage").length, 1, "a third text the same day is still the one ping");
+});
