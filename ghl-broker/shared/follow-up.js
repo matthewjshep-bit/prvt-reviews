@@ -21,6 +21,7 @@
 
 import { paceScale } from "./bot-hold.js";
 import { bankSaleIn } from "./flip-read.js";
+import { pacificParts, pacificWallTime } from "./follow-up-engine.js";
 
 export const FOLLOW_UP_KINDS = {
   // The cold cadence. Until this existed the twelve touches after a first
@@ -109,6 +110,43 @@ export const DEFAULT_LADDERS = {
 // somebody has to keep it.
 export const PROMISE_DUE_HOURS = 4;
 
+// The 2026-11-23 audit (neg-2): a promise that names a time is due then.
+// "Today" is the working day's end, 5pm Pacific; "tonight" 8pm; "tomorrow"
+// and a weekday 5pm that day; "by noon", "by 3pm" that hour. Said after it
+// already passed, two hours on.
+export const PROMISE_DAY_ENDS_AT = 17;
+const PROMISE_LATE_HOURS = 2;
+const WEEKDAY_OF = { sun: 0, mon: 1, tues: 2, tue: 2, wednes: 3, wed: 3, thurs: 4, thu: 4, fri: 5, satur: 6, sat: 6 };
+
+/**
+ * promiseDeadline(text, at) → epoch ms | null
+ *
+ * When a promise of ours said it would land, read off its words; null when
+ * it names no time (the promise clocks then run their own hours).
+ */
+export function promiseDeadline(text = "", at = Date.now()) {
+  const t = String(text || "");
+  const atMs = typeof at === "number" ? at : Date.parse(at || "");
+  if (!t.trim() || !Number.isFinite(atMs)) return null;
+  const p = pacificParts(atMs);
+  const dayAt = (add, hour, min = 0) => pacificWallTime(p.y, p.m - 1, p.d + add, hour) + min * 60000;
+  let due = null;
+  const hm = t.match(/\b(?:by|before|around|at)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i);
+  const wd = t.match(/\b(?:by|before|on|until|till|'?til)\s+(mon|tues?|wed(?:nes)?|thu(?:rs)?|fri|sat(?:ur)?|sun)(?:day)?\b/i);
+  if (/\b(?:by|before)\s+noon\b/i.test(t)) due = dayAt(0, 12);
+  else if (hm) due = dayAt(0, (Number(hm[1]) % 12) + (/pm/i.test(hm[3]) ? 12 : 0), Number(hm[2]) || 0);
+  else if (/\btonight\b|\bthis\s+evening\b/i.test(t)) due = dayAt(0, 20);
+  else if (/\btoday\b|\bthis\s+(?:afternoon|morning)\b|\bend\s+of\s+(?:the\s+)?day\b|\beod\b|\blater\s+today\b/i.test(t)) due = dayAt(0, PROMISE_DAY_ENDS_AT);
+  else if (/\btomorrow\b/i.test(t)) due = dayAt(1, PROMISE_DAY_ENDS_AT);
+  else if (wd) {
+    const want = WEEKDAY_OF[wd[1].toLowerCase()];
+    const ahead = ((want - p.wd + 7) % 7) || 7;
+    due = dayAt(ahead, PROMISE_DAY_ENDS_AT);
+  }
+  if (due == null) return null;
+  return due < atMs + 3600000 ? atMs + PROMISE_LATE_HOURS * 3600000 : due;
+}
+
 // "Can have it over today", "I'll send our written offer over", "I'll get
 // our offer in", "I'll have our offer to you" (2026-10-08: the bot said it
 // and nothing tracked it). We say it, about the paper; "feel free to send it
@@ -158,6 +196,12 @@ export function detectPromise(text = "") {
     /\b(?:run|re-?run|running)\s+(?:it|this|that|them|those|the\s+numbers|those\s+numbers|numbers)\s+(?:today\s+|now\s+)?(?:and|&)\s+(?:i'?ll\s+|we'?ll\s+)?(?:get|come|circle)\s+back\b/i,
   ];
   if (!/\bpartner\b/i.test(t) && ours.some((re) => re.test(t))) return "number";
+  // The 2026-11-23 audit (R1): "let me run the numbers on it", "I'll get you
+  // a number today", "running numbers now, will be in touch shortly" were
+  // never read as a promise, and 108 went unkept in October. First person
+  // only: "once you run the numbers" is theirs, "did you run the numbers?" a
+  // question.
+  if (!/\bpartner\b/i.test(t) && OUR_NUMBERS.some((re) => re.test(t))) return "number";
   if (PAPER_PROMISE.some((re) => re.test(t))) return "paper";
   // The stall (2026-11-09 audit): "should have something for you today",
   // "give me until Thursday", "still working through the numbers". After the
@@ -175,6 +219,8 @@ export function detectPromise(text = "") {
     if (EMD_PROMISE.some((re) => re.test(t))) return "emd";
   }
   if (/\b(?:get|come|circle)\s+back\s+to\s+you\b|\bback\s+to\s+you\s+(?:today|this\s+afternoon|tonight|tomorrow|later)\b/i.test(t)) return "answer";
+  // A time on it: "circle back today", "let you know today", "be in touch shortly" (2026-11-23).
+  if (new RegExp(String.raw`\b(?:${WE_SAY}|will)\s+(?:\w+\s+){0,7}?(?:(?:circle|get|come)\s+back|let\s+you\s+know|be\s+in\s+touch)\s+(?:later\s+)?${STALL_WHEN}`, "i").test(t)) return "answer";
   return null;
 }
 
@@ -210,6 +256,15 @@ export function promisesCall(text = "") {
 
 // When a stall says it will land (shared/reply-claims.js reads the same words).
 const STALL_WHEN = String.raw`(?:today|tonight|soon|shortly|tomorrow|this\s+(?:week|afternoon|evening|morning)|(?:before|by)\s+(?:(?:mon|tues|wednes|thurs|fri|satur|sun)day|(?:the\s+)?end\s+of\s+(?:the\s+)?(?:day|week)|eod|noon|\d{1,2}(?::\d{2})?\s*(?:am|pm)?))`;
+// "Let me run the numbers on it", "I'll get you a number today" (the 2026-11-23 audit).
+const RUN_NUMBERS = String.raw`(?:run|re-?run|crunch|work|go\s+(?:through|over)|look\s+(?:at|over)|pull)\s+(?:the\s+|some\s+|our\s+)?numbers`;
+const OUR_NUMBERS = [
+  new RegExp(String.raw`\b${WE_SAY}\s+(?:\w+\s+){0,1}?${RUN_NUMBERS}\b`, "i"),
+  new RegExp(String.raw`(?:^|[.!?]\s+)will\s+${RUN_NUMBERS}\b`, "i"),
+  /(?:^|[.!?]\s+)(?:i'?m\s+|we'?re\s+)?(?:running|crunching|working\s+(?:through|on))\s+(?:the\s+|our\s+)?numbers\s+(?:now|today|tonight|this\s+\w+|on\s+it)\b/i,
+  new RegExp(String.raw`\b${WE_SAY}\s+(?:\w+\s+){0,1}?(?:get|send|text|shoot)\s+you\s+(?:a|an|our|the)\s+(?:\w+\s+)?(?:number|figure|price|offer)\b`, "i"),
+  /\blet\s+you\s+know\s+where\s+we(?:'d|\s+would|'ll|\s+will)?\s+(?:land|be|stand|come\s+out)\b/i,
+];
 const STALL_PROMISE = [
   new RegExp(String.raw`\b(?:have|get)\s+(?:something|it|an\s+answer|a\s+number|numbers|the\s+numbers)\s+(?:back\s+)?(?:to|for)\s+you\b[^.?!]{0,30}?\b${STALL_WHEN}`, "i"),
   /\bgive\s+me\s+(?:today|a\s+day|(?:a\s+)?(?:couple|few)\s+(?:of\s+)?(?:hours|days)|until\s+\w+|till\s+\w+|'?til\s+\w+)\b/i,

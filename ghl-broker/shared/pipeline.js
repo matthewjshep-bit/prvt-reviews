@@ -37,6 +37,7 @@ import { OWNER_LABEL, resolveParties, partyName } from "./deal-parties.js";
 import { accessFor } from "./deal-access.js";
 import { KIND_HOLD, RURAL_HOLD } from "./asset-type.js";
 import { callEventConnected } from "./talked-to.js";
+import { RETRYABLE_ERROR, retryableNow, underwriteFailure } from "./underwrite-retry.js";
 
 const DAY_MS = 86400000;
 // How long a hand-made offer nobody sent stays a decision on the Desk.
@@ -914,7 +915,7 @@ export function buildPipeline({
     const ops = [...moveOps,
       ...(stopped ? [{ key: "resume_drive", label: "Resume", intent: "secondary" }] : []),
       ...(group === "machine" && driving ? [{ key: "stop_drive", label: "Stop", intent: "secondary" }] : [])];
-    push({ id: `promise_owed:${p.contactId}:${p.owedAt}`, kind: "promise_owed", severity: "now", owedAt: p.owedAt, contactId: p.contactId, contactName: named,
+    push({ id: `promise_owed:${p.contactId}:${p.owedAt}`, kind: "promise_owed", severity: "now", owedAt: p.owedAt, dueAt: p.dueAt || null, contactId: p.contactId, contactName: named,
       address: p.address || "", offerId: v.offerId || null, move: v.move, why: v.reason || "", askingPrice: v.askingPrice || 0, what: p.what || "",
       draftId: null, fromDraftId: p.draftId || null, ...(question ? { question } : {}), group, ...(next ? { next } : {}),
       title: `${who}: we owe them ${p.what === "number" ? "a number" : p.what === "paper" ? "the written offer" : "an answer"}${p.address ? ` on ${String(p.address).split(",")[0]}` : ""}`,
@@ -945,7 +946,7 @@ export function buildPipeline({
     const days = Math.floor((now - (ms(p.since) ?? now)) / DAY_MS);
     push({ id: `number_owed:${p.contactId}:${p.since}`, kind: "number_owed", severity: "now", contactId: p.contactId, contactName: named,
       address: p.address || "", offerId: v.offerId || null, move: v.move, why: v.reason || "", askingPrice: v.askingPrice || 0,
-      draftId: null, fromDraftId: p.draftId || null, promisedAt: p.lastAt,
+      draftId: null, fromDraftId: p.draftId || null, promisedAt: p.lastAt, dueAt: p.dueAt || null,
       // An underwrite still running is the machine's; everything else waits on you.
       group: v.move === "wait" ? "machine" : "yours", ...(v.move === "wait" ? { next: { what: v.reason || "waiting", at: null } } : {}),
       title: `Owed: ${p.what === "paper" ? "the written offer" : "a number"} to ${first || "an agent"}${street ? ` on ${street}` : ""}`,
@@ -1040,9 +1041,6 @@ export function buildPipeline({
 
 /* ---------- timers ---------- */
 
-// A failure that was the network's or the model's, not the house's: worth one
-// more try. A scan cut short at the token limit says "try again" itself.
-const RETRYABLE_ERROR = /timed?\s?out|timeout|ETIMEDOUT|ECONNRESET|ENOTFOUND|fetch failed|socket hang up|\b50[0234]\b|\b429\b|rate.?limit|overloaded|output truncated/i;
 
 /**
  * timerMoves(actions, { config, now }) → [{ actionId, kind, move, what, dueAt, due, offerId, jobId, contactId, address }]
@@ -1055,7 +1053,9 @@ const RETRYABLE_ERROR = /timed?\s?out|timeout|ETIMEDOUT|ECONNRESET|ENOTFOUND|fet
  *                      when the float was skipped: that row is stuck, with why.
  *   gone_quiet         marked no response (the row only exists once they have
  *                      been silent `goneQuietDays` with the ladder off).
- *   underwrite_failed  retried, once, when the failure was the network's.
+ *   underwrite_failed  retried, once, when the failure was the network's, or
+ *                      a key its provider rejected that the key check says
+ *                      is good again (`keyHealth`, 2026-11-23).
  *
  * Deliberately not here: `ladder_exhausted` (the follow-up sweep already
  * marks no response unless the ladder says "stop", and "stop" is a setting,
@@ -1063,7 +1063,7 @@ const RETRYABLE_ERROR = /timed?\s?out|timeout|ETIMEDOUT|ECONNRESET|ENOTFOUND|fet
  * move — buyers who never answered are not nudged); closings, hand-offs, deals with
  * no buyers and failed bands, which are a person's.
  */
-export function timerMoves(actions = [], { config = null, now = Date.now() } = {}) {
+export function timerMoves(actions = [], { config = null, now = Date.now(), keyHealth = null } = {}) {
   const t = config?.driver?.timers;
   if (!config?.enabled || !t?.enabled) return [];
   const out = [];
@@ -1077,7 +1077,10 @@ export function timerMoves(actions = [], { config = null, now = Date.now() } = {
       out.push({ ...base, move: "float", what: "floats the number", dueAt: new Date(dueMs).toISOString(), due: dueMs <= now });
     } else if (a.kind === "gone_quiet" && a.offerId) {
       out.push({ ...base, move: "mark_no_response", what: "marks it no response on the next pass", dueAt: new Date(now).toISOString(), due: true });
-    } else if (a.kind === "underwrite_failed" && a.contactId && a.address && RETRYABLE_ERROR.test(a.error || "")) {
+    } else if (a.kind === "underwrite_failed" && a.contactId && a.address
+      // The network's failure any time; a rejected key once the key check
+      // says it's good again (shared/underwrite-retry.js, 2026-11-23).
+      && (RETRYABLE_ERROR.test(a.error || "") || (keyHealth && retryableNow(underwriteFailure(a.error), keyHealth)))) {
       out.push({ ...base, move: "retry_underwrite", what: "retries the underwrite once", dueAt: new Date(now).toISOString(), due: true, askingPrice: a.askingPrice || 0 });
     }
   }

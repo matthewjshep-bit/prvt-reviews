@@ -105,6 +105,13 @@ const isHotNote = (ev) => ev?.type === "note" && /^(flagged )?hot\b/.test(phrase
 // DRAFT_ONLY_HOLD / SKELETON_HOLD); events before data.draftOnly carry only that.
 const isDraftOnlyHold = (d = {}) => d.draftOnly === true || (Array.isArray(d.held) && DRAFT_ONLY_RX.test(String(d.held[0] || "")));
 
+// The day a reply came, on Matt's clock: the claim that keeps it to one ping a person a day.
+const PACIFIC_DAY = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles" });
+const answeredClaim = (kind, ev = {}) => {
+  const t = Date.parse(ev?.at || "");
+  return ev?.contactId && Number.isFinite(t) ? `${kind}:${ev.contactId}:${PACIFIC_DAY.format(new Date(t))}` : null;
+};
+
 const DEAD = { offer_passed: "they passed", offer_we_passed: "we passed", offer_unavailable: "no longer available", offer_no_response: "no response", tier1_passed: "passed from Tier 1" };
 const LOUD_STAGES = new Set(["closed", "fell_through"]);
 
@@ -128,6 +135,8 @@ const LOUD_STAGES = new Set(["closed", "fell_through"]);
  *   opensOnly  only when there's no thread yet: a house moved back into
  *              Tier 1 isn't posted twice
  *   statusOnly posts nothing; only the thread's status emoji is looked at again
+ *   claim      (optional) the key the post is claimed by in place of the event's
+ *              own, so several events make one post (an owner's texts in a day)
  *
  * Empty for anything Slack doesn't hear about.
  */
@@ -164,6 +173,11 @@ export function routeEvent(ev = {}) {
   // 2026-11-10): the bot never books or promises one, so it's a ping to him
   // in Needs Matt, a post of its own (shared/call-words.js).
   else if (t === "call_wanted") out.push({ stream: "needsMatt", kind: "call_wanted", thread: null, ...base });
+  // A lot owner (or a gatekeeper) the machine wrote to answered (2026-11-23):
+  // Matt prices every lot and makes the call, and the Desk row this used to
+  // make is gone. One ping a person a Pacific day, however many texts they send.
+  else if (t === "lot_owner_replied") out.push({ stream: "needsMatt", kind: "owner_answered", thread: null, ...base, claim: answeredClaim("owner_answered", ev) });
+  else if (t === "gatekeeper_replied") out.push({ stream: "needsMatt", kind: "gatekeeper_answered", thread: null, ...base, claim: answeredClaim("gatekeeper_answered", ev) });
   else if (t === "underwrite_started") uw("started");
   else if (t === "underwrite_done") { uw("done", { update: true }); acq("uw_done", { replyOnly: true }); }
   // A skeleton or draft-only run only made Matt a draft (Matt, 2026-10-25:
@@ -180,7 +194,7 @@ export const SLACK_EVENT_TYPES = Object.freeze([
   "tier1_added", "ghl_stage_moved", "offer_sent", "offer_revised", "offer_countered", "realm_yes",
   "note", "offer_accepted", ...Object.keys(DEAD), "deal_promoted", "deal_stage", "investor_committed", "investor_evaluating",
   "investor_passed", "dataroom_viewed", "call_booked", "underwrite_started", "underwrite_done", "underwrite_held",
-  "underwrite_failed", "underwrite_dropped", "blast_sent", "call_wanted",
+  "underwrite_failed", "underwrite_dropped", "blast_sent", "call_wanted", "lot_owner_replied", "gatekeeper_replied",
 ]);
 
 /**
@@ -294,7 +308,7 @@ const ICON = {
   buyer_passed: ":white_circle:", viewed: ":open_file_folder:", walkthrough: ":calendar:", waves: ":mega:",
   started: ":hourglass_flowing_sand:", done: ":white_check_mark:", held: ":warning:", failed: ":x:", dropped: ":double_vertical_bar:",
   uw_done: ":white_check_mark:", uw_held: ":warning:", uw_failed: ":x:",
-  call_wanted: ":telephone_receiver:",
+  call_wanted: ":telephone_receiver:", owner_answered: ":house:", gatekeeper_answered: ":telephone_receiver:",
 };
 
 const STAGE_SAY = { under_contract: "under contract", buyer_found: "buyer found", assigned: "assigned", closed: "closed", fell_through: "fell through" };
@@ -344,6 +358,7 @@ export function renderEvent(route, ev = {}, ctx = {}) {
   const d = ev?.data || {};
   if (kind === "tier1") return renderTier1(ev, ctx);
   if (kind === "call_wanted") return renderCallWanted(ev, ctx);
+  if (kind === "owner_answered" || kind === "gatekeeper_answered") return renderAnswered(kind, ev, ctx);
   const head = `${ICON[kind] || ":small_blue_diamond:"} ${headline(kind, ev, ctx)}`;
   const lines = [head];
   if (kind === "held" || kind === "uw_held") {
@@ -399,15 +414,41 @@ export function renderCallWanted(ev = {}, ctx = {}) {
   const where = street(ev?.address || ctx.address);
   const when = clip(scrubForSlack(d.when || ""), 40);
   const walk = d.wants === "walkthrough";
-  const what = walk ? `wants to see ${where ? `*${esc(where)}*` : "the house"}` : `wants a call${where ? ` about *${esc(where)}*` : ""}`;
+  const buy = d.wants === "buy";
+  const house = where ? `*${esc(where)}*` : "the house";
+  const what = buy ? `wants to buy ${house}` : walk ? `wants to see ${house}` : `wants a call${where ? ` about *${esc(where)}*` : ""}`;
   const said = when ? ` They named ${esc(when)}.` : "";
   const how = d.voicemail ? " (a voicemail)" : "";
-  const tail = walk ? " Nothing was booked; the time is yours to set." : " The bot didn't book or promise one: call when you choose, or text.";
-  const text = `${ICON.call_wanted} ${at}${esc(who)}${how} ${what}.${said}${tail}`;
+  const tail = buy ? " Nothing was agreed; the price and the paper are yours."
+    : walk ? " Nothing was booked; the time is yours to set." : " The bot didn't book or promise one: call when you choose, or text.";
+  // A buyer's yes or walk ask (the 2026-11-23 buyer audit, dispo-4): call now.
+  const now = d.callNow ? "Call now: " : "";
+  const text = `${ICON.call_wanted} ${at}${now}${esc(who)}${how} ${what}.${said}${tail}`;
   const link = slackLinks({ appUrl: ctx.appUrl, appLink: ctx.appLink, locationId: ctx.locationId, contactId: ev?.contactId });
   const blocks = [{ type: "section", text: { type: "mrkdwn", text } }];
   if (link) blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: link }] });
-  const plain = `${who} ${walk ? `wants to see ${where || "the house"}` : `wants a call${where ? ` about ${where}` : ""}`}${when ? ` (${when})` : ""}`;
+  const plain = `${d.callNow ? "Call now: " : ""}${who} ${buy ? `wants to buy ${where || "the house"}` : walk ? `wants to see ${where || "the house"}` : `wants a call${where ? ` about ${where}` : ""}`}${when ? ` (${when})` : ""}`;
+  return { text: clip(plain, 150), blocks };
+}
+
+/**
+ * renderAnswered(kind, ev, ctx) → the Needs Matt ping when a lot owner or a
+ * gatekeeper the machine wrote to answers: their first name, the street, and
+ * @Matt. Never a phone, an email or what they wrote.
+ */
+export function renderAnswered(kind, ev = {}, ctx = {}) {
+  const at = ctx.mattUserId ? `<@${ctx.mattUserId}> ` : "";
+  const owner = kind === "owner_answered";
+  const where = street(ev?.address || (owner ? ctx.address : ""));
+  const name = ctx.firstName || "";
+  const who = owner
+    ? (name ? `${esc(name)}${where ? `, the owner of *${esc(where)}*,` : " (a lot owner)"}` : where ? `The owner of *${esc(where)}*` : "A lot owner")
+    : `${name ? `${esc(name)} (a gatekeeper the machine wrote to)` : "A gatekeeper the machine wrote to"}`;
+  const text = `${ICON[kind]} ${at}${who} answered — call.`;
+  const link = slackLinks({ appUrl: ctx.appUrl, appLink: ctx.appLink, locationId: ctx.locationId, contactId: ev?.contactId });
+  const blocks = [{ type: "section", text: { type: "mrkdwn", text } }];
+  if (link) blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: link }] });
+  const plain = `${name || (owner ? "A lot owner" : "A gatekeeper")}${where ? ` (${where})` : ""} answered — call`;
   return { text: clip(plain, 150), blocks };
 }
 
@@ -545,27 +586,48 @@ export const slackClaimKey = (kind, id) => `${kind}:${id}`;
 
 /* ---------- the machine and the day ---------- */
 
-/** renderError(e) → a new kind of app error, or one back after quiet days (reopenedAt), once each. */
-export function renderError(e = {}) {
-  const head = `:red_circle: ${e.reopenedAt ? "Error back in" : "New error in"} *${esc(e.area || "the app")}*${Number(e.count) > 1 ? ` (×${e.count})` : ""}`;
+// @Matt on a failure that stops the business (shared/machine-health.js,
+// 2026-11-23 audit AH-6): `ctx.mention` and his Slack id.
+const mentionOf = (ctx = {}) => (ctx.mention && ctx.mattUserId ? `<@${ctx.mattUserId}> ` : "");
+
+/**
+ * renderError(e, ctx) → a new kind of app error, or one back after quiet days
+ * (reopenedAt), once each; or, with ctx.stillFailing, a business-stopping one
+ * still happening today.
+ */
+export function renderError(e = {}, ctx = {}) {
+  const what = ctx.stillFailing ? "Still failing in" : e.reopenedAt ? "Error back in" : "New error in";
+  const head = `:red_circle: ${mentionOf(ctx)}${what} *${esc(e.area || "the app")}*${Number(e.count) > 1 ? ` (×${e.count})` : ""}`;
   const text = `${head}\n_${esc(clip(scrubForSlack(e.message), 200))}_`;
   return { text: clip(head.replace(/\*/g, ""), 150), blocks: [{ type: "section", text: { type: "mrkdwn", text } }] };
 }
 
-/** renderJobFailed(job) → a scheduled job whose last run failed (shared/line.js lineJobs row). */
-export function renderJobFailed(j = {}) {
-  const head = `:warning: *${esc(j.label || j.name)}* failed its last run${Number(j.tries) > 1 ? ` (try ${j.tries})` : ""}`;
+/** renderJobFailed(job, ctx) → a scheduled job whose last run failed (shared/line.js lineJobs row). */
+export function renderJobFailed(j = {}, ctx = {}) {
+  const head = `:warning: ${mentionOf(ctx)}*${esc(j.label || j.name)}* failed its last run${Number(j.tries) > 1 ? ` (try ${j.tries})` : ""}`;
   const text = j.error ? `${head}\n_${esc(clip(scrubForSlack(j.error), 200))}_` : head;
   return { text: clip(head.replace(/\*/g, ""), 150), blocks: [{ type: "section", text: { type: "mrkdwn", text } }] };
 }
 
 const EVERY_LABEL = { tick: "every 15 minutes", day: "once a day", workday: "every workday" };
 
-/** renderJobLate(job) → a switched-on job that has stopped running (shared/line.js lineJobs row, late). */
-export function renderJobLate(j = {}) {
+/** renderJobLate(job, ctx) → a switched-on job that has stopped running (shared/line.js lineJobs row, late). */
+export function renderJobLate(j = {}, ctx = {}) {
   const ago = j.hoursAgo != null ? ` in ${j.hoursAgo}h` : "";
-  const head = `:hourglass_flowing_sand: *${esc(j.label || j.name)}* hasn't run${ago}${EVERY_LABEL[j.every] ? ` (it runs ${EVERY_LABEL[j.every]})` : ""}`;
+  const every = j.everyMs ? `every ${Math.round(j.everyMs / 3600000)} hours` : EVERY_LABEL[j.every];
+  const head = `:hourglass_flowing_sand: ${mentionOf(ctx)}*${esc(j.label || j.name)}* hasn't run${ago}${every ? ` (it runs ${every})` : ""}`;
   return { text: clip(head.replace(/\*/g, ""), 150), blocks: [{ type: "section", text: { type: "mrkdwn", text: head } }] };
+}
+
+/**
+ * renderKeyTrouble(t, ctx) → a paid key its provider rejects, or Apify's
+ * month near its limit (shared/machine-health.js keyTroubles), @Matt: told
+ * the first day and every day it lasts.
+ */
+export function renderKeyTrouble(t = {}, ctx = {}) {
+  const icon = t.kind === "usage" ? ":chart_with_upwards_trend:" : ":key:";
+  const text = `${icon} ${ctx.mattUserId ? `<@${ctx.mattUserId}> ` : ""}${esc(clip(String(t.text || ""), 300))}`;
+  return { text: clip(String(t.text || ""), 150), blocks: [{ type: "section", text: { type: "mrkdwn", text } }] };
 }
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
@@ -688,7 +750,9 @@ export function renderMorning(c = {}, ctx = {}) {
       `${r.brokerage ? ` at ${esc(clip(scrubForSlack(r.brokerage), 40))}` : ""} (from ${esc(clip(scrubForSlack(r.agentFirst), 20) || "an agent")})`);
     lines.push(`:handshake: Referrals to reach: *${c.referrals.length}* — ${shown.join(", ")}${c.referrals.length > shown.length ? ", …" : ""}`);
   }
-  const link = slackLinks({ appUrl: ctx.appUrl, appLink: ctx.appLink, locationId: ctx.locationId, path: "/reports", view: "activity" });
+  // Offers, the page the day is worked from (Reports → Activity was retired
+  // 2026-11-23; its old link landed on Flow).
+  const link = slackLinks({ appUrl: ctx.appUrl, appLink: ctx.appLink, locationId: ctx.locationId, path: "/", view: "history" });
   const blocks = [{ type: "section", text: { type: "mrkdwn", text: lines.join("\n") } }];
   if (link) blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: link }] });
   return { text: `Yesterday: ${c.offersSent || 0} offers sent, ${c.tier1 || 0} new Tier 1, ${c.deals || 0} new deals`, blocks };
@@ -729,7 +793,9 @@ export function renderEvening(digest = {}, { jobs = [], errors = [], leaks = nul
   // Houses the 72-hour Needs Matt clock passed with no price today.
   const passed = passedUnpriced || [];
   if (passed.length) lines.push(`• Passed unpriced today: *${passed.length}* — ${passed.slice(0, 5).map((o) => esc(street(o.address) || "a house")).join(", ")}${passed.length > 5 ? ", …" : ""}`);
-  const link = slackLinks({ appUrl: ctx.appUrl, appLink: ctx.appLink, locationId: ctx.locationId, path: "/reports", view: "activity" });
+  // Offers, the page the day is worked from (Reports → Activity was retired
+  // 2026-11-23; its old link landed on Flow).
+  const link = slackLinks({ appUrl: ctx.appUrl, appLink: ctx.appLink, locationId: ctx.locationId, path: "/", view: "history" });
   const blocks = [{ type: "section", text: { type: "mrkdwn", text: lines.join("\n") } }];
   if (link) blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: link }] });
   const open = (digest.sections || []).reduce((a, s) => a + (s.items?.length || 0), 0);

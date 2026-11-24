@@ -55,7 +55,7 @@ test("a Responded chip lights the Responded tab", () => {
 
 test("the tabs read Draft · Sent · Responded; the rest are under Other", () => {
   expect(TABS.map((t) => t.label)).toEqual(["Draft", "Sent", "Responded"]);
-  expect(OTHER.map((v) => v.key)).toEqual(["all", "offmarket", "nofollow", "ai"]);
+  expect(OTHER.map((v) => v.key)).toEqual(["all", "offmarket", "nofollow", "ai", "needs"]);
 });
 
 test("a number we texted says how long ago it floated; a priced one, how long since we priced it", () => {
@@ -73,4 +73,12 @@ test("waiting sorts oldest first by how long it has waited", () => {
 test("it opens on Hot, or Draft when nothing is hot", () => {
   expect(defaultTab(ROWS)).toBe("hot");
   expect(defaultTab(ROWS.filter((o) => !o.id.startsWith("hot")))).toBe("draft");
+});
+
+// 2026-11-23: Needs you is a filter over the rows, never where the page opens.
+test("Needs you shows the current rows on GHL's Needs Matt stage and never opens by itself", () => {
+  const rows = [row({ id: "n", status: "sent", sends: [{ ts: ago(2) }], needsMatt: { kind: "yes" } }), row({ id: "x", status: "new" }),
+    row({ id: "o", status: "new", needsMatt: { kind: "yes" }, supersededBy: { id: "n" } })];
+  expect(rows.filter(OTHER.find((v) => v.key === "needs").test).map((o) => o.id)).toEqual(["n"]);
+  expect(defaultTab(rows)).toBe("draft");
 });

@@ -11,6 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { dbEnabled, query, migrate } from "./db.js";
+import { DEAL_SENT_TYPES as DEAL_SEND_EVENT_TYPES } from "./shared/buyer-score.js";
 import { OFFER_LIST_FIELDS, LEAN_CALC_SETTINGS, LEAN_CASH_FIELDS, toListOffer, leanOfferDoc, effectiveStatus, OPEN_STATUSES } from "./shared/offer-status.js";
 
 // pg hands bigint back as a string and real as a float; the API speaks numbers.
@@ -39,6 +40,42 @@ export function draftLedgerRow(d = {}) {
   };
 }
 
+// listReplyDraftActivity, both backends: the Offers table's read (GET
+// /api/offers?activity=1&next=1, ghl-broker/offers-list.js). Exactly the
+// fields its consumers touch — mergeDraftActivity and floatSentIndex
+// (shared/last-activity.js, shared/paper-follows.js), and nextFollowUp's
+// threadTimes, nudgeTimes and threadHealth (shared/follow-up.js,
+// shared/thread-health.js). `inbound` stays whole: threadHealth reads its
+// words (pending/sold, annoyed), and it is a text, not the ~10KB of prompt
+// context a whole draft carries. Every value comes off the doc, as the whole
+// draft would give it. Change draftActivityQuery and this together.
+export const DRAFT_ACTIVITY_FIELDS = ["id", "locationId", "contactId", "status", "createdAt", "updatedAt", "sendAt", "sentAt", "autoSent", "intent", "answeredBy", "inbound"];
+export const DRAFT_ACTIVITY_OUTBOUND = ["kind", "offerId"];
+export function draftActivityRow(d = {}) {
+  const keep = (o, keys) => Object.fromEntries(keys.filter((k) => o?.[k] !== undefined && o[k] !== null).map((k) => [k, o[k]]));
+  return {
+    ...keep(d, DRAFT_ACTIVITY_FIELDS),
+    ...(d.outbound && typeof d.outbound === "object" && !Array.isArray(d.outbound) ? { outbound: keep(d.outbound, DRAFT_ACTIVITY_OUTBOUND) } : {}),
+  };
+}
+export function draftActivityQuery({ locationId, since = null, limit = 4000 }) {
+  const params = [locationId];
+  let where = "";
+  if (since) { params.push(since); where += ` and created_at >= $${params.length}`; }
+  params.push(Math.max(1, Math.round(Number(limit) || 0)));
+  const field = (k) => `'${k}', doc->'${k}'`;
+  const out = (k) => `'${k}', doc #> '{outbound,${k}}'`;
+  return {
+    text: `select jsonb_strip_nulls(jsonb_build_object(
+         ${DRAFT_ACTIVITY_FIELDS.map(field).join(", ")},
+         'outbound', case when jsonb_typeof(doc->'outbound') = 'object' then jsonb_build_object(${DRAFT_ACTIVITY_OUTBOUND.map(out).join(", ")}) end
+       )) as doc
+       from reply_drafts where location_id = $1${where}
+       order by created_at desc limit $${params.length}`,
+    params,
+  };
+}
+
 // listSentDraftsBetween, both backends: the delivery check's read
 // (delivery-watch.js). Sent drafts with a GHL message id, sent in
 // [fromIso, toIso), not yet given a delivery verdict, oldest first. sentAt is
@@ -59,6 +96,64 @@ export function sentDraftInWindow(d, { locationId, fromIso, toIso }) {
   const at = String(d?.sentAt || "");
   return d?.locationId === locationId && d.status === "sent" && Boolean(at) && at >= fromIso && at < toIso
     && Boolean(String(d.ghlMessageId || "")) && d.delivery == null;
+}
+
+// listLaneSends, both backends: the lane breaker's read (lane-breaker.js).
+// One kind's sent texts since `sinceIso` that answer nothing of theirs (no
+// inbound) and aren't emails, trimmed to what says how each went: newest
+// first ("desc", the rolling window) or oldest first ("asc", today's first
+// sends), and up to `untilIso` when given (the STOP window: sends old enough
+// for a STOP to have come). Change the SQL and laneSendRow/laneSendInWindow
+// together. reply_drafts_lane_sends_idx (schema.pg.sql) is this query's index.
+const LANE_SEND_FIELDS = ["id", "contactId", "sentAt", "ghlMessageId", "channel", "delivery", "laneRead", "autoSent"];
+export function laneSendsQuery({ locationId, kind, sinceIso, untilIso = null, order = "desc", limit = 50 }) {
+  const until = untilIso ? `\n         and (doc->>'sentAt') <= $5` : "";
+  return {
+    text: `select jsonb_build_object(${LANE_SEND_FIELDS.map((k) => `'${k}', doc->'${k}'`).join(", ")}, 'kind', doc #> '{outbound,kind}') as doc
+       from reply_drafts
+       where location_id = $1 and status = 'sent'
+         and (doc #>> '{outbound,kind}') = $2
+         and (doc->>'sentAt') >= $3${until}
+         and coalesce(length(btrim(doc->>'inbound')), 0) = 0
+         and coalesce(doc->>'channel', 'sms') <> 'email'
+       order by (doc->>'sentAt') ${order === "asc" ? "asc" : "desc"} limit $4`,
+    params: [locationId, kind, sinceIso, Math.max(1, Math.round(Number(limit) || 0)), ...(untilIso ? [untilIso] : [])],
+  };
+}
+export function laneSendInWindow(d, { locationId, kind, sinceIso, untilIso = null }) {
+  return d?.locationId === locationId && d.status === "sent" && d.outbound?.kind === kind
+    && Boolean(d.sentAt) && String(d.sentAt) >= sinceIso && (!untilIso || String(d.sentAt) <= untilIso)
+    && !String(d.inbound || "").trim() && (d.channel || "sms") !== "email";
+}
+
+// setLaneReadQuery, both backends: the breaker's verdict merged onto a sent
+// draft in one statement, only while neither verdict is on it, so it never
+// writes back a copy that loses the delivery check's own (delivery-watch.js
+// writes the whole draft on its own tick).
+export function setLaneReadQuery({ id, verdict }) {
+  return {
+    text: `update reply_drafts set doc = doc || jsonb_build_object('laneRead', $2::jsonb)
+     where id = $1 and status = 'sent'
+       and coalesce(jsonb_typeof(doc->'delivery'), 'null') = 'null'
+       and coalesce(jsonb_typeof(doc->'laneRead'), 'null') = 'null'
+     returning id`,
+    params: [id, JSON.stringify(verdict)],
+  };
+}
+export function laneSendRow(d = {}) {
+  return { ...Object.fromEntries(LANE_SEND_FIELDS.map((k) => [k, d[k] === undefined ? null : d[k]])), kind: d.outbound?.kind ?? null };
+}
+
+// updateReplyDraftIf, both backends: write the draft only while it is still
+// in `from` (the lane breaker turning a scheduled text back into a draft must
+// never land on one the send loop has just claimed or sent).
+export function updateReplyDraftIfQuery({ id, from, doc, at }) {
+  return {
+    text: `update reply_drafts set doc = $3, status = $4, updated_at = $5
+     where id = $1 and status = $2
+     returning doc`,
+    params: [id, from, doc, doc?.status || "draft", at],
+  };
 }
 
 /* ============================================================= *
@@ -708,11 +803,36 @@ const pgStore = {
     );
     return rows.map((r) => r.doc);
   },
+  // The Offers table's draft read, trimmed in SQL (draftActivityRow is the
+  // file backend's twin). Newest first, by creation.
+  async listReplyDraftActivity(locationId, { since = null, limit = 4000 } = {}) {
+    const { text, params } = draftActivityQuery({ locationId, since, limit });
+    const { rows } = await query(text, params);
+    return rows.map((r) => r.doc);
+  },
   // The delivery check's read (sentDraftsBetweenQuery).
   async listSentDraftsBetween(locationId, fromIso, toIso, { limit = 100 } = {}) {
     const { text, params } = sentDraftsBetweenQuery({ locationId, fromIso, toIso, limit });
     const { rows } = await query(text, params);
     return rows.map((r) => r.doc);
+  },
+  // The lane breaker's read (laneSendsQuery).
+  async listLaneSends(locationId, kind, { sinceIso, untilIso = null, order = "desc", limit = 50 } = {}) {
+    const { text, params } = laneSendsQuery({ locationId, kind, sinceIso, untilIso, order, limit });
+    const { rows } = await query(text, params);
+    return rows.map((r) => r.doc);
+  },
+  // The breaker's verdict, merged (setLaneReadQuery): true when written.
+  async setLaneRead(id, verdict) {
+    const { text, params } = setLaneReadQuery({ id, verdict });
+    const { rows } = await query(text, params);
+    return rows.length > 0;
+  },
+  // Only while it is still `from` (updateReplyDraftIfQuery): true when written.
+  async updateReplyDraftIf(id, from, doc) {
+    const { text, params } = updateReplyDraftIfQuery({ id, from, doc, at: doc?.updatedAt || nowIso() });
+    const { rows } = await query(text, params);
+    return rows.length > 0;
   },
   async getReplyDraft(id) {
     const { rows } = await query(`select doc from reply_drafts where id = $1`, [id]);
@@ -1464,6 +1584,21 @@ const pgStore = {
       params
     );
     return rows.map((r) => ({ ...r, at: r.at instanceof Date ? r.at.toISOString() : r.at }));
+  },
+  // How many buyers each deal actually went to (2026-11-23, the Deals list):
+  // distinct contacts with a blast_sent or deal_hand_sent on the offer, and
+  // the newest. One grouped read on contact_events_offer_idx for the whole
+  // list. { [offerId]: { sent, lastAt } }; a deal with none is left out.
+  async dealSendCounts(locationId, offerIds = [], { types = DEAL_SEND_EVENT_TYPES } = {}) {
+    const ids = [...new Set((offerIds || []).filter(Boolean).map(String))];
+    if (!ids.length) return {};
+    const { rows } = await query(
+      `select offer_id as "offerId", count(distinct contact_id)::int as sent, max(at) as "lastAt"
+         from contact_events where location_id = $1 and offer_id = any($2::text[]) and type = any($3::text[])
+        group by offer_id`,
+      [locationId, ids, types]
+    );
+    return Object.fromEntries(rows.map((r) => [r.offerId, { sent: Number(r.sent) || 0, lastAt: r.lastAt instanceof Date ? r.lastAt.toISOString() : r.lastAt || null }]));
   },
   async listContactEventsByOffer(locationId, offerId, { limit = 200 } = {}) {
     const { rows } = await query(
@@ -2257,12 +2392,48 @@ const fileStore = (() => {
         .slice(0, limit)
         .map(draftLedgerRow);
     },
+    async listReplyDraftActivity(locationId, { since = null, limit = 4000 } = {}) {
+      ensure();
+      return Object.values(data.replyDrafts)
+        .filter((d) => d.locationId === locationId)
+        .filter((d) => !since || (d.createdAt || "") >= since)
+        .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
+        .slice(0, Math.max(1, Math.round(Number(limit) || 0)))
+        .map(draftActivityRow);
+    },
     async listSentDraftsBetween(locationId, fromIso, toIso, { limit = 100 } = {}) {
       ensure();
       return Object.values(data.replyDrafts)
         .filter((d) => sentDraftInWindow(d, { locationId, fromIso, toIso }))
         .sort((a, b) => String(a.sentAt).localeCompare(String(b.sentAt)))
         .slice(0, Math.max(1, Math.round(Number(limit) || 0)));
+    },
+    async listLaneSends(locationId, kind, { sinceIso, untilIso = null, order = "desc", limit = 50 } = {}) {
+      ensure();
+      const asc = order === "asc";
+      return Object.values(data.replyDrafts)
+        .filter((d) => laneSendInWindow(d, { locationId, kind, sinceIso, untilIso }))
+        .sort((a, b) => (asc ? 1 : -1) * String(a.sentAt).localeCompare(String(b.sentAt)))
+        .slice(0, Math.max(1, Math.round(Number(limit) || 0)))
+        .map(laneSendRow);
+    },
+    // The same check-and-merge as Postgres, with no await between them.
+    async setLaneRead(id, verdict) {
+      ensure();
+      const cur = data.replyDrafts[id];
+      if (!cur || cur.status !== "sent" || cur.delivery != null || cur.laneRead != null) return false;
+      data.replyDrafts[id] = { ...cur, laneRead: verdict };
+      persist();
+      return true;
+    },
+    // The same check-and-write as Postgres, with no await between them.
+    async updateReplyDraftIf(id, from, doc) {
+      ensure();
+      const cur = data.replyDrafts[id];
+      if (!cur || cur.status !== from) return false;
+      data.replyDrafts[id] = doc;
+      persist();
+      return true;
     },
     async getReplyDraft(id) {
       ensure();
@@ -3026,6 +3197,23 @@ const fileStore = (() => {
       persist();
       return full;
     },
+    async dealSendCounts(locationId, offerIds = [], { types = DEAL_SEND_EVENT_TYPES } = {}) {
+      ensure();
+      const want = new Set((offerIds || []).filter(Boolean).map(String));
+      if (!want.size) return {};
+      const by = new Map();
+      for (const [k, list] of Object.entries(data.contactEvents)) {
+        if (!k.startsWith(`${locationId}|`)) continue;
+        for (const e of list) {
+          if (!e?.offerId || !want.has(String(e.offerId)) || !types.includes(e.type)) continue;
+          const g = by.get(e.offerId) || { contacts: new Set(), lastAt: null };
+          g.contacts.add(e.contactId);
+          if (!g.lastAt || String(e.at) > g.lastAt) g.lastAt = String(e.at);
+          by.set(e.offerId, g);
+        }
+      }
+      return Object.fromEntries([...by].map(([id, g]) => [id, { sent: g.contacts.size, lastAt: g.lastAt }]));
+    },
     async listContactEventsByOffer(locationId, offerId, { limit = 200 } = {}) {
       ensure();
       return Object.entries(data.contactEvents)
@@ -3211,5 +3399,23 @@ const fileStore = (() => {
  * Chosen backend
  * ============================================================= */
 
-export const store = dbEnabled ? pgStore : fileStore;
+// Every write to an offer row, in either backend, moves this number on. A
+// cache of something read off the offers (the Offers table's whole response,
+// ghl-broker/offers-list.js) is good only while it hasn't moved. Counted
+// after the write settles, so a read that began before it is already stale.
+export const OFFER_WRITE_METHODS = ["createOffer", "updateOffer", "deleteOffer"];
+let offerWrites = 0;
+export const offerWriteGeneration = () => offerWrites;
+function countOfferWrites(backend) {
+  for (const name of OFFER_WRITE_METHODS) {
+    const write = backend[name];
+    if (typeof write !== "function") continue;
+    backend[name] = async function countedOfferWrite(...args) {
+      try { return await write.apply(this, args); } finally { offerWrites++; }
+    };
+  }
+  return backend;
+}
+
+export const store = countOfferWrites(dbEnabled ? pgStore : fileStore);
 export { dbEnabled };

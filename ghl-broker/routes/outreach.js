@@ -54,6 +54,7 @@ import {
   startOutreachFollowUp, getOutreachFollowUpJob, CURSOR_NAME as FOLLOWUP_CURSOR, OUTREACH_FOLLOWUP_HOUR,
 } from "../outreach-followup.js";
 import { startReplierBackfill, getReplierBackfillJob } from "../replier-backfill.js";
+import { probeApify } from "../key-health.js";
 
 // Subject Property is created and seeded here but OWNED by the conversation
 // (see its definition in enrich.js) — hence its own list rather than a new
@@ -1947,10 +1948,19 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     // The listing check (outreachAutopilot.distressCheck): Zillow's page
     // for each listing, 40 to an actor run, two runs at a time. An empty
     // list only checks the token, for free: the sweep asks that before its
-    // pull (outreach-sweep.js listingCheckDown), so keep it free.
+    // pull (outreach-sweep.js listingCheckDown), so keep it free. Since
+    // 2026-11-23 (AH-1) it asks Apify whether the token works (key-health.js
+    // probeApify, a free read): a rejected token used to pass, and the day's
+    // RentCast requests were spent on agents nobody could check.
     screenListings: async ({ locationId, addresses }) => {
       const token = String((await getSettings(locationId)).apifyToken || "").trim();
       if (!token) throw new Error("no Apify token in Settings");
+      if (!addresses?.length) {
+        const probe = await (router.probeApify || probeApify)(token);
+        if (probe.ok === false) throw new Error(`Apify rejected the token (HTTP ${probe.status || "?"})`);
+        if (probe.ok !== true) throw new Error(`Apify didn't answer (${probe.error || "no reply"})`);
+        return new Map();
+      }
       const chunks = [];
       for (let i = 0; i < addresses.length; i += MAX_LISTING_LOOKUPS) chunks.push(addresses.slice(i, i + MAX_LISTING_LOOKUPS));
       const out = new Map();

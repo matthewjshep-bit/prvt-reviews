@@ -643,9 +643,10 @@ export function callList({
   }
 
   /* 5zz. The lot finder (2026-11-23). A homeowner on a luxury lot answered
-   * our text: call them now, then again. The bot holds every reply from one,
-   * so this row is the only thing that answers them. Only the lot and what
-   * they need matter on the call, never the condition of the house. */
+   * our text: call them now, then again. The bot drafts a reply that waits
+   * for Matt (lotFinder.bot "draft", the default) and never names a number;
+   * Matt hears of it in Slack's #needs-matt (owner_answered). Only the lot and
+   * what they need matter on the call, never the condition of the house. */
   {
     const lotEvents = (events || []).filter((e) => e?.contactId && (e.type === "lot_owner_replied" || e.type === "lot_owner_sent"));
     for (const [c, list] of groupBy(lotEvents, (e) => e.contactId)) {
@@ -721,6 +722,24 @@ export function callList({
     const agent = nameOf(c, offersBy, draftsBy);
     const agentFirst = agent ? first(agent) : "the agent";
     const brokerage = String(d.brokerage || "").trim();
+    // A buyer's partner who should get our deals (the 2026-11-23 buyer
+    // audit, dispo-13): Matt adds them to the buyer list; nothing else does.
+    if (d.buyer === true || e.party === "investor") {
+      const reach = [d.email, d.phone].map((x) => String(x || "").trim()).filter(Boolean).join(", ");
+      out.push({
+        id: `referral:${c}:${String(d.name || d.relation || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40)}`,
+        kind: "referral", section: "decide", group: "yours", severity: "now",
+        contactId: c, contactName: agent, offerId: null, address: "", draftId: null, score: 0, since: e.at,
+        title: `Add to the buyer list: ${(() => {
+          const whose = `${agent ? agentFirst : "a buyer"}'s ${String(d.relation || "partner")}`;
+          return String(d.name || "").trim() ? `${String(d.name).trim()} (${whose})` : whose;
+        })()}`,
+        detail: `${reach ? `${reach}. ` : ""}They want our deals to reach them too. Add them yourself${agent ? `, tagged as ${agentFirst}'s` : ""}. The bot never adds or texts them.`,
+        referral: { name: String(d.name || ""), brokerage: "", relation: String(d.relation || ""), phone: String(d.phone || ""), email: String(d.email || "") },
+        ops: [],
+      });
+      continue;
+    }
     out.push({
       id: `referral:${c}:${String(d.name || d.relation || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40)}`,
       kind: "referral", section: "decide", group: "yours", severity: "now",

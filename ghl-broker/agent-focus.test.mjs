@@ -123,3 +123,18 @@ test("no check-in or cold ladder rung goes through any door to an agent whose bo
   assert.equal(await agentTurnReason({ store: { ...store, async listOffers() { return [LIVE]; } }, locationId: "LOC", contactId: "c1", kind: "offer_nudge", config, now: NOW }), null);
   assert.equal(await agentTurnReason({ store, locationId: "LOC", contactId: "c2", kind: "agent_pulse", config, now: NOW }), null, "someone we owe nothing");
 });
+
+// The 2026-11-23 audit (R1): agents we'd promised a number got the generic
+// check-in instead of the number. While we owe one, the check-in waits.
+test("no check-in goes to an agent we owe a number, until it goes or we pass", async () => {
+  const promise = { type: "promise_made", contactId: "c1", at: ago(2), address: "41 Alder Ln, Shelton, WA 98584", data: { what: "number", text: "Let me run the numbers on it and get back to you.", asksThem: false } };
+  const storeOf = (events) => ({ ...storeWith({ offers: [] }), async listContactEvents(_loc, contactId) { return contactId === "c1" ? events : []; } });
+  assert.match(await agentTurnReason({ store: storeOf([promise]), locationId: "LOC", contactId: "c1", kind: "agent_pulse", config, now: NOW }), /we owe them a number on 41 Alder Ln: it goes first/);
+  assert.match(await agentTurnReason({ store: storeOf([promise]), locationId: "LOC", contactId: "c1", kind: "outreach_nudge", config, now: NOW }), /we owe them a number/);
+  // The number went (a text of ours with a price keeps it): the check-in may go.
+  const kept = { type: "promise_kept", contactId: "c1", at: ago(1), data: { by: "our_number" } };
+  assert.equal(await agentTurnReason({ store: storeOf([promise, kept]), locationId: "LOC", contactId: "c1", kind: "agent_pulse", config, now: NOW }), null);
+  // A look that may come to nothing is not a number we owe.
+  const maybe = { ...promise, data: { ...promise.data, text: "I'll run the numbers and circle back if it pencils." } };
+  assert.equal(await agentTurnReason({ store: storeOf([maybe]), locationId: "LOC", contactId: "c1", kind: "agent_pulse", config, now: NOW }), null);
+});

@@ -16,6 +16,7 @@ import { CALL_INVITE } from "./call-words.js";
 import { CONTACT_CARD_DEFAULTS, normalizeContactCard } from "./contact-card.js";
 import { OUR_BOX_WORDS, RURAL_LOT_ACRES, normalizeFocusKinds } from "./asset-type.js";
 import { DEFAULT_HOMES, homesFrom } from "./outreach-opener.js";
+import { LANE_BREAKER_DEFAULTS, normalizeLaneBreaker } from "./lane-breaker.js";
 
 // The re-quote guard's defaults. They live here rather than in requote.js
 // because requote.js reaches offer-calc, and offer-calc reaches back here to
@@ -1150,6 +1151,11 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
   // Slack #machine, a dead number stops getting machine texts. Off until Matt
   // switches it on; it reads GHL and never sends anything.
   deliveryWatch: { enabled: false },
+  // The lane breaker (shared/lane-breaker.js, ghl-broker/lane-breaker.js,
+  // 2026-11-23): a kind of machine text whose sends get carrier-blocked or
+  // STOPped goes back to drafts until Matt clears it. ON by default: it only
+  // ever stops sends, never starts one. `enabled: false` switches it off.
+  laneBreaker: LANE_BREAKER_DEFAULTS,
 });
 
 // The photo-only reply until 2026-11-09, read as never changed.
@@ -1717,6 +1723,7 @@ export function normalizeConversationAi(doc, seed = {}) {
       offDays: normalizeOffDays(auto.offDays),
     },
     deliveryWatch: { enabled: bool(d.deliveryWatch?.enabled, D.deliveryWatch.enabled) },
+    laneBreaker: normalizeLaneBreaker(d.laneBreaker),
   };
   // Version 1 → 2, once. A deploy never edits a saved setting — except this
   // once, at Matt's explicit ask on 2026-09-07 ("can you enable these"):

@@ -28,12 +28,12 @@ import { ourComeDown, ourMoveUp, resolveHouse, groupHouses, pricedAt, isDraftOff
 import { ledgerEvents, eventToHistoryLine, factsAsCustom, factsEmpty, addressKey, propertyDossier, PROPERTY_DETAIL_FIELDS, CORE_DETAIL_FIELDS } from "./shared/contact-record.js";
 import { emailContextText } from "./shared/gmail.js";
 import { housesAwaitingAddress } from "./shared/mentioned-houses.js";
-import { showingContextLines } from "./shared/showing.js";
+import { showingContextLines, upcomingWindows } from "./shared/showing.js";
 import { accessFor, accessLines } from "./shared/deal-access.js";
 import { assetOf, assetPhrase, isRuralLot, kindHold, normalizeAsset, isLuxuryLot } from "./shared/asset-type.js";
 import { pricedByHand } from "./shared/underwrite-model.js";
 import { buyerFacts } from "./shared/underwrite-checks.js";
-import { blastNote, pickedRehabLevel } from "./shared/blast-text.js";
+import { blastNote, pickedRehabLevel, dealFacts } from "./shared/blast-text.js";
 import { reopensOnTheirNumbers } from "./shared/held-underwrites.js";
 import { numberStance, stanceWaitingFor, sellerOwnNumber } from "./shared/number-stance.js";
 import { claimFacts } from "./shared/reply-claims.js";
@@ -516,13 +516,16 @@ export function lessonsContextText(digest = "") {
     d.split(/(?<=[.!?])\s+/).filter(Boolean).map((l) => `- ${l.trim()}`).join("\n");
 }
 
+// `numberByHand` (default: mattPrices) feeds only the reply gate's "no number
+// yet" check, so a lane with its own prompt (a lot owner) can be priced by hand
+// without the agent-worded MATT_PRICES_LINE landing in that prompt.
 export async function loadAgentContext({ store, locationId, contactId, custom = {}, now = Date.now(), showMath = false, transcript = "", focusKinds = undefined, highStakes = null, mattPrices = false,
-  engineMode = false }) {
+  engineMode = false, numberByHand = mattPrices }) {
   const rows = await store.listOffers(locationId, { contactId, limit: 25, lean: true }).catch(() => []);
   const { facts, events } = await loadRecord(store, locationId, contactId);
   return { ...buildAgentContext({ offers: rows, custom, now, showMath, facts, events, transcript, highStakes, mattPrices, engineMode }), pricedOutsideFocus: pricedOutsideFocus(rows, focusKinds),
     // What went out and which calls happened, for the reply gates (shared/reply-claims.js).
-    claims: claimFacts({ offers: rows, events, mattPrices, now }) };
+    claims: claimFacts({ offers: rows, events, mattPrices: numberByHand, now }) };
 }
 
 // Zillow's word for the house: the kind a person set on the offer first, then
@@ -642,6 +645,24 @@ function lotFactsOf(offer = {}) {
   return parts.join(", ");
 }
 
+// beds, baths, sqft, year, lot and zoning off the underwrite's subject
+// record (the same one the blast text reads, shared/blast-text.js dealFacts).
+function houseSize(offer = {}) {
+  const f = dealFacts(offer);
+  const subj = offer?.snapshot?.comps?.result?.info || offer?.snapshot?.subjectInfo || {};
+  return {
+    beds: Number(f.beds) || 0, baths: Number(f.baths) || 0, sqft: Number(f.sqft) || 0, year: Number(f.yearBuilt) || 0,
+    lotSqft: Number(f.lotSqft) || Number(subj.lotSqft || subj.lotSize) || 0,
+    zoning: String(f.zoning || subj.zoning || "").trim().slice(0, 24),
+  };
+}
+const sizeWords = (z = {}) => [
+  [z.beds ? `${z.beds}bd` : "", z.baths ? `${z.baths}ba` : "", z.sqft ? `${Math.round(z.sqft).toLocaleString("en-US")} sqft` : ""].filter(Boolean).join(" "),
+  z.year > 1500 ? `built ${Math.round(z.year)}` : "",
+  z.lotSqft ? `${Math.round(z.lotSqft).toLocaleString("en-US")} sqft lot` : "",
+  z.zoning ? `zoned ${z.zoning}` : "",
+].filter(Boolean).join(", ");
+
 const dealLine = (d) => {
   const money = d.lot
     ? [d.price ? `price ${fmtMoney(d.price)}${d.agreed ? " (agreed with them; hold it, do not reopen it)" : ""}` : "price not set yet", `a teardown lot: ${d.lot}`].join(", ")
@@ -670,13 +691,15 @@ const dealLine = (d) => {
   const kind = d.kind ? `${d.kind} — ` : "";
   // The record's answers to what buyers ask ("is it septic?"); say only these.
   const about = (d.facts || []).length ? ` — about the house: ${d.facts.join(", ")}` : "";
+  const sized = d.lot ? "" : sizeWords(d.size);
+  const size = sized ? ` — size: ${sized}` : "";
   // How WE describe it: the rehab level Matt picked and the package headline.
   // These are the only words for the house's condition the bot may use — a
   // deal without them is described by its numbers (3511 NE 153rd St,
   // 2026-09-29: "heavy rehab" was nobody's word).
   const ours = [d.rehabLevel ? `${d.rehabLevel} rehab` : "", d.ownWords ? `"${d.ownWords}"` : ""].filter(Boolean);
   const words = ours.length ? ` — in our words: ${ours.join(", ")}` : "";
-  return `- ${d.address}: ${kind}${money}${about}${words}${status}${said}${stage}${invite}${walk}`;
+  return `- ${d.address}: ${kind}${money}${size}${about}${words}${status}${said}${stage}${invite}${walk}`;
 };
 
 /**
@@ -709,7 +732,14 @@ export function buildInvestorContext({ investor = {}, deals = [], invites = [], 
   const buybox = facts && !factsEmpty(facts) ? normalizeBuybox(custom) : (investor.buybox || normalizeBuybox(custom));
   const profile = buildBuyboxProfile({ ...investor, buybox }, { maxChars: 900 });
   const inviteByRoom = new Map();
-  for (const i of invites) if (i?.dataroomId) inviteByRoom.set(i.dataroomId, i);
+  // The newest invite per room: every link sent is its own row, and the
+  // "no second link inside a day" rule reads this one's sentAt.
+  const inviteAt = (i) => Date.parse(i?.sentAt || i?.createdAt || "") || 0;
+  for (const i of invites) {
+    if (!i?.dataroomId) continue;
+    const had = inviteByRoom.get(i.dataroomId);
+    if (!had || inviteAt(i) > inviteAt(had)) inviteByRoom.set(i.dataroomId, i);
+  }
 
   const amounts = new Set();
   const forbidden = new Set();
@@ -772,6 +802,15 @@ export function buildInvestorContext({ investor = {}, deals = [], invites = [], 
         ...accessLines(accessFor(offer.deal)),
       ],
       occupancy: accessFor(offer.deal).occupancy,
+      // The house's size from the underwrite's subject record, so "how many
+      // beds?" or "how big is the lot?" is answered from the record (the
+      // 2026-11-23 buyer audit, dispo-8), and the reply gate knows what is
+      // and isn't on file (shared/buyer-reply.js factOnFile).
+      size: houseSize(offer),
+      // A package link the reply can carry (an active room), and a window or
+      // an access method a "when can I see it?" can be answered with.
+      packageReady: Boolean(room),
+      walkOnFile: Boolean((offer.deal.stage === "under_contract" && upcomingWindows(offer.deal.showing, now).length) || accessFor(offer.deal).method),
     };
     if (link || blasted) linked.push(row);
     else {

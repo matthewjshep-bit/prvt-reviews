@@ -241,7 +241,7 @@ export function contactAsks({ events = [], config, now = Date.now() }) {
     }
     const pr = list.filter((e) => ["promise_made", "promise_owed", "promise_kept"].includes(e.type) && (ms(e.at) ?? 0) >= now - PROMISE_WINDOW_HOURS * HOUR_MS);
     const keptAt = pr.filter((e) => e.type === "promise_kept").at(-1)?.at || "";
-    const made = pr.filter((e) => e.type === "promise_made" && e.data?.by !== "you" && !PERSON_PROMISES.has(e.data?.what) && String(e.at) > keptAt
+    const made = pr.filter((e) => e.type === "promise_made" && e.data?.by !== "you" && e.data?.by !== "their_ask" && !PERSON_PROMISES.has(e.data?.what) && String(e.at) > keptAt
       && (e.data?.asksThem !== true || e.data?.what === "paper"));
     if (made.length) {
       const at = ms(made[0].data?.dueAt) ?? (ms(made[0].at) + PROMISE_DUE_HOURS * HOUR_MS);

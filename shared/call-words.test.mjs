@@ -97,7 +97,7 @@ test("what they asked: a call or a time, and only the time words come back", () 
 test("an agent or buyer who wants a call or a walkthrough is one Matt hears about; anyone else isn't", () => {
   assert.deepEqual(callWanted({ party: "agent", intent: "wants_call", message: "call me Thursday at 2" }), { intent: "wants_call", wants: "call", when: "Thursday at 2" });
   assert.deepEqual(callWanted({ party: "agent", intent: "scheduling", message: "I'm free tomorrow morning" }), { intent: "scheduling", wants: "call", when: "tomorrow morning" });
-  assert.deepEqual(callWanted({ party: "investor", intent: "wants_walkthrough", message: "can I see it saturday" }), { intent: "wants_walkthrough", wants: "walkthrough", when: "saturday" });
+  assert.deepEqual(callWanted({ party: "investor", intent: "wants_walkthrough", message: "can I see it saturday" }), { intent: "wants_walkthrough", wants: "walkthrough", when: "saturday", callNow: true });
   // Their words ask for a call even when the reply read it as a question.
   assert.deepEqual(callWanted({ party: "agent", intent: "question", message: "what's the number? easier if you call me at 4pm" }), { intent: "wants_call", wants: "call", when: "at 4pm" });
   assert.equal(callWanted({ party: "agent", intent: "question", message: "what's the number?" }), null);
@@ -110,4 +110,19 @@ test("booking and the call ask are retired, and the rule says call me whenever",
   assert.equal(CALL_ASK_RETIRED, true);
   assert.ok(NO_CALL_RULE.includes(CALL_INVITE));
   assert.match(NO_CALL_RULE, /never promise a call, ask for one, book one or name a time to talk/);
+});
+
+// What went wrong (the 2026-11-23 buyer audit, dispo-4): a buyer said yes
+// and asked for access, nobody answered for four days, and the house went to
+// another buyer. A buyer's yes to buy, a yes to the walkthrough, or "when
+// can I see it?" read as a question is a call now.
+test("a buyer's yes or when-can-I-see-it is a call-now ping, whatever the reply read it as", () => {
+  assert.deepEqual(callWanted({ party: "investor", intent: "wants_to_buy", message: "I'll take it, send the paperwork" }),
+    { intent: "wants_to_buy", wants: "buy", when: "", callNow: true });
+  assert.deepEqual(callWanted({ party: "investor", intent: "question", message: "When can I see it?" }),
+    { intent: "wants_walkthrough", wants: "walkthrough", when: "", callNow: true });
+  assert.deepEqual(callWanted({ party: "investor", intent: "interested", message: "yes I can make it", walkthrough: "coming" }),
+    { intent: "wants_walkthrough", wants: "walkthrough", when: "", callNow: true });
+  assert.equal(callWanted({ party: "investor", intent: "interested", message: "send photos" }), null, "wanting photos is not a call");
+  assert.equal(callWanted({ party: "agent", intent: "question", message: "When can I see it?" }), null, "an agent's walk ask is theirs to set");
 });

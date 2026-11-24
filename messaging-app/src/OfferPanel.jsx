@@ -11,14 +11,14 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Check, ExternalLink, FileText, Pencil, Plus, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
-import { agreedAboveOurNumber, numberApproved, offerHeat, priceAgreed, priceLocked } from "@shared/offer-status.js";
-import { approveNumber, clearAgreedPrice, getOffer, listOffers, offerEditorUrl, requoteOffer, zillowUrl } from "./api.js";
+import { DEAD_STATUSES, WE_PASS_REASONS, agreedAboveOurNumber, effectiveStatus, numberApproved, offerHeat, priceAgreed, priceLocked, wePassedKey } from "@shared/offer-status.js";
+import { approveNumber, clearAgreedPrice, getHoldText, getOffer, listOffers, offerEditorUrl, requoteOffer, setOfferStatus, zillowUrl } from "./api.js";
 import { annotateCurrent, foldHouses } from "@shared/current-offer.js";
-import { BTN, ChecksLine, CurrentPill, HotPill, PaperHeldBanner, StagePill, StatusPill } from "./ui.jsx";
+import { BTN, BTN_DANGER, ChecksLine, CurrentPill, HotPill, Menu, PaperHeldBanner, StagePill, StatusPill } from "./ui.jsx";
 import { AiProvenance, RehabScope } from "./OfferDetailModal.jsx";
 import { forget, useLoad } from "./work-data.js";
 import { concerns, onOfferChanged } from "./offer-sync.js";
-import { allInPct, allInTone } from "./work-queue.js";
+import { allInPct, allInTone, composeInReplyBox } from "./work-queue.js";
 
 const LABEL = "text-xs font-semibold uppercase tracking-wide text-slate-500";
 const money = (n) => (Number(n) > 0 ? fmtMoney(n) : "—");
@@ -74,19 +74,28 @@ export function parseAmount(v) {
 // Our number, re-quotable in place: the same revision the editor makes, and
 // nothing is sent. Not on a deal. On a price they agreed to, re-quoting takes
 // the agreement back first, and says so before you press it.
-function OurOffer({ offer, onRequote }) {
+// `seed` ({ amount, cap, nonce }, Meet under a counter): opens the re-quote
+// with that number in it, and no number above `cap` (their counter, or the
+// walk-away) is taken. Nothing changes until Re-quote is pressed.
+function OurOffer({ offer, onRequote, seed = null }) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [cap, setCap] = useState(0);
+  useEffect(() => {
+    if (!seed?.nonce) return;
+    setValue(meetValue(seed.amount)); setCap(seed.cap || 0); setError(""); setEditing(true);
+  }, [seed?.nonce]);   // eslint-disable-line react-hooks/exhaustive-deps
   const ours = Number(offer.cashAmount) || 0;
   const why = offer.deal ? "It's a deal — change the price on the deal"
     : offer.status === "draft" ? "Publish the draft first"
     : "";
   const agreed = priceLocked(offer) ? priceAgreed(offer) : null;
   const amount = parseAmount(value);
+  const overCap = cap > 0 && amount > cap;
   async function save() {
-    if (!(amount > 0) || busy) return;
+    if (!(amount > 0) || busy || overCap) return;
     setBusy(true); setError("");
     if (agreed) {
       try { await clearAgreedPrice(offer.id); } catch (e) { setBusy(false); setError(e.message); return; }
@@ -120,14 +129,96 @@ function OurOffer({ offer, onRequote }) {
         <input id="work-our-offer" autoFocus value={value} onChange={(e) => { setValue(e.target.value); setError(""); }}
           onKeyDown={(e) => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }}
           className="w-28 rounded-lg border border-slate-300 px-2 py-1 text-sm tabular-nums focus:border-blue-500 focus:outline-none" placeholder="e.g. 750k" />
-        <button type="button" className={BTN} disabled={busy || !(amount > 0)} onClick={save}><Check size={12} /> {busy ? "…" : "Re-quote"}</button>
-        <button type="button" className="rounded p-1 text-slate-500 hover:bg-slate-100" onClick={() => setEditing(false)} aria-label="Cancel"><X size={14} /></button>
+        <button type="button" className={BTN} disabled={busy || !(amount > 0) || overCap} onClick={save}><Check size={12} /> {busy ? "…" : "Re-quote"}</button>
+        <button type="button" className="rounded p-1 text-slate-500 hover:bg-slate-100" onClick={() => { setEditing(false); setCap(0); }} aria-label="Cancel"><X size={14} /></button>
       </div>
       <div className="mt-0.5 text-xs text-slate-500">
         {error ? <span className="text-red-700">{error}</span>
+          : overCap ? <span className="text-red-700">Meeting them stops at {fmtMoney(cap)}.</span>
           : amount > 0 ? `${fmtMoney(amount)} — ${agreed ? `takes back the agreed ${fmtMoney(agreed.amount)}, and ` : ""}the letter is redone at this number. Nothing is sent.`
           : "A number, like 750k."}
       </div>
+    </div>
+  );
+}
+
+/**
+ * meetSeed(offer) → { amount, cap } | null — what Meet puts in the re-quote
+ * box under a counter: halfway between our number and theirs, rounded down
+ * to the thousand, never above their counter, and never above the walk-away
+ * on the house (pricing.walkAway, the most we'd pay) when there is one. Null
+ * when there is nothing between ours and theirs to meet at.
+ */
+export function meetSeed(offer) {
+  const ours = Math.round(Number(offer?.cashAmount) || 0);
+  const theirs = Math.round(Number(offer?.counter?.amount) || 0);
+  if (!(ours > 0) || !(theirs > ours)) return null;
+  const walk = Math.round(Number(offer?.pricing?.walkAway) || 0);
+  const cap = walk > 0 ? Math.min(theirs, walk) : theirs;
+  if (!(cap > ours)) return null;
+  const amount = Math.min(cap, Math.max(ours + 1000, Math.floor((ours + theirs) / 2 / 1000) * 1000));
+  return { amount, cap };
+}
+
+/**
+ * meetValue(amount) → what the re-quote box shows for a Meet seed: "320k" on
+ * a whole thousand, the exact dollars otherwise ("300,500"), so a counter a
+ * few hundred above ours never reads back as our own number.
+ */
+export const meetValue = (amount) => {
+  const n = Math.round(Number(amount) || 0);
+  return n % 1000 === 0 ? `${n / 1000}k` : n.toLocaleString("en-US");
+};
+
+/**
+ * <CounterAnswers offer onMeet /> — three answers under their counter, as
+ * the Desk had them (Matt, 2026-10-02), each reusing what already exists and
+ * none sending anything:
+ *   Hold ours  the hold words (GET /:id/hold: the lowest number we've put to
+ *              them, never above what we sent) go in the reply box; Send is his
+ *   Meet…      opens our number's re-quote with meetSeed in it; nothing
+ *              changes until he presses Re-quote
+ *   Walk       we passed, with its reason (the status menu's buckets)
+ * Since 10-20 the bot answers counters under the negotiation autopilot; these
+ * are for the one he wants to answer himself.
+ */
+function CounterAnswers({ offer, onMeet }) {
+  const [busy, setBusy] = useState("");
+  const [note, setNote] = useState(null);   // { tone, text }
+  const seed = meetSeed(offer);
+  const hold = async () => {
+    setBusy("hold"); setNote(null);
+    try {
+      const r = await getHoldText(offer.id);
+      setNote(composeInReplyBox(r.text)
+        ? { tone: "green", text: `In the reply box at ${fmtMoney(r.amount)}. Read it, then Send.` }
+        // No reply box on screen took it: show the words to copy instead.
+        : { tone: "amber", text: `No reply box is open here. The hold words at ${fmtMoney(r.amount)}: ${r.text}` });
+    } catch (e) { setNote({ tone: "red", text: e.message || "No hold words for this one." }); }
+    finally { setBusy(""); }
+  };
+  const walk = async (code) => {
+    setBusy("walk"); setNote(null);
+    try {
+      await setOfferStatus(offer.id, wePassedKey(code), "walked away from their counter");
+      setNote({ tone: "green", text: "Marked we passed." });
+    } catch (e) { setNote({ tone: "red", text: e.message || "That didn't change." }); }
+    finally { setBusy(""); }
+  };
+  const reasons = WE_PASS_REASONS.filter((r) => r.menu !== false)
+    .map((r) => ({ key: r.code, label: `${r.label}${r.hint ? ` (${r.hint})` : ""}`, onSelect: () => walk(r.code) }));
+  return (
+    <div className="col-span-2 -mt-1 space-y-1" role="group" aria-label="Answer their counter">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <button type="button" className={BTN} disabled={Boolean(busy)} onClick={hold}
+          title="The words, at the lowest number we've put to them, go in the reply box">{busy === "hold" ? "…" : "Hold ours"}</button>
+        <button type="button" className={BTN} disabled={Boolean(busy) || !seed} onClick={() => onMeet?.(seed)}
+          title={seed ? `Opens our number at ${fmtMoney(seed.amount)} to change before you re-quote` : "Nothing between our number and theirs to meet at"}>Meet…</button>
+        <Menu label="Walk away: we passed, and why" align="left" items={reasons}
+          trigger={<span className={BTN_DANGER}>{busy === "walk" ? "…" : "Walk"}</span>} />
+        <span className="text-[11px] text-slate-400">Nothing sends from here.</span>
+      </div>
+      {note && <p className={`select-text text-xs ${note.tone === "red" ? "text-red-700" : note.tone === "amber" ? "text-amber-800" : "text-emerald-800"}`}>{note.text}</p>}
     </div>
   );
 }
@@ -231,6 +322,7 @@ function ApproveAgreed({ offer }) {
  *   onRequote(offer, amount) → { error? }
  */
 export function OfferPanelBody({ offer, siblings = [], item = {}, loading = false, error = "", replaced = null, onRequote = null, requoting = false, onSelectOffer = null, onEdit = null }) {
+  const [meet, setMeet] = useState(null);   // Meet's seed for our number's re-quote: { amount, cap, nonce }
   const startHref = item.contactId ? `${offerEditorUrl(null, { view: "new" })}&contact_id=${encodeURIComponent(item.contactId)}` : offerEditorUrl(null, { view: "new" });
   // Still looking for their offers (a row that names none): not "none" yet.
   if (!item.offerId && !offer && !loading) {
@@ -313,9 +405,12 @@ export function OfferPanelBody({ offer, siblings = [], item = {}, loading = fals
       {error && <div className="text-xs text-red-700">{error}</div>}
 
       <div className="grid grid-cols-2 gap-x-4 gap-y-3">
-        <OurOffer key={offer.id} offer={offer} onRequote={onRequote} />
+        <OurOffer key={offer.id} offer={offer} onRequote={onRequote} seed={meet?.offerId === offer.id ? meet : null} />
         <Figure label="Asking" value={money(asking)} strong />
         {counter && <Figure label="Their counter" value={money(counter.amount)} tone="text-violet-800" />}
+        {counter && !offer.deal && onRequote && !DEAD_STATUSES.has(effectiveStatus(offer)) && (
+          <CounterAnswers offer={offer} onMeet={(seed) => setMeet({ ...seed, offerId: offer.id, nonce: (meet?.nonce || 0) + 1 })} />
+        )}
         {agreed && <Figure label="Agreed" value={money(agreed.amount)} tone="text-emerald-700" />}
         <Figure label="ARV" value={money(arv)} />
         <Figure label="Repairs" value={money(repairs)} />

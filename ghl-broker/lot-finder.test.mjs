@@ -298,3 +298,78 @@ test("a lot owner's first text the carrier blocked goes once more in another cle
   const again = await queueLotOwnerRetry({ store, locationId: "L12", saved, draft: first, now: T0 + 9000000, sendsEnabled: true });
   assert.match(again.skipped, /already retried once/);
 });
+
+// The Luxury page's "Owners who answered" strip (2026-11-24): a homeowner
+// who answered and has no luxury offer from Matt yet, newest first. A held
+// draft with no number on it is not an offer; a priced or passed one is.
+test("an owner who answered and has no lot offer yet is on the Luxury page's list, newest first", async () => {
+  const { ownersWhoAnswered } = await import("./lot-finder.js");
+  const L = "L13";
+  const replied = (contactId, minutes, address) => recordEvent({ store, locationId: L, contactId, party: "owner", type: "lot_owner_replied",
+    at: new Date(T0 - minutes * 60000).toISOString(), address, source: "conversation", ref: `ra-${contactId}-${minutes}`, dedupeKey: `lot_owner_replied:ra-${contactId}-${minutes}` });
+  await store.upsertContactProfile(L, "c-a", { party: "owner", name: "Pat Example" });
+  await store.upsertContactProfile(L, "c-b", { party: "owner", name: "Sam Sample" });
+  await replied("c-a", 300, "9 Lakeview Ln");
+  await replied("c-a", 30, "9 Lakeview Ln");
+  await replied("c-b", 60, "4 Ridge Rd");
+  await replied("c-c", 90, "11 Lakeview Ln");   // priced by Matt
+  await replied("c-d", 120, "2 Summit Dr");     // a draft the machine held, no number
+  await replied("c-old", 60 * 24 * 90, "8 Old Rd");
+  await store.createOffer({ locationId: L, contactId: "c-c", address: "11 Lakeview Ln, Clyde Hill, WA 98004", status: "sent", cashAmount: 2100000, asset: { type: "sfr", lane: "luxury", by: "you" } });
+  await store.createOffer({ locationId: L, contactId: "c-d", address: "2 Summit Dr, Clyde Hill, WA 98004", status: "draft", cashAmount: 0, asset: { type: "sfr", lane: "luxury", by: "underwrite" } });
+  const rows = await ownersWhoAnswered({ store, locationId: L, now: T0 });
+  assert.deepEqual(rows.map((r) => [r.contactId, r.street, r.name, r.replies]), [
+    ["c-a", "9 Lakeview Ln", "Pat Example", 2],
+    ["c-b", "4 Ridge Rd", "Sam Sample", 1],
+    ["c-d", "2 Summit Dr", "", 1],
+  ]);
+  assert.equal(rows[0].at, new Date(T0 - 30 * 60000).toISOString(), "their newest answer");
+});
+
+// The Lots tab polls a light read while a run goes, and the Luxury page reads
+// the owners who answered; neither lists every owner row (GET / does).
+test("the lot finder's light reads answer without listing every owner", async () => {
+  const { default: createLotFinderRouter } = await import("./routes/lot-finder.js");
+  await recordEvent({ store, locationId: "L14", contactId: "c-z", party: "owner", type: "lot_owner_replied", at: new Date().toISOString(),
+    address: "3 Cedar Ct", source: "conversation", ref: "ra-z", dedupeKey: "lot_owner_replied:ra-z" });
+  const router = createLotFinderRouter({ resolveLocation: () => ({ locationId: "L14" }), getSettings: async () => ({}) });
+  const call = async (p) => {
+    const layer = router.stack.find((l) => l.route?.path === p && l.route.methods.get);
+    let body = null;
+    const res = { status() { return this; }, json(b) { body = b; return this; } };
+    const listed = store.listLotOwners;
+    store.listLotOwners = async () => { throw new Error("listed every owner"); };
+    try { await layer.route.stack[0].handle({ query: {}, body: {} }, res, () => {}); } finally { store.listLotOwners = listed; }
+    return body;
+  };
+  const job = await call("/job");
+  assert.deepEqual(Object.keys(job).sort(), ["job", "last"]);
+  const answered = await call("/answered");
+  assert.ok(Array.isArray(answered.owners), JSON.stringify(answered));
+  assert.deepEqual(answered.owners.map((o) => [o.contactId, o.street]), [["c-z", "3 Cedar Ct"]]);
+});
+
+// The weekly scan's sold teardowns were computed and thrown away (2026-11-24
+// audit). They're kept per pocket, apart from the scan time, so the lot
+// analyzer can offer them to Matt as comps to add; nothing prices with them.
+test("the weekly scan keeps the pocket's sold teardowns, and the analyzer can ask for the ones around a house", async () => {
+  const g = ghl();
+  const teardowns = [
+    { address: "20 Summit Dr, Clyde Hill, WA 98004", price: 2100000, saleDate: "2026-03-10", lotSqft: 33000, sqft: 2100, yearBuilt: 1966 },
+    { address: "22 Summit Dr, Clyde Hill, WA 98004", price: 2350000, saleDate: "2026-08-02", lotSqft: 36000, sqft: 2600, yearBuilt: 1959 },
+  ];
+  const saved = { ...ON({ traceDailyCap: 0, dailyNew: 0 }), apifyToken: "apify" };
+  await runLotFinder({ client: {}, locationId: "L15", saved, store, deps: { fetch: fetchStub(PHONES), scanPocketZillow: async () => ({ suggest: {}, teardowns, newBuilds: [] }), resolveBuilderContact: async () => null, ...g.deps }, now: T0 });
+  const cur = (await store.getJobCursor("L15", `${CURSOR_NAME}Pulls`)).doc;
+  assert.equal(typeof cur.scans["clyde-hill"], "string", "the scan time stays a timestamp");
+  assert.equal(cur.teardowns["clyde-hill"].rows.length, 2);
+  const { default: createLotFinderRouter } = await import("./routes/lot-finder.js");
+  const router = createLotFinderRouter({ resolveLocation: () => ({ locationId: "L15" }), getSettings: async () => saved });
+  const layer = router.stack.find((l) => l.route?.path === "/teardowns" && l.route.methods.get);
+  const ask = async (query) => { let body = null; await layer.route.stack[0].handle({ query, body: {} }, { status() { return this; }, json(b) { body = b; return this; } }, () => {}); return body; };
+  const near = await ask({ lat: "47.635", lng: "-122.212" });
+  assert.equal(near.pocket.id, "clyde-hill");
+  assert.deepEqual(near.comps.map((c) => [c.label, c.price]), [["22 Summit Dr", 2350000], ["20 Summit Dr", 2100000]]);
+  const far = await ask({ lat: "47.1", lng: "-122.9" });
+  assert.deepEqual([far.pocket, far.comps], [null, []], "a house outside every pocket gets none");
+});

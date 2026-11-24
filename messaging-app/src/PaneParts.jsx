@@ -36,6 +36,7 @@ import { forget, useLoad } from "./work-data.js";
 import { onOfferChanged } from "./offer-sync.js";
 import { defaultOfferFor, teachRowId } from "./work-queue.js";
 import { feedbackItemOf } from "./RowOps.jsx";
+import { dealHref } from "./links.js";
 
 const ACT = "inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-40";
 // The pane's O key: open the offer over the page.
@@ -303,7 +304,7 @@ export function PaneActions({ pane, item, targets, rowOfferId = null, onStatusCh
       setNote({ tone: "red", text: e.message || "That didn't change." });
     } finally { setBusy(false); }
   }
-  const goDeals = onDealNav || (() => { window.location.href = `/deals${window.location.search}`; });
+  const goDeals = onDealNav || ((x, extra) => { window.location.href = dealHref(x, extra); });
   return (
     <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
       {note && <span className={`text-xs ${note.tone === "red" ? "text-red-700" : note.tone === "amber" ? "text-amber-700" : "text-emerald-700"}`}>{note.text}</span>}

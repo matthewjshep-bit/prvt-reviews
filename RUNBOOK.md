@@ -405,7 +405,19 @@ big and old enough (`pocketFor` in `shared/lot-finder.js`; `luxuryLaneFor` in
   never passed, never a read asked of the agent;
 - any save of an offer on such a house (the editor, a re-quote) stamps
   `asset.lane = "luxury"` whoever made it, so the Luxury page's Offers and
-  Deals list every one and the lot analyzer opens it.
+  Deals list every one and the lot analyzer opens it. The editor reads the
+  lane off the row whoever stamped it (a held draft is stamped by
+  `underwrite`), so a held lot opens in the lot analyzer, not on comps; comps
+  only once the lane is turned off on it (2026-11-24). A held lot's draft also
+  saves `model: "lot"`, the luxury pick and a lot deal with the lot's size,
+  year built and house size (`lotDealFromSubject`); comps and the number stay
+  Matt's.
+- **Prefill, for Matt only** (2026-11-24): the lot analyzer opens with the
+  lot's own facts, and offers the sold teardowns the pocket's weekly scan read
+  (kept on the `lotFinderPulls` cursor as `teardowns[pocketId]`, served by
+  `GET /api/lot-finder/teardowns?lat&lng` for the pocket around the house) as
+  **suggestions with Add**: none is counted until he adds it, and none of it
+  reaches the bot or a text.
 
 ## The lot finder — parcels → skip trace → owner texts, and the builders who buy there (2026-11-23)
 
@@ -470,9 +482,9 @@ the numbers before switching a pocket on.
    contact = the principal, company = the entity. Someone already
    in GHL as an agent or a buyer is left as they are. Dry unless
    `OUTREACH_IMPORTS_ENABLED`, like every import.
-5. **Texts**: the first text names the street and the price band in the
-   method's shape (eight variants, `OPEN_TEXTS`: who we are, the address,
-   respect for their time, the band, cash and no agent fees, one soft ask);
+5. **Texts**: the first text names the street and the neighborhood, never a
+   number (Matt, 2026-11-23: no price band in the first text; eight variants,
+   `OPEN_TEXTS`: who we are, the builders we work with, the address, one soft ask);
    one follow-up `followUpDays` after the first actually went
    (`lot_owner_sent`, never the draft); then nothing (`nextOwnerStep`). House
    rules hold: no dollar sign, one question, no "following up"; a text that
@@ -494,17 +506,26 @@ wearing the **owner playbook** (party `agent`, `partySource lot_owner`, lane
 `owner`; `OWNER_PLAYBOOK` in `shared/lot-finder.js`, Matt's own words added
 from Autopilot → Lots): a homeowner, not an agent; we work with builders and
 say so; only the lot and what they need, never the roof or the kitchen; the
-price band and the eight percent openly, the Zestimate line, a counter is a
-number not a no; privacy, certainty, a couple of months after closing; no
+price is Matt's (never a number, a range or a band; Matt prices every lot), the
+eight percent a listing would cost them, the Zestimate line, a number from
+them is a counter not a no; privacy, certainty, a couple of months after closing; no
 "cash", no assign/fee words, no "other fixers". The listing-agent blocks that
 don't fit are left out of the system prompt (`buildSystemPrompt({ lane })`),
 the range-only float and the "a person prices it" line are off for them, and
 the agent instructions (buy box, focus rule) are replaced. **The reply waits
 for Matt** (`decideAutoSend` code `owner_lane`) unless `lotFinder.bot` is
 `send`; `off` hands the thread off with no draft. Every inbound from one writes
-`lot_owner_replied`, which ends the finder's texts, and the Desk shows
-`call_lot_owner_replied` (score 98): call now, then again. "Worth way more
-than that" is a reply, not a dead lead.
+`lot_owner_replied` (with the street our first text was about, never their
+words), which ends the finder's texts. Since the Desk is retired, Matt hears
+it in **Slack `#needs-matt`** (`owner_answered`, an @-mention: first name, the
+street, "answered — call"; one ping a person a Pacific day however many texts
+they send; a `gatekeeper_replied` is the same post, `gatekeeper_answered`), and
+the Luxury page lists them under **Owners who answered**. "Worth way more than
+that" is a reply, not a dead lead. **The bot never names or promises a
+number to an owner** (2026-11-24): owners count as priced by hand for the
+reply gate (`numberByHand` in `loadAgentContext` → `claimFacts`), so a draft
+like "I'll have a number for you today" is flagged `NUMBER_TIME_FLAG` and
+held; the agent-worded `MATT_PRICES_LINE` stays out of the owner prompt.
 
 A **builder** in front of a luxury-lot deal talks to the investor-side bot with
 the **builder playbook** (lane `builder`, set when a deal in their context is a
@@ -534,12 +555,59 @@ name, a phone or an address.
 **Its own page in GHL** (Matt, 2026-11-23: "keep track of Luxury separately"):
 add a Custom Menu Link to `https://<site>/luxury?location_id={{location.id}}`.
 It shows Lots (the finder), Offers and Deals narrowed to luxury lots
-(`isLuxuryLot`), and its New Offer starts on the lot analyzer. The Lots tab
-stays on Autopilot too. In GHL itself the tags segment the lane — `lot-owner`,
+(`isLuxuryLot`), and its New Offer starts on the lot analyzer. Since
+2026-11-23 Luxury is also a pill in the console's one header, and Lots lives
+only there (`/autopilot?view=lots` opens `/luxury?view=lots`). In GHL itself the tags segment the lane — `lot-owner`,
 `lot-pocket-*`, `builder`, `dispo-source-builder-exits` — for smart lists; a
 separate GHL pipeline waits until Matt creates one there, as with gatekeepers.
 
 ## Step 3 — messaging-app (frontend)
+
+### One header: Offers · Deals · Luxury, the rest under More (2026-11-23)
+
+Matt works the Offers and Deals pages; the rest runs in the background. The
+console is one shell (`messaging-app/src/app-nav.js`): three pills up top,
+Offers · Deals · Luxury, and one **More** menu holding the machine's pages
+(Agent texts, Investor texts, Gatekeepers, Autopilot settings, Settings), the
+reports (Flow, Line, Follow-up, Lessons) and the Companion window.
+
+- The path is the lane: `/` the agent book (luxury lots left out), `/luxury`
+  the teardown lane (Offers · Lots · Deals), `/deals` every kind of deal.
+  `?view=` is the page.
+- Old GHL menu links still land (`links.js movedTo`): `/autopilot?view=X`
+  and `/reports?view=X` open `/?view=X`; `/agents`, `/dispo` and
+  `/dashboard` as before.
+- Retired: Autopilot → Overview (a summary of Reports → Follow-up) and
+  Reports → Activity (counts Slack #daily already posts). Their links open
+  Agent texts and Flow. Last night's audit (with Run now) and the coach's
+  proposals moved to More → Autopilot settings. The #daily morning and
+  evening posts' "Open in app" opens Offers.
+- After this deploys, Matt can delete the Autopilot and Reports Custom Menu
+  Links in GHL; keep Luxury's if he wants it in the GHL sidebar too.
+- Needs Matt on the rows: the Offers and Deals pages read
+  `GET /api/dashboard/needs-matt` once on load (a cursor read, no GHL call)
+  and put the reason on the row it is about ("Needs you: price it · passes
+  Tue 9am", the runner's why line on hover). The pills show "Needs you · N"
+  when any of that page's rows are on the list; a click filters to them. It
+  is a filter over rows that already exist, not a queue, and never the
+  default tab (Today was retired 2026-10-20 for refilling).
+- The Offers table: an agent with one house is one row (no fold); a folded
+  agent shows "a send failed"; documents, AI enrichment and Delete sit
+  behind each row's ⋯; Edit opens the offer in a sheet over the table, and
+  the tab and search ride in the URL (`?filter=`, `?q=`; not `?tab=`, which
+  is the deal window's). Another lane starts without them; Back brings them
+  back. On a phone the table is a list of cards.
+- The companion window keeps its `/contact` address: the shell never
+  rewrites it (the extension finds the companion tab by that path).
+- It re-reads itself every three minutes while the tab shows (and on coming
+  back to the tab): only the light `GET /api/offers?lean=1`, never the
+  activity read, then What's next for at most five agents whose rows moved,
+  one at a time (`offers-refresh.js`, `light-poll.js`).
+- Under their counter in the offer pane: **Hold ours** puts the hold words
+  (`GET /api/offers/:id/hold`, never above what we sent) in the reply box;
+  **Meet…** opens our number's re-quote pre-filled halfway, never above
+  their counter or the house's walk-away, and nothing changes until Re-quote;
+  **Walk** marks we passed with a reason. None of them sends anything.
 
 Netlify auto-builds from `main` via the root `netlify.toml`. The API base
 defaults to the live broker; override with `VITE_API_BASE` in Netlify env if
@@ -2082,6 +2150,12 @@ dismissed at the send (`dismissedBy: "opt_out"`, "they opted out, not sent").
 Nothing sets DND in GHL on the other channel: that would block your own
 texts.
 
+**A bot-off tag holds the emails too (2026-11-23 audit, FT-7).** `stop bot`
+is still not an opt-out, but the intro and check-in emails are the bot's:
+they skip a contact carrying a bot-off tag when queued ("bot is off for this
+contact (tag: …)"), and one queued before the tag went on waits for your
+Send instead of sending, like a deal text.
+
 **What still goes.** You pressing Send, always: a hand text from the app
 (the composer's dry run says they opted out, `optedOut { via, at }`), and a
 held reply you send. If they write back after opting out, the bot drafts its
@@ -2652,6 +2726,28 @@ guarantee.
 who, reason, overdue}` to each row. It is opt-in, like `activity=1`. It costs
 two location-wide reads (reply drafts and the clocks' events), done in
 `ghl-broker/next-follow-up.js`.
+
+**Opening the Offers page is a light read (2026-11-23).** The page's load,
+`GET /api/offers?lean=1&limit=2000&activity=1&next=1`, used to read the
+location's 4,000 newest reply drafts whole (~10KB each, mostly prompt
+context) on every load, on the one broker that also takes GHL's webhooks.
+`ghl-broker/offers-list.js` now does the work:
+- **Trimmed drafts.** It reads `store.listReplyDraftActivity` (both
+  backends; `draftActivityRow` / `draftActivityQuery` in `store.js`): only
+  the fields the two columns read, which are id, contact, status, the four
+  times (`createdAt`, `updatedAt`, `sendAt`, `sentAt`), `autoSent`, `intent`,
+  `answeredBy`, the inbound text (threadHealth reads its words), and
+  `outbound.kind`/`offerId`. The window is the column's own
+  `NEXT_WINDOW_DAYS` (130). `attachNextFollowUps` reads the same way when no
+  drafts are handed in, which also lightens Line.
+- **A minute per location.** The whole response for that load (both columns,
+  no `contact_id`) is kept 60s. Any offer write (`createOffer`, `updateOffer`
+  or `deleteOffer`, counted in `store.js` `offerWriteGeneration`) drops it at
+  once. Two loads at the same moment share one read. A new draft or event
+  isn't an offer write, so a queued text can take up to a minute to show.
+- `offers-list.test.mjs` pins that the trimmed read gives the same Next
+  follow-up, Last activity and Floated stamps as the whole one. Dropping any
+  field the columns read fails it.
 
 **On the Offers tab:**
 - A sortable "Next follow-up" column. The group header shows the agent's
@@ -3750,6 +3846,43 @@ last run): its cursor stays behind, and nothing would pass. Each house is
 re-read the way the runner re-reads it before a pass, so one you priced or
 floated since its last read isn't listed. It rides on the daily stream, so
 there is no new switch.
+
+#### The promise clock, and the number they asked for (2026-11-23)
+
+**Why.** The 2026-11-23 audit: bot texts that promised a number went unkept
+108 times in October (56 kept) and 34 in November (16 kept). Some of the
+words were never read as a promise at all, a second stall pushed Needs Matt
+back a day, and an agent who asked what we'd pay and got a question back was
+owed nothing on the record.
+
+- **More words read as our number** (`detectPromise`): "let me run the
+  numbers on it", "I'll run numbers this afternoon", "running numbers now",
+  "I'll get you / send you a number today", "I'll let you know where we
+  land". First person only. "Circle back today", "let you know today", "be in
+  touch shortly" read as an answer with a time.
+- **A named time is the deadline** (`promiseDeadline`, shared/follow-up.js):
+  "today", "this afternoon", end of day: 5pm Pacific; "tonight" 8pm;
+  "tomorrow" or a weekday: 5pm that day; "by noon", "by 3pm": that hour. Said
+  after it passed, two hours on. `owedPromises` is due at the sooner of that
+  and a day after the first promise (`dueAt` on the `number_owed` row), and
+  the Needs Matt price card lands then. A second "still working on it" never
+  moves it. The 72-hour `promise_owed` row lands at the sooner of its day's
+  wait and the named time.
+- **Their ask is owed too.** A reply of ours to a text that asks our number
+  (`asksOurNumber`: "what would you offer", "what's your max") that gives no
+  price and no pass writes `promise_made { what: "number", by: "their_ask" }`.
+  It becomes a `number_owed` row and a Needs Matt price card a day on. Like
+  your own promises (`by: "you"`), the sweep, the driver and the "still
+  working on it" text leave it alone: the machine never sends a number for
+  it. A held answer to such an ask lands as a price card ("They asked what
+  we'd pay on <street>: price it or pass") after the day's wait.
+- **No check-in while we owe it.** While a number or the written offer we
+  promised (or they asked for) is open, the agent check-in and the cold
+  ladder's rungs wait (`numberOwedHolds`, shared/agent-focus.js, asked at
+  every door and by the check-in planner), the way they wait for a call we
+  owe. A price, a pass, the offer, their pass or a dismissal ends it.
+- Slack: the Needs Matt cards ping `#needs-matt` as before; nothing new to
+  switch on.
 
 ### A call, a time to walk it, the earnest money: promises we keep (2026-10-15)
 
@@ -6182,6 +6315,131 @@ come back dead. `ghl-broker/delivery-watch.js` reads it back. Pure rules:
   undelivered, so when the audit redrafts a thread it reads every text under
   a blocked send (one of Matt's typed in GHL too), not only the newest.
 
+### A lane that gets blocked pauses itself (2026-11-23, ON by default)
+
+The 11-23 audit (AH-4): every machine lane texts from the one business
+number, and nothing stopped a lane when the carrier started blocking it. The
+first 49 lot-owner texts on 11-23 had 15 carrier blocks (30007) before the
+wording changed, and the delivery check above only reads sends 2 to 26 hours
+old, so on a 6-hour spread most of a day had gone before anyone saw it. A
+number the carriers keep blocking, or a STOP rate that jumps, puts every lane
+on that number at risk, agents' answers included.
+`ghl-broker/lane-breaker.js` is the breaker. Pure rules:
+`shared/lane-breaker.js`.
+
+- **ON by default. This is a choice for Matt.** CLAUDE.md says new
+  automation ships off. This ships on because it only stops sends: it turns
+  queued texts back into drafts and never schedules or sends one, the same
+  kind of carrier protection as the burst guard and the spread (memory
+  no-caps keeps those). It is not a volume cap. To switch it off:
+  `conversationAi.laneBreaker.enabled: false` (Settings → Conversation AI →
+  More settings → Lane breaker). Off, nothing is read and nothing new is
+  held; a trip that was standing still shows on the strip (with a note that
+  the breaker is off) so its held texts aren't stranded. Switched back on, it
+  starts every kind afresh (`offAt` on the cursor), so the gap is never judged.
+- **It starts from its own first run.** On the first run, and for any kind
+  added later, it stamps `since.<kind>` = now on the cursor before judging
+  (`baselineDoc`), and counts only sends after `max(since, cleared)`. So the
+  11-23 lot-owner 30007s and older STOPs (from wording since fixed) can't trip
+  it on deploy day.
+- **What it watches:** each kind on its own (`laneBreaker.kinds`, default all
+  of them): `lot_owner_open`, `lot_owner_follow`, `outreach_open`,
+  `outreach_nudge`, `agent_pulse`, `buyer_pulse`, `blast_open`,
+  `blast_nudge`, `gatekeeper_text`. Sent texts only. An answer to their own
+  text (`answersInbound`) and an email are never a lane send.
+- **When:** every 15-minute tick (cursor `laneBreaker` in `job_cursors`,
+  written before the run; a run a deploy killed is retried once it is 10
+  minutes stale, a failed one after 5; at most 110 tries a Pacific day). The
+  Line lists it as "Lane breaker".
+- **What it reads:** for each kind, today's first 20 sends (Pacific day) and
+  its last 50 (within 14 days), one light query each (`store.listLaneSends`,
+  both backends, trimmed to id, contact, time, message id and verdict). A send
+  with no verdict that is 5 minutes to 26 hours old is read from GHL the way
+  the delivery check reads it (`getMessage`), at most 60 a run, 300 ms apart,
+  today's first sends first. GHL's "sent" (handed to the carrier, no answer
+  yet) is read again while the send is under an hour old. The verdict goes on the draft as `laneRead`, not
+  `delivery` (`store.setLaneRead`, both backends: one merge that lands only
+  while the draft is sent and has neither verdict, so it never writes over the
+  delivery check's), so the delivery check still reads it later and does its own
+  work (the `send_failed` event, the lot owner's one retry, a dead number).
+  STOPs are the `unsubscribed` events in the window. A STOP counts against
+  the newest guarded text we sent that person in the 72 hours before it: a
+  STOP the day after a nudge is the nudge's, not the first text's. A STOP the
+  opt-out backfill wrote, or an email unsubscribe, counts against nothing.
+  Only 30007 counts as a block: a dead number or a landline is the list, not
+  the carrier's view of us, and the delivery check already stops those.
+- **When it trips** (settings in `conversationAi.laneBreaker`, defaults):
+  - early, today's first 20 of a kind: 4 carrier-blocked (`earlyBlocked`),
+    or 4 STOPs (`earlyStops`). It trips as soon as the count is reached,
+    not after the 20th send. A send is read 5 to 20 minutes after it goes
+    (the 5-minute wait, then the next tick), so at 11-23's rate (about 3 in
+    10 blocked) and a 6-hour spread of 469 texts, about the first 30 to 50
+    go before the lane stops, not all 469;
+  - rolling, the last 50 of a kind once 20 have a verdict (`rollingMin`):
+    10% of those read blocked (`rollingBlockedPct`), or a STOP within 72
+    hours on 8% of those sent (`rollingStopPct`). STOPs are judged on the
+    newest 50 sends that are at least `stopSettleHours` old (default 3,
+    0–72), so a big day's STOPs are counted once they've had time to come
+    (`store.listLaneSends` takes `untilIso`, both backends);
+  - never on fewer than 4 of either (`minCount`).
+
+  Why these numbers: healthy agent texts run about 0.6% 30007 and 2.3% STOP
+  (stats.json, Oct–Nov); the bad days ran 30% blocked (lot owners 11-23) and
+  11% STOP (recent-lister first texts). By chance alone, a healthy lane shows
+  4 blocks in 20 under 1 time in 100,000, 4 STOPs in 20 about 1 in 1,000, 4
+  STOPs in 50 about 1 in 35, and 5 blocks in 50 about 1 in 75,000. A lane
+  blocking 30% shows 4 in its first 20 about 9 times in 10, and an 11% STOP
+  lane shows 4 in 50 about 8 in 10. The brief's 4% STOP over 50 would be 2
+  STOPs, which a healthy 2.3% lane shows about 1 time in 3, so it would pause
+  good lanes every week; the floor of 4 is why. These are guesses from one
+  month of numbers. Matt's own rule for a lane's economics (memory
+  pierce-volume: over 3% opt-outs, that part goes off) is measured over
+  hundreds of texts and is still his to apply. The breaker doesn't replace it.
+- **On a trip:** the trip goes on the cursor first (`trips.<kind>`: when,
+  which rule, why in counts, how many held). From then:
+  - every text of that kind still `scheduled` goes back to `draft`
+    (`heldDraft`: no `sendAt`, `laneHold { kind, at, rule }`, the reason in
+    `autoSend.reason`, and the flag "held: the lane breaker stopped lot owner
+    first texts — 4 of the first 8 … were blocked by the carrier (30007).
+    Nothing sent; clear it on the Offers page…"). The write only lands while
+    the row is still scheduled (`store.updateReplyDraftIf`, both backends),
+    so a text the send loop already claimed is never touched. Nothing is
+    deleted;
+  - each later run holds anything of that kind scheduled since, and the send
+    loop (`sendDueDrafts` `heldKindsFor`) turns one that comes due back into
+    a draft instead of sending it. New texts of that kind may still be
+    drafted by their lane; none goes by itself;
+  - one Slack line @Matt to #needs-matt (or #machine if that's the only
+    stream on), claimed on the cursor so it posts once: "Lane breaker: lot
+    owner first texts are stopped. 4 of the first 8 … were blocked by the
+    carrier (30007). 212 queued texts went back to drafts and nothing more
+    of that kind sends by itself. Nothing was sent." Counts only, no one's
+    name or number.
+- **Clearing it:** the Offers and Deals pages show a strip for each stopped
+  lane with **Let it send again** (`POST /api/lane-breaker/clear { kind,
+  backOnClock }`, status at `GET /api/lane-breaker`). The kind may go by
+  itself again and is judged afresh from that moment: the sends that tripped
+  it no longer count. The strip's button passes `backOnClock: true`: each text
+  it held in the last 4 days (`LANE_BACK_ON_CLOCK_MS`) goes back to scheduled
+  at a time from `spreadAcrossDay` (the machine's hours, nudgeSpreadHours,
+  weekends and days off, as the dial's release-held does), and the send loop
+  runs its own checks when each comes due. Older held texts lose the flag and
+  stay drafts (`laneCleared` says when). The route defaults `backOnClock` to
+  false. The click itself sends nothing; the strip then says how many went
+  back on the clock and how many wait for a hand Send. The lot finder's next
+  run also rewrites an unsent owner first text in the current words and
+  schedules it by itself.
+  The cleared trip is kept on the cursor (`history`, last 20).
+- **Not built, Matt's call:** whether to slow the lot lane's day-1 follow-up,
+  or spread a big Monday (469 owner first texts) over two days.
+- **Index:** `reply_drafts_lane_sends_idx` on `(location_id,
+  outbound.kind, sentAt) where status = 'sent'` (schema.pg.sql, additive, built
+  on boot without CONCURRENTLY, so it briefly blocks writes the first time).
+- **Check:** `GET /api/lane-breaker`; the run's counts per kind (early and
+  rolling sent, read, blocked, stops) are `last.kinds` on the `laneBreaker`
+  cursor; the Outbox's Draft rows with the flag; `GET /api/dashboard/line`
+  for when it last ran.
+
 ### Matt's contact card (2026-10-09)
 
 Matt: share my contact card "when people ask or if an initial deal doesn't work,
@@ -6327,6 +6585,15 @@ reply-agent.js (`WALK_AWAY_GAP`, `listPriceFloor`):
   `unsentCounter`, nothing is marked countered, and after the usual day's
   wait the card is a Needs Matt price: "They named 755K on <street>, over our
   300K that never went out: float ours or pass".
+- **Only on a final no (2026-11-23 audit, neg-3).** A plain number between
+  10% and 25% over the most we'd pay ("seller says 420k is where they'd like
+  to be") no longer draws the goodbye: it stays a counter (`draft.notFinal`),
+  so the counter hold texts our number back once, or it waits for you. The
+  goodbye needs their final word (`floorFirmness` "firm", or `saysFinal`:
+  lowest, bottom line, final number, best they can do, won't budge, not
+  coming down), a number past `WALK_AWAY_GAP` or the list price (Matt's
+  09-16 rule above), or a counter after we already came back. Neither
+  `COUNTER_MARGIN` nor `counterHold` changed.
 - **A figure that isn't theirs (2026-11-09 audit).** `notTheirNumber`
   (shared/flip-read.js) marks a figure after "last/other/another offer",
   "offers in the 400s", "owe(s)", "payoff", "appraised", "assessed", "tax
@@ -6764,6 +7031,31 @@ Matt's answers the same day kept it shorter:
     (`GET /api/dashboard/ghl/card` `needsMatt.passAt`) uses the same clock,
     and is empty for a house the engine priced at grade A or B.
 
+**Land, a lot, a teardown, a canned close-out (2026-11-23 audit).**
+`shared/lane-holds.js`, read by `evaluateReplyGates`:
+
+- A reply to an agent that turns down land, a lot, a teardown, a
+  multi-unit or a development site ("outside our lane", "not land
+  development", "we don't do teardowns", "we only buy single-family"), or
+  that passes on a text offering one, is held, never rewritten, closes
+  nothing on the house, and lands here as paper: "They offered land, a lot,
+  a teardown or a multi-unit on <street>: the bot's no is held, it's yours
+  to look at". One such decline went to land that became a ~$4M contract.
+- A canned close-out ("keep me in mind", "sounds lighter than what we
+  usually go for", "anything rougher") to a text that named another house,
+  a link, an address, a price or real work is held; one rewrite may ask for
+  the details instead, else it lands here: "They handed us a house on
+  <street> and the bot's canned pass is held". A text that calls the house
+  turnkey, cosmetic, not a flip or in great shape still gets the pass.
+
+**The float gate (2026-11-23 audit, neg-5).** `shared/float-hold.js`, asked
+by `startProactive` before a price float and by the clean-underwrite send
+(and its retry): no machine number on a house whose agent's latest word on
+it is turnkey, remodeled, not a flip or excellent condition, and none within
+12 hours of our own condition question unless they answered. Nothing goes
+instead; the turnkey screen above passes the house with its note. A person
+pressing Float still decides.
+
 Nothing else lands there: counters, booked calls, calls (Manual Actions), passes,
 promises, check-ins, closing tasks (the card stays in Contract) and buyers
 stay the machine's or their own page's. The why is written once per thing to
@@ -6950,6 +7242,59 @@ never-texted, off-market). Check: `GET /api/dashboard/line` → `supply`.
 **What buyers paid** (`realizedPricing`, read-only). All-in (contract price + fee + repairs) as a share of ARV, scored from the whole deal documents the way Lessons reads them (the offer list is trimmed in SQL on Postgres and carries no ARV). It shows the median for deals that sold (buyer found, assigned, closed) and for deals that died, beside the offer setting (`maoPctOfArv`). The 2026-09-10 post-mortem found the sold deals near 70% and the dead ones asking 74–82%. The page keeps that evidence current and changes nothing.
 
 **Last night's leaks on Today.** The nightly audit runs `lineFor` after its sweep and keeps `leakSummary` on its result (`audit.leaks`). Today's status strip shows "Leaks last night: N", linking to this tab, with the backlog beside it ("· M waiting for a check-in seat"). N counts what fell off, not what waits on you or waits for a seat.
+
+## Machine health — the keys, the stoppers, the red line (2026-11-23)
+
+The 11-11 Apify outage ran a week before anyone saw it: the only warnings
+were a #machine line nobody was tagged on and Reports → Line. Now:
+
+- **Key check** (`ghl-broker/key-health.js`, off until `keyHealth.enabled`;
+  turn it on with `PATCH /api/offers/settings { "keyHealth": { "enabled": true } }`).
+  From 7am Pacific on the tick: Apify `GET /v2/users/me` and
+  `/v2/users/me/limits`, and Anthropic's models list (one row). All free.
+  RentCast, Tracerfy, RealEstateAPI and Bricked have no free signed-in read,
+  so they are not checked. A key its provider rejects (401/402/403) is read
+  again every hour until it works. Kept on the `keyHealth` cursor; on the
+  Line as "Key check".
+- **#machine**: a rejected key is an @Matt line the first day and every day
+  it lasts; Apify past 80% of its monthly limit is its own line. Key lines
+  come only while the check is switched on and from a read in the last 26
+  hours, so a key fixed after the check stopped never stays red (the check
+  itself stopping is its own "Key check hasn't run" line). Failures that
+  stop the business (`shared/machine-health.js`: an auth failure in a revenue
+  lane today, Pacific, or a switched-on revenue job that stopped, failed
+  twice today, or failed on a rejected key) @mention Matt once a day while
+  they last. The @Matt lines wait for 7am Pacific; the strip shows them at
+  once. A status code counts only beside a provider or HTTP word ("Apify
+  401", "HTTP 403", "GHL 502") or on its own, never a street number. Other
+  errors are told as before, untagged.
+- **The red line** on Offers and Deals (`MachineTrouble.jsx`) reads
+  `GET /api/dashboard/machine`: two small cursors (`keyHealth`, and
+  `machineTrouble`, which the Slack runner writes each tick) and the
+  settings row (is the key check on). Hidden when all is well; stoppers
+  older than an hour are dropped, so with Slack off only the key lines show.
+- **The outreach listing check** asks Apify whether the token works before
+  the day's pull, so a rejected token stops the day before any RentCast
+  request is spent.
+- **Late jobs**: the switchboard (`job-switches.js`) now reads the switches
+  of the outreach sweep, follow-up sweep, both check-ins, price watch, the
+  delivery check (every 2 hours), the daytime pass, buyer waves, tier check,
+  lot finder and gatekeeper line, so one that stops is called late. A workday
+  with no finished outreach run by 1pm Pacific (or two hours after its start
+  hour, if later) gets the empty-day line.
+- **Underwrites a provider killed** (`shared/underwrite-retry.js`): the Today
+  timer (`driver.timers`) retries a book draft held "stopped early" on a
+  provider's error once — a network failure any time, a rejected key once the
+  key check reads that key good — stamped `autoUnderwrite.retriedAt`. Never
+  on a house with a hand-priced or priced row, a later row, a sent number or
+  a pass or a house gone from the market, on either spelling. Rows over 21
+  days old are left; five a pass at most, through the same daily cap and
+  dry-run switch as every conversation underwrite. The Needs Matt clock
+  holds the card only while a retry can still come (`waitsOnRetry`: the
+  timers on, the row 21 days old or younger, not retried, nobody's number on
+  the house, and for a rejected key the key check on and the provider named
+  in the error). A card no retry will reach is on the normal clock; after a
+  retry, the clock counts from the retry.
 
 ## Follow-up (Reports → Follow-up, 2026-10-17)
 
@@ -7140,7 +7485,7 @@ text.
 
 | Stream (`saved.slack.streams`) | Channel | What posts |
 |---|---|---|
-| needsMatt | `#needs-matt` | What lands in GHL's **Needs Matt** stage (needs-matt.js's list): a yes to approve, paper to sign, a house to price. Once each, with an @-mention. With `ghlStages` off, the GHL ping rows (`pingReasons`) instead. Since 2026-11-10 also someone asking for a call or a walkthrough, or naming a time (`call_wanted`, from the event sweep, a post of its own with an @-mention: first name, the house, the time words) |
+| needsMatt | `#needs-matt` | What lands in GHL's **Needs Matt** stage (needs-matt.js's list): a yes to approve, paper to sign, a house to price. Once each, with an @-mention. With `ghlStages` off, the GHL ping rows (`pingReasons`) instead. Since 2026-11-10 also someone asking for a call or a walkthrough, or naming a time (`call_wanted`, from the event sweep, a post of its own with an @-mention: first name, the house, the time words). Since 2026-11-24 also a lot owner or a gatekeeper the machine wrote to answering (`lot_owner_replied` / `gatekeeper_replied` → `owner_answered` / `gatekeeper_answered`: first name, the street, "answered — call"; one a person a Pacific day, by the route's own `claim` key) |
 | acquisitions | `#acquisitions` | **The Tier 1 list** (Matt, 2026-10-25: "just the tier 1s that have been flagged, not the back-and-forth"). The only post in the channel is a house reaching Tier 1 (`tier1_added`, a card moved to Tier 1), once per house. The post is itemized, one thing a line, with the links underneath: **Tier 1 flagged: <street>**, Agent (full name — from the record, else read from GHL), Address (full), Description (the summary of what they said, else why it's Tier 1). Its offer sent or revised, counter, in the realm, hot, agreed, contract, underwrite result and pass reply quietly in that thread, never in the channel feed, and only once the thread exists. A house an agent merely named isn't posted |
 | underwrites | `#underwrites` | **Real underwrites only**: a run that prices the house, edited in place from running to priced (number, ARV, rehab), held (the reasons) or failed. A skeleton or draft-only run (`autoUnderwriteMode` skeleton/draft, Matt prices by hand, 2026-10-25) only makes a draft: it posts nowhere, here or in the house's Tier 1 thread. With skeleton on, this channel is nearly silent (only full runs a person starts). Also an address that left the queue without running |
 | dispositions | `#dispositions` | **One thread per deal**: the new deal (contract, fee, closing), each wave of buyer texts as one line ("sent to 25 buyers"), a buyer looking, passing or committed, the package opened, a walkthrough booked, the stage. Closed and fell through also show in the channel |
@@ -9647,7 +9992,13 @@ buyers alike:
   the market" (refuses every deal) (`ownWords` in shared/buybox.js). "No
   rehabs over 100k" is a limit, not a no. A deal we can't tell is a fixer
   abstains, and so does a full gut: it's the house read as a builder's, and
-  "land and teardowns, no rehabs" doesn't keep a builder off it. Holding on the investor read's "buying now?" column is a
+  "land and teardowns, no rehabs" doesn't keep a builder off it.
+- (2026-11-23) A builder the book knows only as one who builds (every type
+  held for them is new construction: a `dispo-type-new-construction` tag, a
+  `builder` tag, found off permits) and whose buy box names no rehab
+  appetite isn't sent a house to fix ("they build: lots and teardowns only").
+  Lots, land and a full gut still go to them. "Hold off" and "maxed out" in
+  their saved words read as not buying, like "on hold". Holding on the investor read's "buying now?" column is a
   separate call for Matt and isn't built.
 
 **Who was left off, and why.** `GET /waves/preview` returns `leftOff`: each
@@ -9830,6 +10181,18 @@ None of the committed buyers had a price on file, and the fee lesson compared th
 - **What buyers said it's worth.** `PATCH /:id/deal { buyerRead: { arv, rehab, price, note } }`, typed in on the Terms tab. Money reads as people type it ("95k", "$480,000"). The scorecard shows it beside our ARV and rehab (`buyerRead.ourArvOverPct`, `ourRehabUnderPct`).
 - **The scorecard** (`dealScorecard`, `shared/post-mortem.js`). `askedPrice` is contract plus the deal's fee. For a deal that sold (Buyer found, Assigned, Closed), `buyerPrice` is what the buyer paid, from `realizedSale`: the outcome, then an assignment a person generated, then the committed buyer's agreed price, then a fee a person typed (`assignmentFeeSource: "you"`, stamped by the deal-texts work). The machine's own assignment draft at commit, and a fee with no source, are not prices: `buyerPrice` is null and the deal drops out of **What buyers paid** and the 70% lesson until somebody records one. A deal that died is still scored on what buyers were asked.
 - **`fee_reality`** uses `realizedFee` from sold deals only.
+
+#### The Deals page shows how each dispo is going (2026-11-23)
+
+From the 2026-11-23 audit (D3, D4, D5, D6, D8, D11, D12, nav-5). Display only: nothing here sends.
+
+- **List.** The Buyers cell (`DispoCell`, `shared/deal-pulse.js dispoPulse`) reads: sent N, on it, interested, passed, walking, walked it, best number, and "last buyer move Nd ago" (amber after 3 days with no committed buyer). **Sent** is `deal.sends`, which `GET /api/offers/deals` adds from one grouped read (`store.dealSendCounts`, both backends): distinct buyers with `blast_sent` or `deal_hand_sent` on the offer. It never reads `deal.blasts[].count`, because that is what a blast queued, including one Matt stopped. **Best number**, most trusted first: the committed buyer's agreed price, then the highest agreed price from a buyer still in it, then `buyerRead.price`, then the highest price named in the cached `feedbackPackage`, with its age. The list never rebuilds the package. One "contract → buyer · fee" cell (`moneyLine`) replaces the three money columns. It is amber over `deal.ceilingAtPromote.noFee`.
+- **Inspection call.** `inspectionCall` uses `inspectionDecision`'s window (3 days before to 2 after), so it matches the pipeline row and Slack. It puts a chip on the row and a strip at the top of the deal: the date, whether a buyer is committed, sent/on it/interested/walked, pass reasons (one per buyer per code), and the price range buyers named. Its buttons tick the inspection item, open the feedback page, jump to the date, or open the fell-through form.
+- **Promote.** Promoting from Offers opens the new deal (`DealsView focus`, `?deal_id=&confirm=1` on the standalone page) on Terms & paperwork, under a "Confirm the deal" card. The card shows the fee (amber when it is the Settings default), the dates with `datesNote`, kind and access, and the promote's warnings.
+- **Tiles.** The KPI tiles count only the lane on screen (`dealsBook`). The standalone /deals page still shows every kind, on purpose.
+- **Buyers tab.** It holds the dataroom button, the feedback page, "what buyers said it's worth", and per-buyer facts (`buyerFacts`). It makes one dataroom read when the tab opens. A deal opens on Buyers while under contract and on Overview once a buyer is found. A `?tab=` link still wins.
+- **No Save buttons.** Terms, buyer read, access, parties and walkthrough windows save on blur, and a pick or date saves on change (`messaging-app/src/deal-autosave.js`). Closing the modal saves what is still open. The clear and far-off (409) confirms still ask, and a no restores the field.
+- **Small fixes.** A document upload answers with the offer, so the checklist line it ticked shows at once. Find buyers says "N queued / M waiting in the outbox", or why nothing went (`blastResultLine`). It also has Select strong fits and Select all.
 
 ### Buyer walkthrough (2026-09-29)
 
@@ -10111,6 +10474,84 @@ A sweep of the six live deals that day found 12 replies like that.
   - Either way, only for a buyer who was sent a live deal (on it, or carrying its blast tag) or who named one.
 - **Never moved:** a committed or soft-committed buyer.
 - Being on a deal as evaluating does not quiet the bot. Only a committed buyer holds it (`WORKING_INVESTOR_STATUSES`).
+
+### Buyers get answers, not promises (2026-11-23)
+
+**Why.** The 2026-11-23 buyer audit: every walkthrough and assignment came
+from fast, concrete follow-through, and the bot lost buyers on promises and
+wrong answers. "Pulling the package together now" went 23 hours before the
+link did, on a deal that had a package. "Still waiting on the park" went three
+times in two days. A buyer asking a plain question got the package link. A
+buyer who gave an email was told "these go out by text". "Pulling those
+photos together now" went 55 minutes after Matt sent the photo link himself.
+
+**The reply's checks** (`shared/buyer-reply.js`, read in `evaluateReplyGates`
+for investor replies). Each one only holds:
+
+| Check | Holds a reply when |
+| --- | --- |
+| A promise the app can't keep | it promises a comp breakdown, a bid or an estimate, an answer from the agent, the seller, a park or anyone else, a "let me find out", or to text or add their partner |
+| The package with none built | it offers the photos, the package, the comps or the scope on a deal with no active dataroom |
+| The package Matt just sent | it offers them again within two hours of photos or a link Matt sent by hand |
+| A second "still waiting" | it says we're still waiting on something and a text of ours said one in the last 14 days |
+| "Deals go out by text" | it says deals only go by text, or not by email (deals by email has been live since 2026-10-15) |
+| A question the record can't answer | they asked the address, beds and baths, the size, the lot, the year, the basement, the alley, parking, sewer, zoning or whether it's vacant, and the deal row doesn't have it |
+| A walk ask with nothing on file | they asked when or how they can see it, and the deal has no upcoming window and no access method |
+
+The last two aren't rewritten (`SITUATION_FLAG_RX`): no rewrite fixes what
+isn't on file, so no second model call is paid for.
+
+**The link goes with the reply.** A reply that offers the package on a deal
+that has a room gets `send_dataroom_invite` beside it: by itself only when
+the reply sends itself, they're already on the deal, and
+`dispoAutopilot.autoInvite` is on (the dial's Full); otherwise as an ask for
+your Send, and then the reply waits with it ("the reply offers the package
+and the link waits for your Send"), so no text says "here's the package"
+without the package. Never when Matt sent photos or a link in the last two
+hours, and never a second link on the deal inside a day (read off the newest
+invite on the room).
+
+**What the bot is shown.** Each deal line now carries its size ("size: 3bd
+2ba 1,440 sqft, built 1952, 5,000 sqft lot") from the underwrite's subject
+record. The investor prompt says: answer what they asked first, in the deal's
+own lines, and set needsHuman when the lines don't say; the link goes with
+the reply, so never "pulling it together"; never promise anything else for
+later; deals go by text and email; a partner they name is added by a person.
+The no-window and no-access lines now say to set needsHuman instead of "I'll
+line it up with the agent". Note: a figure the record has but the deal book
+doesn't (1,440 sqft) still trips the invented-number check and waits for you;
+that check wasn't loosened.
+
+**Matt in a buyer thread.** The bot stands aside for an hour
+(`BUYER_HUMAN_ACTIVE_MIN`) after any text or call of Matt's to a buyer, not
+only when his was the last text of ours (`handLines` reads every line of ours
+in the window; a sent draft, the offer text or a GHL template isn't his). The
+stand-aside for agents is unchanged. Between one and two hours after photos
+or a link of his, no package link goes by itself from any path (the blast's
+link on reply, the dataroom guard, the reply's own offer), and a reply that
+offers them again is held.
+
+**A buyer's yes is a call now.** A buyer who wants to buy it
+(`wants_to_buy`), says yes to the walkthrough (`walkthrough: coming`), or
+asks when or how they can see it, whatever the reply read it as, writes a
+`call_wanted` event with `callNow` (shared/call-words.js `callWanted`). The
+#needs-matt ping opens "Call now: Rory wants to buy *9 Larchmont Pl*" or
+"…wants to see…", with the day they named. A held `wants_to_buy` reply is a
+Call row on the Desk (`CALL_INTENTS`), like a walk ask. The reply itself
+still waits for you: `wants_to_buy` and `wants_walkthrough` stay `NEVER_AUTO`.
+
+**A partner they name.** "Send these to my partner Jo too, jo@…" or "add
+my acquisitions manager" (`buyerReferral`) writes a `referral_mentioned`
+event (party investor, `data.buyer`, the name, relation and the email or
+phone they gave, never their words). The Desk shows "Add to the buyer list:
+Jo (Rory's partner)" with the address. The bot never creates the contact or
+texts them, and a reply that promises to is held. Their address is never
+saved as the buyer's own (`emailOwner` reads it as someone else's).
+
+No new switch: all of it only holds or pings, and the one link that can go by
+itself rides the existing `dispoAutopilot.autoInvite` (off unless the dial is
+on Full). The stand-aside asks GHL who sent the newest lines, so a workflow or
+the missed-call text-back is not taken for Matt.
 
 ### Rural: two acres or more (2026-10-08)
 

@@ -439,3 +439,47 @@ test("the wave preview says who was left off and why", () => {
   // Nobody who gets it, already had it, or never bought or named this place.
   for (const id of ["gets-it", "had-it", "tacoma-only"]) assert.ok(!off.some((i) => i.contactId === id), id);
 });
+
+// What went wrong (audit, 2026-11-23, NL5): a builder the book knows only as
+// one who builds (tagged dispo-type-new-construction, a "builder" tag, or
+// found off permits) was in the pick for every cosmetic flip in their city,
+// "for your next flip", because only a "no rehabs" in their own words kept a
+// builder off a fixer. They get lots and teardowns; a fixer is not theirs
+// unless their own buy box says they take rehab work.
+test("a builder the book only knows as a builder doesn't get a cosmetic flip, and still gets the lot and the teardown", () => {
+  const flip = dealTarget({ city: "Seattle", zip: "98103", rehabAppetite: "cosmetic_only", asset: { type: "sfr" } });
+  const builder = seattleTagged({ contactId: "builder", markets: { cities: ["seattle"], regions: [], types: ["new-construction"] } });
+  const flipper = seattleTagged({ contactId: "flipper" });
+  const both = seattleTagged({ contactId: "both", markets: { cities: ["seattle"], regions: [], types: ["new-construction", "flip"] } });
+  const saysRehab = seattleTagged({ contactId: "says-rehab", markets: { cities: ["seattle"], regions: [], types: ["new-construction"] }, buybox: { rehabAppetite: "moderate" } });
+  const ranked = rankAll([builder, flipper, both, saysRehab], flip);
+  assert.equal(ranked.find((i) => i.contactId === "builder").rankParts.dealbreaker, "they build: lots and teardowns only");
+  assert.deepEqual(pickDealBuyers(ranked).map((i) => i.contactId).sort(), ["both", "flipper", "says-rehab"]);
+  assert.match(leftOffDealBuyers(ranked).find((i) => i.contactId === "builder").why, /lots and teardowns only/);
+  // The lot and the full gut are theirs.
+  const lot = dealTarget({ city: "Seattle", zip: "98103", asset: { type: "land" } });
+  assert.deepEqual(pickDealBuyers(rankAll([builder], lot), { land: true }).map((i) => i.contactId), ["builder"]);
+  const gut = dealTarget({ city: "Seattle", zip: "98103", rehabAppetite: "full_gut" });
+  assert.deepEqual(pickDealBuyers(rankAll([builder], gut)).map((i) => i.contactId), ["builder"]);
+  // A house we can't tell is a fixer abstains, as their words do.
+  assert.equal(rankAll([builder], dealTarget({ city: "Seattle", zip: "98103" }))[0].rankParts.dealbreaker, null);
+});
+
+// What went wrong (audit, 2026-11-23, NL5): "hold off" and "maxed out" in a
+// buyer's saved dealbreakers kept nobody off a deal; only "on hold", "paused"
+// and "not buying" did.
+test("a buyer whose saved words say hold off or maxed out isn't sent the deal", () => {
+  const ranked = rankAll([
+    seattleTagged({ contactId: "hold-off", buybox: { exclusions: "hold off for now" } }),
+    seattleTagged({ contactId: "maxed", buybox: { exclusions: "maxed out until we sell" } }),
+    seattleTagged({ contactId: "buying" }),
+  ], greenLake);
+  assert.equal(ranked.find((i) => i.contactId === "hold-off").rankParts.dealbreaker, "they're not buying right now");
+  assert.deepEqual(pickDealBuyers(ranked).map((i) => i.contactId), ["buying"]);
+});
+
+test("a buyer who says hold off on condos or maxed out at a price is still buying", () => {
+  assert.equal(buyerDealbreakers("hold off on condos").notBuying, false);
+  assert.equal(buyerDealbreakers("maxed out at 600k").notBuying, false);
+  assert.equal(buyerDealbreakers("hold off for now").notBuying, true);
+});

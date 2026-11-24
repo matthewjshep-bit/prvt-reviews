@@ -3,6 +3,7 @@ import {
   RSVP_STATUSES, RSVP_LABEL, MAX_WINDOWS, normalizeShowing, windowLabel, upcomingWindows,
 } from "@shared/showing.js";
 import { updateDeal, getAgentAskText, askAgentForWindow, setShowingRsvp } from "./api.js";
+import { sameWindows } from "./deal-autosave.js";
 import { BTN, BTN_PRIMARY } from "./ui.jsx";
 
 const labelCls = "mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500";
@@ -47,7 +48,10 @@ export default function WalkthroughCard({ offer, onUpdated }) {
   const [error, setError] = useState("");
 
 
-  const dirty = JSON.stringify(rows) !== JSON.stringify(showing.windows.map(toInputs));
+  // Saves as you go (2026-11-23, no Save walkthrough button): a window once
+  // it has a day and a start, when you leave its fields or remove it. A row
+  // still being filled in waits.
+  const complete = (list) => normalizeShowing({ windows: list.map(fromInputs).filter(Boolean) }).windows;
 
   async function run(fn, done = "") {
     setError(""); setNote(""); setBusy(true);
@@ -59,7 +63,10 @@ export default function WalkthroughCard({ offer, onUpdated }) {
     } catch (e) { setError(e.message); } finally { setBusy(false); }
   }
 
-  const save = () => run(() => updateDeal(offer.id, { showing: { windows: rows.map(fromInputs).filter(Boolean) } }), "Saved. Every buyer text from here invites them to it.");
+  const save = (list = rows) => {
+    if (sameWindows(complete(list), showing.windows)) return null;
+    return run(() => updateDeal(offer.id, { showing: { windows: list.map(fromInputs).filter(Boolean) } }), "Saved. Every buyer text from here invites them to it.");
+  };
   const openAsk = async () => {
     const r = await run(() => getAgentAskText(offer.id));
     if (r?.text) setAsk({ text: r.text });
@@ -91,11 +98,11 @@ export default function WalkthroughCard({ offer, onUpdated }) {
       </p>
 
       {rows.map((r, i) => (
-        <div key={i} className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-1.5">
+        <div key={i} className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-1.5" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) save(); }}>
           <input type="date" className={inputCls} value={r.date} onChange={(e) => setRows((x) => x.map((y, j) => (j === i ? { ...y, date: e.target.value } : y)))} />
           <input type="time" className={inputCls} value={r.from} onChange={(e) => setRows((x) => x.map((y, j) => (j === i ? { ...y, from: e.target.value } : y)))} />
           <input type="time" className={inputCls} value={r.to} onChange={(e) => setRows((x) => x.map((y, j) => (j === i ? { ...y, to: e.target.value } : y)))} />
-          <button type="button" className="px-1 text-slate-400 hover:text-rose-600" title="Remove this window" onClick={() => setRows((x) => x.filter((_, j) => j !== i))}>×</button>
+          <button type="button" className="px-1 text-slate-400 hover:text-rose-600" title="Remove this window" onClick={() => { const next = rows.filter((_, j) => j !== i); setRows(next); save(next); }}>×</button>
         </div>
       ))}
       {rows.length < MAX_WINDOWS && (
@@ -103,7 +110,6 @@ export default function WalkthroughCard({ offer, onUpdated }) {
       )}
 
       <p className="text-xs text-slate-500">Occupancy and how buyers get in are set under Access on the Overview tab.</p>
-      {dirty && <button type="button" onClick={save} disabled={busy} className={BTN_PRIMARY}>Save walkthrough</button>}
 
       <div className="rounded-md bg-slate-50 px-2.5 py-2 text-xs text-slate-600">
         <div className="flex items-center justify-between gap-2">

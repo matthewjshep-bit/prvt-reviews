@@ -28,6 +28,7 @@ import { latestRowFeedback, publicRowFeedback, ROW_FEEDBACK_EVENT, ROW_FEEDBACK_
 import { addDismissal, removeDismissal, applyDismissals, TODAY_DISMISS_CURSOR } from "../shared/today-dismiss.js";
 import { answerPartnerQuestion, forgetAnswer } from "../partner-answer.js";
 import express from "express";
+import { machineTrouble, normalizeKeyHealth, KEY_HEALTH_CURSOR, MACHINE_TROUBLE_CURSOR } from "../shared/machine-health.js";
 import { store } from "../store.js";
 import {
   countContactsByTag, searchConversations, listConversationMessages, searchContactsCreatedSince,
@@ -1011,6 +1012,25 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
     } catch (err) { fail(res, err); }
   });
 
+  // Machine trouble (2026-11-23 audit, AH-1 and AH-6): the one red line on
+  // Offers and Deals. A paid key its provider rejects, Apify's month near
+  // its limit, and the business-stopping failures #machine last told Matt.
+  // Two small cursors and the settings row, so it stays light (the 11-09 crash
+  // came from heavy reads): words and counts, never a contact.
+  router.get("/machine", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const [keyHealth, stoppers, saved] = await Promise.all([
+        store.getJobCursor?.(locationId, KEY_HEALTH_CURSOR).catch(() => null),
+        store.getJobCursor?.(locationId, MACHINE_TROUBLE_CURSOR).catch(() => null),
+        store.getOfferSettings(locationId).catch(() => null),
+      ]);
+      // The key lines only while the check is on: switched off, what it last read is no longer known.
+      const keyCheckOn = normalizeKeyHealth(saved?.keyHealth).enabled;
+      res.json({ ok: true, trouble: machineTrouble({ keyHealth, stoppers, keyCheckOn, now: Date.now() }) });
+    } catch (err) { fail(res, err); }
+  });
+
   // The "Needs Matt" stage (needs-matt.js, 2026-10-22). GET: who's on the
   // list and the last runs (ids and kinds). POST /run { dryRun } (the
   // default): reads the list and says who would go in or come out, moving
@@ -1019,7 +1039,15 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
     try {
       const { locationId } = resolveLocation(req);
       const cursor = await store.getJobCursor?.(locationId, NEEDS_MATT_CURSOR).catch(() => null);
-      const needs = Object.entries(cursor?.doc?.needs || {}).map(([contactId, v]) => ({ contactId, kind: v.kind, rowKind: v.rowKind, at: v.at, landedAt: v.landedAt || null, placed: v.placed }));
+      const entries = Object.entries(cursor?.doc?.needs || {});
+      // The Offers and Deals pages read this once on load (2026-11-23): the
+      // why line and the pass time ride along, as /ghl/card gives them for one
+      // agent. The settings read only when a price card needs his days off.
+      const offDays = entries.some(([, v]) => v?.kind === "price")
+        ? normalizeConversationAi((await store.getOfferSettings(locationId).catch(() => null))?.conversationAi).autoSend?.offDays || []
+        : [];
+      const needs = entries.map(([contactId, v]) => ({ contactId, kind: v.kind, rowKind: v.rowKind, offerId: v.offerId || null, why: v.why || "", at: v.at,
+        landedAt: v.landedAt || null, passAt: Number.isFinite(Date.parse(v.landedAt || "")) ? needsMattPassAt(v, { offDays }) : null, placed: v.placed }));
       res.json({ ok: true, at: cursor?.at || null, readAt: cursor?.doc?.readAt || null, last: cursor?.doc?.last || null, needs });
     } catch (err) { fail(res, err); }
   });

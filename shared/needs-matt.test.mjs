@@ -429,3 +429,37 @@ test("a seller's terms on an agreed price land in Needs Matt even when the bot p
   const chat = { ...sent, inbound: "Free after 4 if you want to talk" };
   assert.equal(needsFrom({ offers, sentDrafts: [chat], recentDrafts: [chat], events }).get("qa"), undefined);
 });
+
+// The 2026-11-23 audit (shared/lane-holds.js): a reply held for turning down
+// land, or for a canned close-out on a house they handed us, is Matt's.
+test("a reply held for turning down a lot lands in Needs Matt with why", async () => {
+  const { LANE_HOLD_FLAG } = await import("./lane-holds.js");
+  const d = { id: "d-lot", party: "agent", status: "draft", intent: "new_property", flags: [LANE_HOLD_FLAG], createdAt: "2026-11-20T18:00:00Z", propertyAddress: "14 Hazel Way, Bellevue, WA 98004" };
+  const needs = needsMattByContact([{ kind: "draft_waiting", contactId: "c-lot", draftId: d.id, address: d.propertyAddress }], { drafts: [d], now: Date.parse("2026-11-20T19:00:00Z") });
+  const n = needs.get("c-lot");
+  assert.equal(n.kind, "paper");
+  assert.match(n.why, /offered land, a lot, a teardown or a multi-unit on 14 Hazel Way/);
+  // Sent or dismissed, it's done.
+  assert.equal(needsMattByContact([{ kind: "draft_waiting", contactId: "c-lot", draftId: d.id }], { drafts: [{ ...d, status: "dismissed" }] }).size, 0);
+});
+
+// The 2026-11-23 audit (R1): an agent named the seller's number, asked what
+// we'd pay, and the bot's answer sat held for a person with nothing telling
+// Matt. A day on, it's his to price.
+test("an agent who asked what we'd pay and whose answer sat held a day lands in Needs Matt to price", () => {
+  const d = { id: "d-ask", party: "agent", status: "draft", intent: "question", inbound: "Seller is at 400. What would you offer on 5 Birch Ln?",
+    reply: "Thanks. How soon are they hoping to close?", createdAt: hoursAgo(PRICE_WAIT_HOURS + 1), propertyAddress: "5 Birch Ln, Kent, WA 98031", flags: ["the model was only medium confidence"] };
+  const row = { kind: "draft_waiting", contactId: "c-ask", draftId: d.id, address: d.propertyAddress };
+  const need = needsMattByContact([row], { drafts: [d], now: NOW }).get("c-ask");
+  assert.equal(need?.kind, "price");
+  assert.match(need.why, /They asked what we'd pay on 5 Birch Ln: price it or pass/);
+  assert.equal(needsMattKind(row, { draftsById: new Map([[d.id, { ...d, createdAt: hoursAgo(2) }]]), now: NOW }), null, "not before the day's wait");
+  assert.equal(needsMattKind(row, { draftsById: new Map([[d.id, { ...d, inbound: "Thanks, talk soon." }]]), now: NOW }), null, "no ask, nothing to price");
+});
+
+test("a held answer to 'what's your best' on a house our number already went out on is not a price card", () => {
+  const d = { id: "d-best", party: "agent", status: "draft", intent: "question", inbound: "What's your best offer on 5 Birch Ln?", createdAt: hoursAgo(PRICE_WAIT_HOURS + 1), propertyAddress: "5 Birch Ln, Kent, WA 98031" };
+  const offer = { id: "o-birch", contactId: "c-best", address: d.propertyAddress, status: "sent", cashAmount: 250000 };
+  const row = { kind: "draft_waiting", contactId: "c-best", draftId: d.id, offerId: offer.id, address: d.propertyAddress };
+  assert.equal(needsMattKind(row, { draftsById: new Map([[d.id, d]]), offersById: new Map([[offer.id, offer]]), now: NOW }), null);
+});

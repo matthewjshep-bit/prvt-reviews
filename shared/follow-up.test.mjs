@@ -367,3 +367,28 @@ test("I'll let you know if I have one is no lead, and neither is one that fell t
   // Said plainly, still a lead.
   assert.equal(detectLead("Not at the moment but I might have one coming up", now)?.what, "the one coming up");
 });
+
+// The 2026-11-23 audit (R1 / neg-2): bot texts that promised a number went
+// unkept 108 times in October, and the words below were never read as a
+// promise, so nothing came due and nothing reached Matt.
+test("a text that says we'll run the numbers or get them a number is read as a promised number", () => {
+  for (const said of [
+    "Let me run the numbers on it.",
+    "I'll run numbers this afternoon.",
+    "Will run the numbers tonight and text you.",
+    "Running numbers now, will be in touch shortly.",
+    "I'll get you a number today.",
+    "I'll send you a number this afternoon.",
+    "I'll let you know where we land later today.",
+    "Let me crunch the numbers and get back to you.",
+  ]) assert.equal(detectPromise(said), "number", said);
+  // Their numbers, a question, a look that may come to nothing: not ours to owe.
+  assert.equal(detectPromise("Once you run the numbers, what would you offer?"), null);
+  assert.equal(detectPromise("Did you get a chance to run the numbers?"), null);
+});
+
+test("a text that says we'll circle back today is a promised answer", () => {
+  for (const said of ["Got it, I'll take a look at the comps and circle back today.", "Let me look at it and I'll let you know today."]) {
+    assert.equal(detectPromise(said), "answer", said);
+  }
+});

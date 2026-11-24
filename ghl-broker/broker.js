@@ -50,8 +50,11 @@ import { maybeSweepCalls } from "./call-intake.js";
 import { maybeRunGhlCalls } from "./ghl-calls.js";
 import { maybeRunGhlPings } from "./ghl-pings.js";
 import { maybeRunSlack, maybeRunSlackEvents } from "./slack-notify.js";
+import { maybeRunKeyHealth } from "./key-health.js";
 import { maybeRunNeedsMatt } from "./needs-matt.js";
 import { maybeRunDeliveryWatch } from "./delivery-watch.js";
+import { maybeRunLaneBreaker, laneHoldsFor } from "./lane-breaker.js";
+import createLaneBreakerRouter from "./routes/lane-breaker.js";
 import { recordError } from "./app-errors.js";
 import { maybeRunCoach } from "./coach.js";
 import { runLocationTick } from "./tick.js";
@@ -201,6 +204,9 @@ const gatekeepersRouter = createGatekeepersRouter({ resolveLocation });
 app.use("/api/gatekeepers", gatekeepersRouter);
 // The luxury teardown lane's front end: parcels → skip trace → owner texts.
 app.use("/api/lot-finder", createLotFinderRouter({ resolveLocation }));
+// The lane breaker's strip on the Offers page: which lanes are stopped, and
+// Matt's one click to let one go again (lane-breaker.js). Never sends.
+app.use("/api/lane-breaker", createLaneBreakerRouter({ resolveLocation }));
 const dashboardRouter = createDashboardRouter({ resolveLocation, conversationDepsFor: offersRouter.conversationDepsFor, handTextDepsFor: (args) => offersRouter.handTextDepsFor?.(args) || {},
   operatorStatus: (args) => offersRouter.applyOperatorStatus?.(args) });
 app.use("/api/dashboard", dashboardRouter);
@@ -263,6 +269,16 @@ const TICK_JOBS = [
   { area: "enrich", run: async ({ client, locationId, saved }) => {
     // Awaited: it is async, and an un-awaited rejection escaped the tick.
     if (await maybeStartNightlySweep({ client, locationId, saved, store, utcHour: SWEEP_UTC_HOUR })) console.log(`nightly enrich sweep started for ${locationId}`);
+  } },
+  // The paid keys (key-health.js, 2026-11-23): one free read each from 7am
+  // Pacific, hourly while one is rejected. First, so the underwrite retry
+  // and #machine read today's answer. Off until keyHealth.enabled.
+  { area: "key-health", run: async ({ locationId, saved }) => {
+    const r = await maybeRunKeyHealth({ locationId, saved, store });
+    if (r?.keys) {
+      const rejected = Object.entries(r.keys).filter(([, k]) => k.ok === false).map(([name]) => name);
+      if (rejected.length) console.log(`key check for ${locationId}: rejected ${rejected.join(", ")}`);
+    }
   } },
   // The follow-up clock rides the same tick rather than a third timer: it is
   // a once-a-day decision with the same gates. What it decides lands in the
@@ -487,6 +503,15 @@ const TICK_JOBS = [
     const r = await maybeRunDeliveryWatch({ client, locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE });
     if (r?.started) console.log(`delivery check started for ${locationId} (try ${r.tries} today)`);
   } },
+  // A send lane whose texts come back carrier-blocked or STOPped pauses
+  // itself (lane-breaker.js, 2026-11-23): every tick, today's first sends of
+  // each machine kind and its last fifty; a tripped kind's queued texts go
+  // back to drafts and Matt gets one Slack line. On unless
+  // conversationAi.laneBreaker.enabled is false; it never sends.
+  { area: "lane-breaker", run: async ({ client, locationId, saved }) => {
+    const r = await maybeRunLaneBreaker({ client, locationId, saved, store });
+    if (r?.started && r.tries === 1) console.log(`lane breaker started for ${locationId} (first run today)`);
+  } },
   // What only Matt can do moves the agent's card to GHL's "Needs Matt" stage
   // and back when it's done (needs-matt.js, 2026-10-22: "instead of ping to
   // me they land there"). Only with ghlStages on and a stage by that name.
@@ -585,6 +610,8 @@ const sendLoop = guarded(async () => {
       enabledFor: async (locationId) => conversationConfig((await store.getOfferSettings(locationId)) || {}).enabled,
       // What the machine started waits for its own hours (machineUntil, 5pm).
       windowFor: async (locationId) => conversationConfig((await store.getOfferSettings(locationId)) || {}).autoSend,
+      // A kind the lane breaker stopped waits as a draft (lane-breaker.js).
+      heldKindsFor: (locationId) => laneHoldsFor({ store, locationId }),
       stopping: () => shutdown.stopping(),
     });
     if (r.failed || r.recovered || r.returned) console.warn(`conversation scheduler: ${JSON.stringify(r)}`);

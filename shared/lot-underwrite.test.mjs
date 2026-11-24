@@ -85,3 +85,29 @@ test("a typed assign price moves the spread, never the seller's offer (the metho
   assert.equal(run.result.spread, 204000);
   assert.match(run.result.tests.find((t) => t.key === "assign").label, /Assign to a builder at/);
 });
+
+// Prefill (2026-11-24): the lot analyzer used to open blank on a house whose
+// lot, year and size the machine already read. The facts come in; the comps
+// don't (they're suggestions Matt adds, below).
+import { lotDealFromSubject, teardownSuggestions } from "./lot-underwrite.js";
+test("a lot opens with its own size, year built and house size already in", () => {
+  const d = lotDealFromSubject({ lotSqft: 34000, yearBuilt: 1962, sqft: 2300 }, { name: "9 Lakeview Ln", askingPrice: 0 });
+  assert.equal(d.kind, "lot");
+  assert.deepEqual([d.lotSqft, d.yearBuilt, d.houseSqft, d.name], [34000, 1962, 2300, "9 Lakeview Ln"]);
+  assert.deepEqual(d.comps, []);
+  assert.equal(lotDealFromSubject(null, { sqft: 1800 }).houseSqft, 1800, "the form's own sqft when the record has none");
+});
+
+test("the pocket scan's sold teardowns become comps to add, newest first, never more than the table holds", () => {
+  const rows = [
+    { address: "12 Summit Dr, Hillcrest, WA 98004", price: 2100000, saleDate: "2026-03-10", lotSqft: 33000, sqft: 2100, yearBuilt: 1966 },
+    { address: "14 Summit Dr, Hillcrest, WA 98004", price: 2350000, saleDate: "2026-08-02", lotSqft: 36000, sqft: 2600, yearBuilt: 1959 },
+    { address: "", price: 0 },
+  ];
+  const s = teardownSuggestions(rows);
+  assert.deepEqual(s.map((c) => [c.label, c.price, c.lotSqft, c.yearBuilt, c.houseSqft, c.soldAt]), [
+    ["14 Summit Dr", 2350000, 36000, 1959, 2600, "2026-08"],
+    ["12 Summit Dr", 2100000, 33000, 1966, 2100, "2026-03"],
+  ]);
+  assert.equal(teardownSuggestions(Array.from({ length: 50 }, (_, i) => ({ address: `${i} Elm St`, price: 2000000 + i, saleDate: "2026-01-01" }))).length, 30);
+});

@@ -157,6 +157,52 @@ test("a scheduled check-in email is dismissed when they opted out since it was q
   assert.ok(after.flags.includes("they opted out, not sent"), after.flags.join(" | "));
 });
 
+// The 2026-11-23 audit (FT-7): agents who had the bot turned off on them
+// still got the cold intro and check-in emails. A `stop bot` tag holds the
+// bot, and these emails are the bot's.
+test("an agent tagged stop bot gets no intro or check-in email", async () => {
+  const contacts = {
+    "c-arlo": { firstName: "Arlo", email: "arlo@example.com", tags: ["agent"] },
+    "c-bette": { firstName: "Bette", email: "bette@example.com", tags: ["agent", "Stop Bot"] },
+  };
+  const loc = "loc-stopbot-intro";
+  for (const id of Object.keys(contacts)) {
+    await recordEvent({ store, locationId: loc, contactId: id, party: "agent", type: "outreach_sent", at: ago(2), address: "8 Fernhill Ct, Kent, WA 98031", source: "conversation", dedupeKey: `os:${id}` });
+  }
+  const r = await runIntroEmails({ store, locationId: loc, saved: emailSaved({ introEmail: { enabled: true, autoSend: true } }), sendsEnabled: true, now: NOW,
+    deps: { getContact: async (id) => contacts[id] || null, ourTouches: noTouches } });
+  const by = Object.fromEntries(r.rows.map((x) => [x.contactId, x]));
+  assert.equal(by["c-arlo"].status, "scheduled");
+  assert.equal(by["c-bette"].status, "skipped");
+  assert.match(by["c-bette"].reason, /bot is off for this contact/);
+  assert.equal((await store.listReplyDrafts(loc, { contactId: "c-bette", limit: 5 })).length, 0);
+
+  const loc2 = "loc-stopbot-checkin";
+  for (const id of Object.keys(contacts)) {
+    await recordEvent({ store, locationId: loc2, contactId: id, party: "agent", type: "outreach_sent", at: ago(16), address: "8 Fernhill Ct, Kent, WA 98031", source: "conversation", dedupeKey: `os:${id}` });
+    await recordEvent({ store, locationId: loc2, contactId: id, party: "agent", type: "outreach_email_queued", at: ago(14), source: "conversation", dedupeKey: `outreach_email:${id}` });
+  }
+  const c = await runCheckInEmails({ store, locationId: loc2, saved: emailSaved({ checkInEmail: { enabled: true, autoSend: true } }), sendsEnabled: true, now: NOW,
+    deps: { getContact: async (id) => contacts[id] || null, ourTouches: noTouches } });
+  const cby = Object.fromEntries(c.rows.map((x) => [x.contactId, x]));
+  assert.equal(cby["c-arlo"].status, "scheduled");
+  assert.match(cby["c-bette"].reason, /bot is off for this contact/);
+});
+
+test("a check-in email queued before the stop bot tag went on waits for Matt instead of sending", async () => {
+  const loc = "loc-stopbot-since";
+  const { client, sent } = ghl({ "c-cyra": { firstName: "Cyra", email: "cyra@example.com", tags: ["agent", "stop bot"] } });
+  const d = await store.createReplyDraft({ locationId: loc, contactId: "c-cyra", status: "scheduled", channel: "email", inbound: "", party: "agent",
+    outbound: { kind: "checkin_email", address: "8 Fernhill Ct", subject: "anything rough lately", step: 16 }, reply: "Hi Cyra,\n\nAnything rough on your desk?\n\nMatt", intent: "checkin_email",
+    flags: [], sendAt: ago(0.01) });
+  const r = await sendReplyDraft({ client, store, locationId: loc, draftId: d.id, live: true, auto: true, readThread: async () => "", now: NOW });
+  assert.equal(sent.length, 0, "nothing went");
+  assert.match(String(r.skipped), /bot is off for this contact/);
+  const after = await store.getReplyDraft(d.id);
+  assert.notEqual(after.status, "sent");
+  assert.notEqual(after.status, "scheduled", "it no longer counts down");
+});
+
 /* ---------- machine texts after an email unsubscribe ---------- */
 
 test("an agent who clicked unsubscribe on our email gets no machine text", async () => {

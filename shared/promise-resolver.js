@@ -15,7 +15,7 @@
 
 import { sameStreet } from "./us-address.js";
 import { aiHoldReasons, effectiveStatus, OPEN_STATUSES } from "./offer-status.js";
-import { detectPromise, PERSON_PROMISES } from "./follow-up.js";
+import { detectPromise, PERSON_PROMISES, promiseDeadline } from "./follow-up.js";
 import { currentOffers } from "./current-offer.js";
 import { stillQualifying } from "./flip-read.js";
 import { paperWorthy, saidYesOn } from "./paper-follows.js";
@@ -25,6 +25,9 @@ const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t
 
 // Older than this, the thread has moved on and a "we owe you" would be odd.
 export const PROMISE_WINDOW_HOURS = 72;
+// Promises the machine never drives or texts about: Matt's own, and a number
+// they asked for that our answer didn't give.
+const NOT_THE_MACHINES = new Set(["you", "their_ask"]);
 
 export const PROMISE_MOVES = ["send_number", "send_paper", "start_underwrite", "ask_numbers", "rerun", "wait", "not_owed", "yours", "call_owed"];
 
@@ -66,7 +69,7 @@ export function endsWithQuestionToThem(text = "") {
 }
 
 /**
- * openPromises(events, { now, windowHours }) → [{ contactId, since, address, what, text, draftId, asksThem, owedAt }]
+ * openPromises(events, { now, windowHours }) → [{ contactId, dueAt, since, address, what, text, draftId, asksThem, owedAt }]
  *
  * One per contact: everything promised since their last `promise_kept`.
  * `since` is the earliest open promise, `owedAt` when the sweep said so.
@@ -88,12 +91,17 @@ export function openPromises(events = [], { now = Date.now(), windowHours = PROM
     // One you typed yourself is not the machine's to drive or text about
     // (owedPromises in promise-owed.js keeps it on Today instead), and nor is
     // a call, a time to walk it or the earnest money (owedPersonPromises).
-    const made = list.filter((e) => e.type === "promise_made" && e.data?.by !== "you" && !PERSON_PROMISES.has(e.data?.what) && String(e.at) > lastKept);
+    // Nor is a number they asked for that we never said we'd send (by
+    // "their_ask", 2026-11-23): it is Matt's, through the owed row.
+    const made = list.filter((e) => e.type === "promise_made" && !NOT_THE_MACHINES.has(e.data?.by) && !PERSON_PROMISES.has(e.data?.what) && String(e.at) > lastKept);
     const owed = list.filter((e) => e.type === "promise_owed" && String(e.at) >= lastKept).at(-1) || null;
     if (!made.length && !owed) continue;
     const newest = made.at(-1) || owed;
+    // The soonest time one of them named ("today": 5pm), for Needs Matt (2026-11-23).
+    const named = made.map((e) => promiseDeadline(e.data?.text || "", ms(e.at) ?? now)).filter((t) => t != null);
     out.push({
       contactId,
+      dueAt: named.length ? new Date(Math.min(...named)).toISOString() : null,
       since: made[0]?.at || owed.at,
       address: [...made].reverse().find((p) => p.address)?.address || owed?.address || "",
       what: promiseWhat([...made, owed]),

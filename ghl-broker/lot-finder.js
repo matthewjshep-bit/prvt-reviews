@@ -22,6 +22,7 @@
 // counts and keys, never a name, a phone or an address.
 
 import { store as defaultStore } from "./store.js";
+import { recordError, scrubMessage } from "./app-errors.js";
 import { recordEvent, recordEvents, ensureProfile } from "./contact-record.js";
 import { getContact, findDuplicateContact, createContact, addContactTags, removeContactTags, smsUnsubscribed } from "./ghl.js";
 import { resolveBuilderContact } from "./builder-contacts.js";
@@ -40,7 +41,7 @@ import { citySlug } from "./shared/dispo-regions.js";
 import {
   normalizeLotFinder, pocketReady, propertySearchBody, ownerFromProperty, pickToTrace, traceLookupBody, phonesFromTrace, reachable,
   lotOwnerText, nextOwnerStep, lotOwnerTags, LOT_OWNER_EVENTS, LOT_OWNER_PARTY, SEQUENCE_EVENT_TYPES,
-  suggestPocket, builderFromNewBuild, builderTags, TEARDOWN_YEAR_MAX,
+  suggestPocket, builderFromNewBuild, builderTags, TEARDOWN_YEAR_MAX, repliesByOwner, hasLotOffer,
 } from "./shared/lot-finder.js";
 
 export const CURSOR_NAME = "lotFinder";
@@ -179,6 +180,30 @@ export async function traceOwner({ row, apiKey, fetchFn = fetch }) {
  * deps: { fetch, getContact, findDuplicateContact, createContact, addContactTags } — the
  * two APIs and GHL, injectable for tests.
  */
+/**
+ * ownersWhoAnswered({ store, locationId, now, days, limit }) → [{ contactId, name, street, at, replies }]
+ *
+ * The Luxury page's "Owners who answered": every homeowner the lot finder
+ * texted who answered in the last `days`, with no luxury-lot offer from Matt
+ * yet (shared/lot-finder.js hasLotOffer), newest answer first. One event read
+ * for the window, then one offer read and one profile read per person shown.
+ */
+export async function ownersWhoAnswered({ store = defaultStore, locationId, now = Date.now(), days = 60, limit = 50 } = {}) {
+  const since = iso(now - days * 86400000);
+  const events = (await store.listContactEventsSince(locationId, since, { types: [LOT_OWNER_EVENTS.replied], limit: 5000 }).catch(() => [])) || [];
+  const out = [];
+  for (const r of repliesByOwner(events)) {
+    if (out.length >= limit) break;
+    const [offers, profile] = await Promise.all([
+      store.listOffers(locationId, { contactId: r.contactId, limit: 10, lean: true }).catch(() => []),
+      store.getContactProfile?.(locationId, r.contactId).catch(() => null),
+    ]);
+    if (hasLotOffer(offers)) continue;
+    out.push({ ...r, name: String(profile?.name || "").trim() });
+  }
+  return out;
+}
+
 export async function runLotFinder({ client, locationId, saved = {}, store = defaultStore, sendsEnabled = false, deps = {}, now = Date.now(), dryRun = null, rescan = false }) {
   const f = normalizeLotFinder(saved?.lotFinder);
   dryRun = dryRun ?? f.dryRun;
@@ -216,6 +241,9 @@ export async function runLotFinder({ client, locationId, saved = {}, store = def
   // the parcels). Dry: nothing bought.
   const apifyToken = String(saved?.apifyToken || "").trim();
   const scans = { ...(cur.scans || {}) };
+  // The sold teardowns each scan reads, kept for the lot analyzer's suggested
+  // comps (routes/lot-finder.js GET /teardowns). `scans` stays the scan time.
+  const teardowns = { ...(cur.teardowns || {}) };
   for (const p of f.pockets) {
     const line = out.pockets.find((x) => x.id === p.id);
     if (!p.enabled || !p.lat || !p.lng || dryRun) continue;
@@ -227,6 +255,8 @@ export async function runLotFinder({ client, locationId, saved = {}, store = def
       const up = await store.upsertLotBuilders(locationId, rows);
       line.builders = rows.length; line.buildersCreated = up.created;
       scans[p.id] = iso(now);
+      teardowns[p.id] = { at: iso(now), rows: (scan.teardowns || []).slice(0, 60)
+        .map((t) => ({ address: t.address, price: t.price, saleDate: t.saleDate, lotSqft: t.lotSqft || 0, sqft: t.sqft || 0, yearBuilt: t.yearBuilt || 0 })) };
     } catch (e) { line.builders = `scan failed: ${String(e?.message || e).slice(0, 120)}`; }
   }
 
@@ -280,9 +310,9 @@ export async function runLotFinder({ client, locationId, saved = {}, store = def
         if (e?.credits) { out.traced.stopped = "out of credits"; break; }
       }
     }
-    await store.setJobCursor?.(locationId, `${CURSOR_NAME}Pulls`, { at: iso(now), doc: { ...cur, pulls, scans, traces: { day, n } } }).catch(() => {});
+    await store.setJobCursor?.(locationId, `${CURSOR_NAME}Pulls`, { at: iso(now), doc: { ...cur, pulls, scans, teardowns, traces: { day, n } } }).catch(() => {});
   }
-  if (!dryRun && out.traced.looked === 0) await store.setJobCursor?.(locationId, `${CURSOR_NAME}Pulls`, { at: iso(now), doc: { ...cur, pulls, scans } }).catch(() => {});
+  if (!dryRun && out.traced.looked === 0) await store.setJobCursor?.(locationId, `${CURSOR_NAME}Pulls`, { at: iso(now), doc: { ...cur, pulls, scans, teardowns } }).catch(() => {});
 
   // 3. Into GHL, the day's reachable owners. Dry unless both gates are open.
   const config = conversationConfig(saved);
@@ -469,7 +499,10 @@ export function startLotFinder({ client, locationId, saved, store = defaultStore
       await stamp({ run: null, last: summary() });
     })
     .catch(async (e) => {
-      job.status = "error"; job.error = String(e?.message || e).slice(0, 300); job.finishedAt = iso(Date.now());
+      job.status = "error"; job.error = scrubMessage(e).slice(0, 300) || "the run failed"; job.finishedAt = iso(Date.now());
+      // Kept, so #machine and Reports → Line say so (2026-11-23 audit, AH-5):
+      // the cursor alone was read by nobody.
+      await recordError(store, { locationId, area: "lot-finder", err: e, context: { jobId: job.id, trigger, stage: "run" } });
       await stamp({ run: null, last: summary(), ...(trigger === "daily" ? { failed: true, error: job.error } : {}) });
     });
   return job;

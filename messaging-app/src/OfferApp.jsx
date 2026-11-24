@@ -1,45 +1,45 @@
-// OfferApp.jsx — the offer generator shell. Four views:
-//   Offers    — every offer created for this location, grouped by agent, with
-//               its outcome. The landing view: the daily job is working the
-//               list, so the list is home and creating is an action off it.
-//   New Offer — pick a contact, enter property numbers, get three offers,
-//               generate the document, attach it to the contact record.
-//               Reached from the header button, not a tab.
-//   Deals     — offers under signed contract, tracked through disposition.
-//   Conversation AI — the bot that answers inbound agent and investor texts:
-//               its voice, playbooks, routing, auto-send switches and outbox.
-//   Settings  — calculation defaults + company info printed on the document.
-// Plus sibling apps on their own paths: /deals, /autopilot (Overview ·
-// Agents · Investors · Advanced settings), /reports.
-// /agents and /dispo were their own apps until 2026-10-20; they redirect to
-// their Autopilot tabs. /dashboard (Today) is gone (2026-10-20) and opens Offers.
+// OfferApp.jsx — the console's one shell (2026-11-23 audit, nav-1).
+//
+// Matt works two pages: Offers and Deals. Those, and Luxury (the teardown
+// lane he keeps separate), are the pills up top; everything that runs in
+// the background sits under one More menu (app-nav.js):
+//   Offers    every offer for the location, grouped by agent, with its
+//             outcome. The landing view: the daily job is working the list.
+//   Deals     offers under signed contract, tracked through disposition.
+//   Luxury    the same Offers and Deals narrowed to luxury lots, plus Lots
+//             (the lot finder), at /luxury.
+//   More      Machine: Agent texts, Investor texts, Gatekeepers, Autopilot
+//             settings, Settings. Reports: Flow, Line, Follow-up, Lessons.
+//             And the Companion window to keep beside GHL.
+// New Offer is the header's button, not a tab.
+//
+// /autopilot, /reports, /agents, /dispo and /dashboard are old GHL menu
+// links: links.js movedTo sends each to its view here. /deals still shows
+// every kind of deal; /contact is the companion window on its own.
 
-import { offerEditorUrl } from "./api.js";
 import React, { useEffect, useState } from "react";
-import { PanelRight, Plus } from "lucide-react";
+import { ChevronDown, PanelRight, Plus } from "lucide-react";
 import { brandMarkSvg } from "@shared/brand-mark.js";
 import NewOffer from "./NewOffer.jsx";
 import OffersHistory from "./OffersHistory.jsx";
+import LaneBreakerStrip from "./LaneBreakerStrip.jsx";
 import DealsView from "./DealsView.jsx";
 import AgentOutreach from "./AgentOutreach.jsx";
 import Dispositions from "./Dispositions.jsx";
 import DispoImport from "./DispoImport.jsx";
-import Dashboard from "./Dashboard.jsx";
 import SettingsView from "./SettingsView.jsx";
 import ConversationAi from "./ConversationAi.jsx";
 import FlowView from "./FlowView.jsx";
 import LineView from "./LineView.jsx";
 import FollowUpView from "./FollowUpView.jsx";
 import AutopilotView from "./AutopilotView.jsx";
+import LastNightPanel from "./LastNightCard.jsx";
+import CoachCard from "./CoachCard.jsx";
 import AgentsTab from "./AgentsTab.jsx";
 import GatekeepersTab from "./GatekeepersTab.jsx";
 import LotsTab from "./LotsTab.jsx";
+import OwnersAnswered from "./OwnersAnswered.jsx";
 import { isLuxuryLot } from "@shared/asset-type.js";
-
-// The Offers page is the agent-outreach book; a luxury lot lives on the Luxury
-// page and nowhere else (Matt, 2026-11-23). The Deals page (/deals) shows every kind.
-const notLuxury = (o) => !isLuxuryLot(o);
-import OverviewTab from "./OverviewTab.jsx";
 import InvestorsTab from "./InvestorsTab.jsx";
 import LessonsTab from "./LessonsTab.jsx";
 import ContactDrawer from "./ContactDrawer.jsx";
@@ -47,114 +47,34 @@ import CompanionView from "./CompanionView.jsx";
 import { COMPANION_WINDOW } from "./companion.js";
 import { appHref, movedTo } from "./links.js";
 import { ContactDrawerContext } from "./ContactLink.jsx";
-import { getLocationId, getLocationKey, getOffer, getSettings } from "./api.js";
+import { getLocationId, getNeedsMatt, getOffer, getSettings } from "./api.js";
+import { LUXURY_TABS, MORE, PILLS, activePill, historyUrl, isCompanionPath, laneFilter, moreLabel, resolveView, routeOf } from "./app-nav.js";
+import { useLightPoll } from "./light-poll.js";
+import { Menu, NeedsChip } from "./ui.jsx";
 
-// The offer editor lives in the main app — from the standalone Deals page,
-// "Edit offer" opens it in a new tab deep-linked via the ?offer_id= flow.
-
-// A page that moved (links.js movedTo): the GHL menu links still say /agents
-// and /dispo. A forced mode is its own deploy and stays where it is.
+// A page that moved (links.js movedTo): the GHL menu links still say
+// /autopilot, /reports, /agents, /dispo and /dashboard. A forced mode is its
+// own deploy and stays where it is.
+const FORCED = (() => { try { return import.meta.env.VITE_APP_MODE || ""; } catch { return ""; } })();
 (() => {
-  if (import.meta.env.VITE_APP_MODE) return;
+  if (FORCED) return;
   try {
     const to = movedTo(window.location.pathname, window.location.search);
     if (to) window.location.replace(to);
   } catch { /* stay where we are */ }
 })();
 
-// Which product this page is. One deploy serves them all: /autopilot,
-// /reports, /deals, /contact (the companion), everything else the offer
-// generator. /agents, /dispo and /dashboard (Today, gone 2026-10-20) are
-// redirected by movedTo before this matters. The Netlify SPA redirect sends every path to this same
-// bundle; VITE_APP_MODE still forces a mode for a dedicated-domain deploy.
-const APP_MODE = (() => {
-  try {
-    if (import.meta.env.VITE_APP_MODE === "outreach") return "outreach";
-    if (import.meta.env.VITE_APP_MODE === "dispo") return "dispo";
-    if (import.meta.env.VITE_APP_MODE === "autopilot") return "autopilot";
-    if (import.meta.env.VITE_APP_MODE === "reports") return "reports";
-    if (/^\/autopilot(\/|$)/.test(window.location.pathname)) return "autopilot";
-    if (/^\/reports(\/|$)/.test(window.location.pathname)) return "reports";
-    if (/^\/deals(\/|$)/.test(window.location.pathname)) return "deals";
-    // The luxury teardown lane, on its own page (Matt, 2026-11-23: "keep
-    // track of Luxury separately"): the lot finder, the lot offers, the lot deals.
-    if (/^\/luxury(\/|$)/.test(window.location.pathname)) return "luxury";
-    if (/^\/dispo(\/|$)/.test(window.location.pathname)) return "dispo";
-    // The companion window beside GHL (CompanionView.jsx).
-    if (/^\/contact(\/|$)/.test(window.location.pathname)) return "companion";
-    return /^\/agents(\/|$)/.test(window.location.pathname) ? "outreach" : "offers";
-  } catch {
-    return "offers";
-  }
-})();
+// The companion window beside GHL (CompanionView.jsx) is its own page.
+const IS_COMPANION = (() => { try { return isCompanionPath(window.location.pathname); } catch { return false; } })();
 
-const NAV =
-  APP_MODE === "outreach"
-    ? [
-        { view: "outreach", label: "Agents" },
-        { view: "settings", label: "Settings" },
-      ]
-    : APP_MODE === "dispo"
-    ? [
-        { view: "dispo", label: "Investors" },
-        { view: "import", label: "Import buyers" },
-        { view: "settings", label: "Settings" },
-      ]
-    // Everything the bot does, in one place (2026-10-20): what it's doing,
-    // in a few numbers; what it sends agents; what it sends buyers; and
-    // every setting, out of the way. Agent Outreach and Dispositions are the
-    // lists folded under Agents and Investors.
-    : APP_MODE === "autopilot"
-    ? [
-        { view: "overview", label: "Overview" },
-        { view: "agents", label: "Agents" },
-        { view: "gatekeepers", label: "Gatekeepers" },
-        { view: "lots", label: "Lots" },
-        { view: "investors", label: "Investors" },
-        { view: "advanced", label: "Advanced settings" },
-      ]
-    : APP_MODE === "reports"
-    ? [
-        { view: "flow", label: "Flow" },
-        { view: "line", label: "Line" },
-        { view: "followup", label: "Follow-up" },
-        { view: "activity", label: "Activity" },
-        { view: "lessons", label: "Lessons" },
-      ]
-    // Offers first: the page opens on the lane's offers (Matt, 2026-11-23).
-    : APP_MODE === "luxury"
-    ? [
-        { view: "history", label: "Offers" },
-        { view: "lots", label: "Lots" },
-        { view: "deals", label: "Deals" },
-      ]
-    : APP_MODE === "deals"
-    ? [{ view: "deals", label: "Deals" }]
-    : APP_MODE === "companion"
-    ? [{ view: "companion", label: "Companion" }]
-    : [
-        { view: "history", label: "Offers" },
-        { view: "deals", label: "Deals" },
-        { view: "settings", label: "Settings" },
-      ];
-
-const APP_TITLE =
-  APP_MODE === "outreach" ? "Agent Outreach"
-  : APP_MODE === "autopilot" ? "Autopilot"
-  : APP_MODE === "reports" ? "Reports"
-  : APP_MODE === "deals" ? "Deals"
-  : APP_MODE === "luxury" ? "Luxury"
-  : APP_MODE === "dispo" ? "Dispositions"
-  : APP_MODE === "companion" ? "Companion"
-  : "Offer Generator";
-
-// "new" is reachable but not a tab — it's the primary button in the header and
-// the target of the ?offer_id= deep link, so it still has to be a valid view.
-// On Autopilot, the tabs it had before (Controls, Conversation AI, Bot) open
-// Advanced settings, where all of them now are.
-const VIEWS = new Set([...NAV.map((n) => n.view), "new"]);
-const RENAMED = APP_MODE === "autopilot" ? { controls: "advanced", conversation: "advanced", bot: "advanced" } : {};
-const viewOf = (v) => RENAMED[v] || v;
+// VITE_APP_MODE can still force one product onto a dedicated-domain deploy
+// (RUNBOOK "Step 3"). Outreach and Dispositions keep their old tabs there;
+// none is set on the Netlify site today.
+const LEGACY_NAV = FORCED === "outreach"
+  ? [{ view: "outreach", label: "Agents" }, { view: "settings", label: "Settings" }]
+  : FORCED === "dispo"
+  ? [{ view: "dispo", label: "Investors" }, { view: "import", label: "Import buyers" }, { view: "settings", label: "Settings" }]
+  : null;
 
 function readParam(name) {
   try {
@@ -164,19 +84,25 @@ function readParam(name) {
   }
 }
 
-// Keep the URL honest about which view is showing. Until now the URL never
-// changed, so the browser back button did nothing and no view but the first
-// could be linked to — both of which read as the app being broken.
-function viewUrl(view) {
-  const p = new URLSearchParams(window.location.search);
-  p.set("view", view);
-  return `${window.location.pathname}?${p}`;
+function initialRoute() {
+  if (LEGACY_NAV) {
+    const v = readParam("view");
+    return { lane: "agents", view: LEGACY_NAV.some((n) => n.view === v) ? v : LEGACY_NAV[0].view };
+  }
+  try {
+    if (FORCED === "autopilot" && !readParam("view")) return resolveView("agents", "agents");
+    if (FORCED === "reports" && !readParam("view")) return resolveView("agents", "flow");
+    return routeOf(window.location.pathname, window.location.search);
+  } catch {
+    return { lane: "agents", view: "history" };
+  }
 }
+
+const sameRoute = (a, b) => a?.lane === b?.lane && a?.view === b?.view;
 
 // The console wears the same lockup as the investor pages — the operator's
 // mark and wordmark, in their colors, from the same settings blob. It keeps
-// its own tabs: this is the tool, not the shopfront, and swapping working
-// navigation for marketing links would cost the day's job to gain a logo.
+// its own tabs: this is the tool, not the shopfront.
 function BrandLockup({ settings, fallback }) {
   const co = settings?.company || {};
   const wordmark = (co.wordmark || co.name || "").trim();
@@ -203,14 +129,40 @@ function BrandLockup({ settings, fallback }) {
   );
 }
 
+const PILL = "whitespace-nowrap rounded-full px-3 py-1.5 text-sm font-medium transition-colors";
+const pillTone = (on) => (on ? "bg-blue-600 text-white" : "text-slate-600 hover:bg-slate-100");
+
 export default function OfferApp() {
-  const [view, setView] = useState(() => {
-    const v = viewOf(readParam("view"));
-    return VIEWS.has(v) ? v : NAV[0].view;
-  });
+  const [route, setRouteState] = useState(initialRoute);
+  const { lane, view } = route;
   const [initialContactId, setInitialContactId] = useState(() => readParam("contact_id"));
   const [editing, setEditing] = useState(null); // draft/offer being reopened in the form
+  // The deal to open when the Deals view mounts (2026-11-23): a promote lands
+  // on the new deal to confirm its fee, dates and kind, not on the list.
+  const [dealFocus, setDealFocus] = useState(null); // null | { id, fresh, warnings }
+  const openDeal = (x, extra = {}) => {
+    const id = typeof x === "string" ? x : x?.id || null;
+    setDealFocus(id ? { id, fresh: Boolean(extra.fresh), warnings: extra.warnings || [] } : null);
+    go({ view: "deals" });
+  };
   const [formNonce, setFormNonce] = useState(0); // bump to remount NewOffer blank
+  const go = (next) => {
+    // Another lane is another book: the Offers table's tab and search
+    // (?filter=, ?q=) belong to the one being left. Push the new lane's URL
+    // without them before its page mounts and reads the URL; the entry being
+    // left keeps them, so Back lands on the same slice (app-nav historyUrl).
+    if (!LEGACY_NAV && next.lane && next.lane !== route.lane) {
+      const r = resolveView(next.lane, next.view);
+      try {
+        const url = historyUrl(r, window.location, route);
+        if (url) window.history.pushState({ ...r }, "", url);
+      } catch { /* the GHL iframe can refuse history calls */ }
+    }
+    setRouteState((cur) => {
+      const r = LEGACY_NAV ? { lane: "agents", view: next.view } : resolveView(next.lane ?? cur.lane, next.view);
+      return sameRoute(cur, r) ? cur : r;
+    });
+  };
 
   const resetForm = () => {
     setEditing(null);
@@ -242,38 +194,58 @@ export default function OfferApp() {
       .catch((e) => setSettingsError(e.message));
   }, []);
 
-  // Push each view onto history so Back works and any view can be linked to.
+  // Who is on GHL's Needs Matt stage (needs-view.js): one cursor read on load
+  // and a light re-read now and then while the tab shows. The pages put the
+  // reason on each row and say how many of theirs are on it.
+  const shell = !LEGACY_NAV && !IS_COMPANION;
+  const [needs, setNeeds] = useState([]);
+  const [needCounts, setNeedCounts] = useState({ offers: 0, deals: 0 });
+  const [needsFocus, setNeedsFocus] = useState(null); // "offers" | "deals": filter that page to them once
+  const loadNeeds = () => getNeedsMatt().then(setNeeds).catch(() => { /* the rows just carry no reason */ });
+  useEffect(() => { if (shell) loadNeeds(); }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+  useLightPoll(loadNeeds, { enabled: shell });
+  const reportNeeds = React.useCallback((counts) => setNeedCounts((cur) => ({ ...cur, ...counts })), []);
+  const reportDealNeeds = React.useCallback((n) => setNeedCounts((cur) => ({ ...cur, deals: n })), []);
+  const needsFocused = React.useCallback(() => setNeedsFocus(null), []);
+
+  // Push each page onto history so Back works and any page can be linked to:
+  // the lane is the path (/, /luxury, /deals), the page is ?view=.
   // replaceState on the first render (there's nothing to go back to yet);
   // pushState after, and popstate restores whatever the user came from.
+  // The companion window (/contact) is left alone: the extension finds its
+  // tab by that path, and a reload must bring the companion back.
   const firstRender = React.useRef(true);
   useEffect(() => {
+    if (IS_COMPANION) return;
     try {
-      const url = viewUrl(view);
-      if (firstRender.current) window.history.replaceState({ view }, "", url);
-      else if (window.history.state?.view !== view) window.history.pushState({ view }, "", url);
+      const p = new URLSearchParams(window.location.search);
+      const url = LEGACY_NAV ? (p.set("view", view), `${window.location.pathname}?${p}`) : historyUrl(route, window.location);
+      if (firstRender.current) window.history.replaceState({ ...route }, "", url);
+      else if (!sameRoute(window.history.state, route)) window.history.pushState({ ...route }, "", url);
     } catch { /* iframe history can be restricted — the app still works */ }
     firstRender.current = false;
-  }, [view]);
+  }, [lane, view]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
+    if (IS_COMPANION) return undefined;
     const onPop = (e) => {
-      const v = viewOf(e.state?.view || readParam("view"));
-      if (VIEWS.has(v)) setView(v);
+      if (LEGACY_NAV) { const v = e.state?.view || readParam("view"); if (LEGACY_NAV.some((n) => n.view === v)) setRouteState({ lane: "agents", view: v }); return; }
+      setRouteState(e.state?.view ? resolveView(e.state.lane, e.state.view) : routeOf(window.location.pathname, window.location.search));
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
 
   // Deep link from the GHL contact note: ?offer_id= reopens that offer in the
-  // editor (same path as History → Edit) once it loads.
+  // editor once it loads.
   useEffect(() => {
-    if (APP_MODE === "outreach" || APP_MODE === "dispo") return; // offers-only deep link
+    if (LEGACY_NAV) return; // offers-only deep link
     const offerId = readParam("offer_id");
     if (!offerId) return;
     getOffer(offerId)
-      .then((o) => { if (o) { setEditing(o); setView("new"); } })
+      .then((o) => { if (o) { setEditing(o); go({ view: "new" }); } })
       .catch(() => { /* wrong location or deleted offer — stay on the blank form */ });
-  }, []);
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!getLocationId()) {
     return (
@@ -288,7 +260,26 @@ export default function OfferApp() {
 
   // The companion window is its own page: no tabs, no drawer (the record is
   // on the page), the location gate above all the same.
-  if (APP_MODE === "companion") return <CompanionView settings={settings} />;
+  if (IS_COMPANION) return <CompanionView settings={settings} />;
+
+  const only = laneFilter(lane, isLuxuryLot);
+  const title = LEGACY_NAV ? (FORCED === "outreach" ? "Agent Outreach" : "Dispositions")
+    : lane === "luxury" ? "Luxury" : lane === "all" ? "Deals" : "Offer Generator";
+  const pill = activePill(route);
+  const inMore = !LEGACY_NAV && MORE.some((m) => m.view === view);
+  const openCompanion = () => window.open(appHref("/contact"), COMPANION_WINDOW, "popup,width=560,height=900");
+  const moreItems = [
+    ...MORE.map((m) => (m.heading ? { heading: m.heading, key: `h-${m.heading}` }
+      : { key: m.view, label: m.label, selected: view === m.view, onSelect: () => go({ lane: "agents", view: m.view }) })),
+    { heading: "Beside GHL", key: "h-companion" },
+    { key: "companion", label: "Companion window", icon: <PanelRight size={13} aria-hidden="true" />,
+      title: "Open a window to keep beside GoHighLevel: it shows whoever you open there", onSelect: openCompanion },
+  ];
+  const focusNeeds = (page) => {
+    setNeedsFocus(page);
+    go(page === "deals" ? { lane: lane === "all" ? "all" : "agents", view: "deals" } : { lane: "agents", view: "history" });
+  };
+  const editOffer = (o) => { setEditing(o); go({ view: "new" }); };
 
   // New Offer keeps a centered cap (the form reads better constrained); the
   // table-heavy views run full-bleed to use the GHL iframe's width. Header and
@@ -300,42 +291,44 @@ export default function OfferApp() {
     <div className="min-h-screen bg-slate-50 text-slate-900">
       {contact && <ContactDrawer contactId={contact.id} party={contact.party} onClose={drawer.close} />}
       <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/90 backdrop-blur">
-        <div className={`flex items-center gap-3 px-4 py-2.5 sm:px-6 lg:px-8 ${containerWidth}`}>
-          <div className="mr-2 flex items-center gap-2.5">
-            <BrandLockup settings={settings} fallback={APP_TITLE} />
+        {/* Wraps on a phone: the lockup and New Offer on the first line, the
+            pages on a line of their own below (nav-11). */}
+        <div className={`flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5 sm:px-6 lg:px-8 ${containerWidth}`}>
+          <div className="mr-1 flex min-w-0 items-center gap-2.5">
+            <BrandLockup settings={settings} fallback={title} />
             {/* Without a wordmark the lockup already is the title — don't say it twice. */}
             {(settings?.company?.wordmark || settings?.company?.name || "").trim() &&
-              <span className="hidden text-sm font-semibold text-slate-400 sm:inline">{APP_TITLE}</span>}
+              <span className="hidden text-sm font-semibold text-slate-400 lg:inline">{title}</span>}
           </div>
-          {NAV.length > 1 && NAV.map((n) => (
+          <nav aria-label="Pages" className="order-last flex w-full min-w-0 items-center gap-1.5 overflow-x-auto sm:order-none sm:w-auto sm:overflow-visible">
+            {LEGACY_NAV ? LEGACY_NAV.map((n) => (
+              <button key={n.view} type="button" onClick={() => go({ view: n.view })}
+                aria-current={n.view === view ? "page" : undefined} className={`${PILL} ${pillTone(n.view === view)}`}>
+                {n.label}
+              </button>
+            )) : (<>
+              {PILLS.map((p) => (
+                <span key={p.key} className="inline-flex shrink-0 items-center gap-1">
+                  <button type="button" onClick={() => go({ lane: p.key === "deals" && lane === "all" ? "all" : p.lane, view: p.view })}
+                    aria-current={pill === p.key ? "page" : undefined} className={`${PILL} ${pillTone(pill === p.key)}`}>
+                    {p.label}
+                  </button>
+                  {p.key === "offers" && <NeedsChip count={needCounts.offers} page="Offers" onClick={() => focusNeeds("offers")} />}
+                  {p.key === "deals" && <NeedsChip count={needCounts.deals} page="Deals" onClick={() => focusNeeds("deals")} />}
+                </span>
+              ))}
+              <Menu label="More pages" align="left" items={moreItems}
+                trigger={<span className={`inline-flex shrink-0 items-center gap-1 ${PILL} ${pillTone(inMore)}`}>
+                  {inMore ? `More · ${moreLabel(view)}` : "More"} <ChevronDown size={13} aria-hidden="true" />
+                </span>} />
+            </>)}
+          </nav>
+          {!LEGACY_NAV && (
             <button
-              key={n.view}
               type="button"
-              onClick={() => setView(n.view)}
-              aria-current={n.view === view ? "page" : undefined}
-              className={`whitespace-nowrap rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors ${
-                n.view === view ? "bg-blue-600 text-white" : "text-slate-600 hover:bg-slate-100"
-              }`}
-            >
-              {n.label}
-            </button>
-          ))}
-          {/* A narrow window to keep beside GHL that shows whoever is open
-              there (CompanionView.jsx; the extension does the following). */}
-          <button
-            type="button"
-            onClick={() => window.open(appHref("/contact"), COMPANION_WINDOW, "popup,width=560,height=900")}
-            title="Open a window to keep beside GoHighLevel: it shows whoever you open there"
-            className="ml-auto inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100"
-          >
-            <PanelRight size={15} aria-hidden="true" /> <span className="hidden sm:inline">Companion</span>
-          </button>
-          {(APP_MODE === "offers" || APP_MODE === "luxury") && (
-            <button
-              type="button"
-              onClick={() => { setEditing(null); setView("new"); }}
+              onClick={() => { setEditing(null); go({ lane: lane === "all" ? "agents" : lane, view: "new" }); }}
               aria-current={view === "new" ? "page" : undefined}
-              className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-3.5 py-1.5 text-sm font-semibold transition-colors ${
+              className={`ml-auto inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-3.5 py-1.5 text-sm font-semibold transition-colors ${
                 view === "new"
                   ? "bg-blue-700 text-white"
                   : "bg-blue-600 text-white hover:bg-blue-700"
@@ -352,6 +345,17 @@ export default function OfferApp() {
             Couldn't load saved settings ({settingsError}) — using defaults.
           </div>
         )}
+        {lane === "luxury" && view !== "new" && (
+          <div className="mb-4 flex flex-wrap items-center gap-1.5" role="group" aria-label="Luxury pages">
+            {LUXURY_TABS.map((t) => (
+              <button key={t.view} type="button" onClick={() => go({ lane: "luxury", view: t.view })}
+                aria-current={view === t.view ? "page" : undefined}
+                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${view === t.view ? "bg-slate-800 text-white" : "bg-white text-slate-600 hover:bg-slate-100"}`}>
+                {t.label}
+              </button>
+            ))}
+          </div>
+        )}
         {view === "new" && (
           <NewOffer
             key={editing?.id || `blank-${formNonce}`}
@@ -361,34 +365,44 @@ export default function OfferApp() {
             onReset={resetForm}
             onSettingsSaved={(s) => setSettings(s)}
             // Switching to another of the agent's offers remounts the form on
-            // that offer (the key is the offer id) — same path as History →
-            // Edit, so the outgoing form still flushes its draft on unmount.
+            // that offer (the key is the offer id), so the outgoing form
+            // still flushes its draft on unmount.
             onOpenOffer={(o) => { setEditing(o); try { window.scrollTo({ top: 0 }); } catch { /* noop */ } }}
             // A save in place keeps the same id, so the key doesn't change and
             // the form isn't remounted — this only re-points `restore` at the
             // saved row, which is what the Offer details popout reads.
             onOfferSaved={(o) => setEditing((cur) => (cur && cur.id === o.id ? o : cur))}
-            onDeal={() => setView("deals")}
+            onDeal={openDeal}
             // On the Luxury page a new offer starts as a luxury lot, priced by the lot.
-            startLane={APP_MODE === "luxury" ? "luxury" : ""}
+            startLane={lane === "luxury" ? "luxury" : ""}
           />
         )}
+        {(view === "history" || view === "deals") && <LaneBreakerStrip />}
+        {/* Luxury: homeowners who answered a lot text and wait on Matt's call and number. */}
+        {APP_MODE === "luxury" && (view === "history" || view === "lots") && <OwnersAnswered />}
         {view === "history" && (
-          <OffersHistory onEdit={(o) => { setEditing(o); setView("new"); }}
-            onNew={(contactId) => { setEditing(null); setInitialContactId(contactId); setFormNonce((n) => n + 1); setView("new"); }}
-            onDeal={() => setView("deals")} settings={settings}
-            only={APP_MODE === "luxury" ? isLuxuryLot : APP_MODE === "offers" ? notLuxury : null} />
+          <OffersHistory key={lane}
+            onNew={(contactId) => { setEditing(null); setInitialContactId(contactId); setFormNonce((n) => n + 1); go({ view: "new" }); }}
+            onDeal={openDeal} settings={settings} only={only}
+            needs={lane === "agents" ? needs : []}
+            onNeedsCount={lane === "agents" ? reportNeeds : null}
+            focusNeeds={lane === "agents" && needsFocus === "offers"} onNeedsFocused={needsFocused} />
         )}
         {view === "deals" && (
-          <DealsView settings={settings} only={APP_MODE === "luxury" ? isLuxuryLot : APP_MODE === "offers" ? notLuxury : null}
-            onEdit={APP_MODE === "deals"
-              ? (o) => window.open(offerEditorUrl(o.id), "_blank")
-              : (o) => { setEditing(o); setView("new"); }} />
+          <DealsView key={lane} settings={settings} only={only} onEdit={editOffer}
+            focus={dealFocus} onFocused={() => setDealFocus(null)}
+            needs={lane === "luxury" ? [] : needs}
+            onNeedsCount={lane === "luxury" ? null : reportDealNeeds}
+            focusNeeds={lane !== "luxury" && needsFocus === "deals"} onNeedsFocused={needsFocused} />
         )}
-        {view === "overview" && <OverviewTab onOpen={(side) => setView(side)} />}
+        {/* The dial and every switch, last night's audit with its Run now,
+            and the coach's proposals (moved off Reports → Activity and
+            Autopilot → Overview, both retired 2026-11-23), then the bot. */}
         {view === "advanced" && (
           <div className="space-y-6">
             <AutopilotView />
+            <LastNightPanel />
+            <CoachCard />
             <ConversationAi settings={settings} />
           </div>
         )}
@@ -403,9 +417,8 @@ export default function OfferApp() {
         {view === "outreach" && <AgentOutreach settings={settings} />}
         {view === "dispo" && <Dispositions />}
         {view === "import" && <DispoImport />}
-        {view === "activity" && <Dashboard settings={settings} onSettingsSaved={(s) => setSettings(s)} />}
         {view === "settings" && (
-          <SettingsView settings={settings} onSaved={(s) => setSettings(s)} mode={APP_MODE} />
+          <SettingsView settings={settings} onSaved={(s) => setSettings(s)} mode={LEGACY_NAV ? FORCED : "offers"} />
         )}
       </div>
     </div>

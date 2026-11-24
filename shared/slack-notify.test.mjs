@@ -366,3 +366,59 @@ test("someone who asks for a call is a Needs Matt ping of its own with their fir
   const leaky = textOf(renderEvent(r, { ...ev, data: { wants: "call", when: "at 3, 425-555-0187" } }, { firstName: "Bryn" }));
   assert.doesNotMatch(leaky, /555-0187/);
 });
+
+
+
+// The luxury lane (2026-11-23): Matt prices every lot and calls every owner
+// who answers, but the reply only made a Desk row, and the Desk is gone. Now
+// it's a Needs Matt ping: first name, the street, "answered — call". Never
+// what they wrote. One a person a day, however many texts they send.
+test("a lot owner who answers is a Needs Matt ping with their first name and the street, once a day", () => {
+  assert.ok(SLACK_EVENT_TYPES.includes("lot_owner_replied"));
+  assert.ok(SLACK_EVENT_TYPES.includes("gatekeeper_replied"));
+  const ev = { id: "e1", type: "lot_owner_replied", party: "owner", contactId: "c-77", address: "4 Fenwick Ln", at: "2026-11-24T18:05:00Z", data: { channel: "sms", call: false } };
+  const [r] = routeEvent(ev);
+  assert.deepEqual([r.stream, r.kind, r.thread, r.replyOnly, r.opensOnly], ["needsMatt", "owner_answered", null, false, false]);
+  assert.equal(r.claim, "owner_answered:c-77:2026-11-24", "one a person a Pacific day");
+  assert.equal(routeEvent({ ...ev, id: "e2", at: "2026-11-24T23:50:00Z" })[0].claim, r.claim, "a second text that afternoon is the same ping");
+  assert.equal(routeEvent({ ...ev, at: "2026-11-25T18:05:00Z" })[0].claim, "owner_answered:c-77:2026-11-25", "the next day is a new one");
+  const msg = renderEvent(r, ev, { firstName: "Hollis", mattUserId: "U012MATT34", appUrl: "https://app.shepflips.com", locationId: "LOC" });
+  const t = textOf(msg);
+  assert.match(t, /<@U012MATT34> Hollis, the owner of \*4 Fenwick Ln\*, answered — call\./);
+  assert.match(msg.text, /^Hollis \(4 Fenwick Ln\) answered — call$/);
+  assert.match(t, /Open in app/);
+  // No name on the record, no street: still a ping.
+  assert.match(textOf(renderEvent(r, { ...ev, address: "" }, {})), /A lot owner answered — call\./);
+  // A full address is cut to the street.
+  assert.match(textOf(renderEvent(r, { ...ev, address: "4 Fenwick Ln, Hillcrest, WA 98004" }, { firstName: "Hollis" })), /\*4 Fenwick Ln\*, answered/);
+  // A gatekeeper (an estate attorney) the same way.
+  const g = { id: "e3", type: "gatekeeper_replied", party: "gatekeeper", contactId: "c-9", at: "2026-11-24T18:05:00Z", data: { channel: "sms" } };
+  const [gr] = routeEvent(g);
+  assert.deepEqual([gr.stream, gr.kind, gr.claim], ["needsMatt", "gatekeeper_answered", "gatekeeper_answered:c-9:2026-11-24"]);
+  assert.match(textOf(renderEvent(gr, g, { firstName: "Odile", mattUserId: "U012MATT34" })), /<@U012MATT34> Odile \(a gatekeeper the machine wrote to\) answered — call\./);
+});
+
+
+// The 2026-11-23 buyer audit (dispo-4): a buyer's yes sat four days. The
+// Needs Matt ping for a buyer who wants it or wants to see it says call now.
+test("a buyer who wants to buy or see a house is a call-now ping", () => {
+  const [r] = routeEvent({ type: "call_wanted", party: "investor" });
+  const ev = { type: "call_wanted", party: "investor", contactId: "c-9", address: "9 Larchmont Pl, Kent, WA 98030" };
+  const buy = textOf(renderEvent(r, { ...ev, data: { intent: "wants_to_buy", wants: "buy", callNow: true } }, { firstName: "Rory" }));
+  assert.match(buy, /Call now: Rory wants to buy \*9 Larchmont Pl\*/);
+  const walk = textOf(renderEvent(r, { ...ev, data: { intent: "wants_walkthrough", wants: "walkthrough", callNow: true, when: "Saturday" } }, { firstName: "Rory" }));
+  assert.match(walk, /Call now: Rory wants to see \*9 Larchmont Pl\*\. They named Saturday\./);
+});
+
+
+// Review 2026-11-23: Reports → Activity was retired, so the morning and
+// evening posts' "Open in app" quietly landed on Flow. They open Offers, the
+// page Matt works the day from.
+test("the morning and evening posts open Offers, not the retired Activity page", () => {
+  const ctx = { appUrl: "https://app.example.test", locationId: "loc1" };
+  for (const msg of [renderMorning({ offersSent: 1 }, ctx), renderEvening({ sections: [] }, {}, ctx)]) {
+    const t = textOf(msg);
+    assert.match(t, /<https:\/\/app\.example\.test\/\?view=history&location_id=loc1\|Open in app>/);
+    assert.doesNotMatch(t, /activity|\/reports/);
+  }
+});

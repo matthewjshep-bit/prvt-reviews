@@ -14,10 +14,11 @@ import { summarizeFeedback } from "@shared/conversation-ai.js";
 import { FELL_THROUGH_CODES, FELL_THROUGH_LABEL, buyerCeiling, codeFromPassReasons } from "@shared/post-mortem.js";
 import { ClipboardCheck } from "lucide-react";
 import PostMortemModal from "./PostMortemView.jsx";
+import MachineTrouble from "./MachineTrouble.jsx";
 import {
   addDealInvestor, dealDocUrl, deleteDealDoc, getOffer, ghlContactUrl, listDealDocs, listDeals,
   removeDeal, removeDealInvestor, setDealOutreachStopped, suggestInvestors, updateDeal, updateDealInvestor,
-  uploadDealDoc, zillowUrl, dealFeedbackUrl, getBuyerFunding } from "./api.js";
+  uploadDealDoc, zillowUrl, dealFeedbackUrl, getBuyerFunding, updateDealChecklist, listDatarooms, getDataroom } from "./api.js";
 import AssignmentModal from "./AssignmentModal.jsx";
 import ContactLink from "./ContactLink.jsx";
 import DataroomModal from "./DataroomModal.jsx";
@@ -28,24 +29,27 @@ import ContactSearch from "./ContactSearch.jsx";
 import DealTimeline from "./DealTimeline.jsx";
 import DealParties from "./DealParties.jsx";
 import DealAccess from "./DealAccess.jsx";
+import { attachNeeds, needsCounts } from "./needs-view.js";
 import DealKind from "./DealKind.jsx";
-import { assetLabel, normalizeAsset } from "@shared/asset-type.js";
+import { assetLabel, normalizeAsset, isLuxuryLot } from "@shared/asset-type.js";
 import { resolveChecklist, dueWords } from "@shared/deal-checklist.js";
 // A deal keeps its deadlines and records who bought it (2026-11-09).
 import { ymdLabel } from "@shared/deal-checklist.js";
 import { PASS_REASONS, PASS_REASON_LABEL } from "@shared/conversation-ai.js";
 import { updateDealFeedback } from "./api.js";
+import { termsFrom, termsChanges, settleTerms, revertTerms, savedLine } from "./deal-autosave.js";
 import { resolveParties } from "@shared/deal-parties.js";
 import { buyerMoneyLine } from "@shared/buybox.js";
+import { dispoPulse, bestWords, moneyLine, inspectionCall, buyerFacts } from "@shared/deal-pulse.js";
 import {
-  BTN, DEAL_STAGES, EmptyState, ErrorBar, KpiRow, STAGE, SkeletonRows, StagePill, TableCard,
+  BTN, DEAL_STAGES, EmptyState, ErrorBar, KpiRow, NeedsPill, STAGE, SkeletonRows, StagePill, TableCard,
   rowActivation,
 } from "./ui.jsx";
 
 // Stage vocabulary and the pill live in ui.jsx so History can render a stage
 // without importing from a sibling view. Re-exported here for the modules that
 // already reach for them through DealsView.
-export { DEAL_STAGES, STAGE, StagePill, DealModal, InvestorSummary };
+export { DEAL_STAGES, STAGE, StagePill, DealModal, InvestorSummary, DispoCell, MoneyCell, InspectionCallStrip, ConfirmDealCard };
 const TERMINAL = new Set(["closed", "fell_through"]);
 
 const STATUS_DOT = {
@@ -197,6 +201,90 @@ function InvestorSummary({ deal }) {
   );
 }
 
+// How the dispo is going, on the list (2026-11-23): buyers it went to, who is
+// on it, interested, passed and walking it, the best number a buyer put on
+// it, and how long since a buyer moved. Only what the row already carries,
+// plus the broker's count of buyers it actually reached (deal.sends); never a
+// feedback rebuild from the list.
+function DispoCell({ deal, now = Date.now() }) {
+  const p = dispoPulse(deal, { now });
+  const over = TERMINAL.has(deal.stage);
+  // The pill only when it says something the counts don't: stopped by you, or
+  // a buyer committed or soft-committed (that is why nothing new goes out).
+  const pill = dealOutreachStopped(deal) || p.committed || p.softCommit;
+  const sentTitle = p.sent == null
+    ? "How many buyers it went to isn't known right now"
+    : `${p.sent} buyer${p.sent === 1 ? "" : "s"} got this deal, by the app or by hand${p.sentAt ? ` (last ${shortDate(p.sentAt)})` : ""}. A blast you stopped doesn't count.`;
+  return (
+    <div className="min-w-0 space-y-0.5">
+      {pill ? <div><InvestorSummary deal={deal} /></div> : null}
+      <div className="text-xs tabular-nums text-slate-700" title={sentTitle}>
+        {p.parts.map((part, i) => (
+          <React.Fragment key={part}>
+            {i > 0 && <span className="text-slate-300"> · </span>}
+            {part.startsWith("best ") && p.best
+              ? <span className="font-semibold text-emerald-800" title={bestWords(p.best)}>{part}</span>
+              : <span>{part}</span>}
+          </React.Fragment>
+        ))}
+      </div>
+      {!over && (
+        <div className={`text-[11px] ${p.stalled ? "font-medium text-amber-800" : "text-slate-500"}`}
+          title="A buyer added to the deal, a buyer's standing changed, or a walkthrough answer">
+          {p.lastBuyerDays == null ? "no buyer on it yet" : `last buyer move ${p.lastBuyerDays === 0 ? "today" : `${p.lastBuyerDays}d ago`}`}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Contract → what the buyer pays · our fee, in one cell, measured against the
+// buyer ceiling recorded at promote: amber over it, green with room.
+function MoneyCell({ deal }) {
+  const m = moneyLine(deal);
+  if (!m) return <span className="text-slate-400">—</span>;
+  const overCls = m.over > 0 ? "text-amber-800" : m.over === 0 ? "text-emerald-800" : "text-slate-800";
+  return (
+    <div className="min-w-0 tabular-nums" title={m.ceiling ? `Buyer ceiling at contract: ${fmtMoney(m.ceiling)}` : "No buyer ceiling recorded at contract"}>
+      <div className={`text-sm font-semibold ${overCls}`}>{m.line}</div>
+      {m.over > 0 && <div className="text-[11px] text-amber-800">{fmtMoney(m.over)} over the buyer ceiling</div>}
+      {m.over === 0 && <div className="text-[11px] text-emerald-800">at or under the buyer ceiling</div>}
+    </div>
+  );
+}
+
+// The go / re-trade / cancel call before the inspection ends (2026-11-23,
+// display only): the date, and what buyers have said so far. Its buttons only
+// move you to where each answer is made; nothing here sends anything.
+function InspectionCallStrip({ deal, compact = false, onFeedback, onDates, onFellThrough, onGo, busy = false, now = Date.now() }) {
+  const c = inspectionCall(deal, { now });
+  if (!c) return null;
+  if (compact) {
+    return (
+      <span title={[c.headline, ...c.lines].join("\n")}
+        className={`mt-0.5 inline-block rounded-full px-1.5 py-0.5 text-[11px] font-semibold ${c.tone === "soon" ? "bg-amber-100 text-amber-900" : "bg-rose-100 text-rose-800"}`}>
+        go / re-trade / cancel
+      </span>
+    );
+  }
+  const tone = c.tone === "soon" ? "border-amber-300 bg-amber-50 text-amber-950" : "border-rose-300 bg-rose-50 text-rose-950";
+  const btn = "rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold hover:bg-white/70 disabled:opacity-60";
+  return (
+    <div role="status" className={`mb-4 rounded-lg border px-3 py-2 ${tone}`}>
+      <div className="text-sm font-semibold">{c.headline}</div>
+      <ul className="mt-1 space-y-0.5 text-xs">
+        {c.lines.map((l) => <li key={l}>{l}</li>)}
+      </ul>
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {onGo && <button type="button" className={btn} disabled={busy} onClick={onGo} title="Tick the inspection item: we're going ahead">Go: inspection done</button>}
+        {onFeedback && <a className={btn} href={onFeedback} target="_blank" rel="noreferrer" title="What every buyer said, as a page for the listing agent: the re-trade case">Buyer feedback page</a>}
+        {onDates && <button type="button" className={btn} onClick={onDates} title="Extended? Change the inspection date on Terms & paperwork">Change the date</button>}
+        {onFellThrough && <button type="button" className={btn} disabled={busy} onClick={onFellThrough}>Cancel: fell through</button>}
+      </div>
+    </div>
+  );
+}
+
 // Why buyers said no. The rollup is the point: one buyer calling a deal
 // expensive is an opinion, four of them is a price. The Conversation AI files
 // these from replies to a dispo blast; the picker's status menu doesn't, so a
@@ -275,7 +363,7 @@ const readAsDataUrl = (file) =>
 // & sale, addenda, title work, inspection reports. Fetched on open instead of
 // riding along on the deals list — most deals are never opened, and the list
 // endpoint is deliberately lean.
-function DealDocuments({ offerId }) {
+function DealDocuments({ offerId, onUpdated }) {
   const [docs, setDocs] = useState(null);
   const [kind, setKind] = useState(DOC_KINDS[0]);
   const [uploading, setUploading] = useState(null); // null | { done, total }
@@ -301,7 +389,9 @@ function DealDocuments({ offerId }) {
     const failed = [];
     for (const [i, file] of files.entries()) {
       try {
-        setDocs(await uploadDealDoc(offerId, { name: file.name, kind, data: await readAsDataUrl(file) }));
+        const r = await uploadDealDoc(offerId, { name: file.name, kind, data: await readAsDataUrl(file) });
+        setDocs(r.documents);
+        if (r.offer) onUpdated?.(r.offer);
       } catch (e) {
         failed.push(`${file.name} — ${e.message}`);
       }
@@ -423,7 +513,9 @@ function BuyerRead({ deal, busy, onSave, labelCls, inputCls }) {
   const field = (k, label, placeholder) => (
     <div>
       <span className={labelCls}>{label}</span>
-      <input className={inputCls} value={read[k]} placeholder={placeholder} onChange={(e) => setRead((r) => ({ ...r, [k]: e.target.value }))} />
+      <input className={inputCls} value={read[k]} placeholder={placeholder} aria-label={label}
+        onChange={(e) => setRead((r) => ({ ...r, [k]: e.target.value }))}
+        onBlur={() => { if (dirty) onSave(read); }} />
     </div>
   );
   return (
@@ -435,12 +527,7 @@ function BuyerRead({ deal, busy, onSave, labelCls, inputCls }) {
         {field("price", "They'd pay", "$")}
       </div>
       <div className="mt-2">{field("note", "From", "the walkthrough, a text, a call")}</div>
-      {dirty && (
-        <button type="button" disabled={busy} onClick={() => onSave(read)}
-          className="mt-2 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-60">
-          Save what buyers said
-        </button>
-      )}
+      <p className="mt-1.5 text-[11px] text-slate-500">{busy && dirty ? "Saving…" : "Saves when you leave a field."}</p>
     </div>
   );
 }
@@ -466,7 +553,55 @@ function KindBadge({ asset }) {
   return <span className="ml-2 rounded-full bg-violet-100 px-2 py-0.5 align-middle text-[11px] font-semibold text-violet-900">{assetLabel(a)}</span>;
 }
 
-function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignment, onDataroom, onEdit, onEnrich }) {
+// The deal promote just made, to confirm before buyers are priced off it
+// (2026-11-23): the contract price, the fee (amber when it's the Settings
+// default), the dates and where they came from, the kind, and what promote
+// warned about. The fields themselves are on Terms & paperwork, which the
+// modal opens on; the kind and access pickers sit right here.
+function ConfirmDealCard({ offer, warnings = [], onUpdated, onDone }) {
+  const deal = offer.deal || {};
+  const fromSetting = deal.assignmentFeeSource === "setting";
+  const lines = (warnings.length ? warnings : (offer.warnings || []).filter((w) => /^(buyer ceiling|before signing|pre-sell buyers)/i.test(String(w))))
+    .map(String).filter(Boolean);
+  const row = (label, value, cls = "") => (
+    <div className="flex items-baseline justify-between gap-3 border-b border-blue-100 py-1 last:border-0">
+      <span className="text-xs text-slate-600">{label}</span>
+      <span className={`text-sm font-semibold tabular-nums ${cls}`}>{value}</span>
+    </div>
+  );
+  return (
+    <section aria-label="Confirm the deal" className="mb-4 rounded-xl border border-blue-200 bg-blue-50/60 p-3">
+      <div className="mb-2 flex items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold text-slate-900">Confirm the deal</div>
+          <div className="text-xs text-slate-600">Buyers are priced off these. Anything off, fix it on Terms &amp; paperwork below; it saves as you go.</div>
+        </div>
+        <button type="button" className={BTN} onClick={onDone}>Looks right</button>
+      </div>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div>
+          {row("Contract price", deal.contractPrice ? fmtMoney(deal.contractPrice) : "not set", deal.contractPrice ? "" : "text-amber-800")}
+          {row("Our fee", deal.assignmentFee ? `${fmtMoney(deal.assignmentFee)}${fromSetting ? " (Settings default)" : ""}` : "not set", fromSetting || !deal.assignmentFee ? "text-amber-800" : "")}
+          {row("Inspection ends", deal.inspectionDate ? ymdLabel(deal.inspectionDate) : "not set", deal.inspectionDate ? "" : "text-amber-800")}
+          {row("Closing", deal.closingDate ? ymdLabel(deal.closingDate) : "not set", deal.closingDate ? "" : "text-amber-800")}
+          {row("Kind", `${assetLabel(offer.asset) || "not set"}${isLuxuryLot(offer) ? " · luxury lot" : ""}`)}
+          {datesNote(deal) && <p className="mt-1 text-[11px] leading-snug text-slate-600">{datesNote(deal)}</p>}
+        </div>
+        <div className="space-y-3">
+          <DealKind offer={offer} onUpdated={onUpdated} />
+          <DealAccess key={`confirm-access-${offer.id}`} offer={offer} onUpdated={onUpdated} />
+        </div>
+      </div>
+      {lines.length > 0 && (
+        <ul className="mt-2 list-inside list-disc space-y-0.5 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          {lines.map((w) => <li key={w}>{w}</li>)}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignment, onDataroom, onEdit, onEnrich, confirmNew = null }) {
   const deal = offer.deal;
   // Derived, never stored: change a buyer's standing and the banner and the
   // broker's own gates agree without a second switch to keep in step.
@@ -475,18 +610,27 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
   const stopped = dealOutreachStopped(deal);
   const [pulledNote, setPulledNote] = useState("");
   const [resumedNote, setResumedNote] = useState("");
-  const [terms, setTerms] = useState(() => ({
-    contractPrice: deal.contractPrice ?? "",
-    assignmentFee: deal.assignmentFee ?? "",
-    closingDate: deal.closingDate || "",
-    inspectionDate: deal.inspectionDate || "",
-    notes: deal.notes || "",
-  }));
+  const [terms, setTerms] = useState(() => termsFrom(deal));
+  // Saves as you go (2026-11-23, no Save terms button): a field when you
+  // leave it, a date when it changes, and what's still open when the modal
+  // closes. One save at a time, in order, each reading the latest form.
+  const termsRef = useRef(terms);
+  termsRef.current = terms;
+  const dealRef = useRef(deal);
+  dealRef.current = deal;
+  const termsChain = useRef(Promise.resolve());
+  const [termsSave, setTermsSave] = useState({ phase: "" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   // Which tab: kept in ?tab= so a link from Today can open the right one.
+  const [confirming, setConfirming] = useState(Boolean(confirmNew));
   const [tab, setTab] = useState(() => {
-    try { const t = new URLSearchParams(window.location.search).get("tab"); return DEAL_TABS.some((x) => x.key === t) ? t : "overview"; } catch { return "overview"; }
+    // A deal promote just made opens on its terms, to be confirmed.
+    if (confirmNew) return "paper";
+    // While the deal is being shopped it opens on its buyers; once a buyer is
+    // found, on the checklist (2026-11-23). A ?tab= link still wins.
+    const byStage = deal.stage === "under_contract" ? "buyers" : "overview";
+    try { const t = new URLSearchParams(window.location.search).get("tab"); return DEAL_TABS.some((x) => x.key === t) ? t : byStage; } catch { return byStage; }
   });
   const pickTab = (t) => {
     setTab(t);
@@ -506,12 +650,6 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
   const [postMortemOpen, setPostMortemOpen] = useState(() => {
     try { return new URLSearchParams(window.location.search).get("postmortem") === "1"; } catch { return false; }
   });
-  const termsDirty =
-    String(terms.contractPrice) !== String(deal.contractPrice ?? "") ||
-    String(terms.assignmentFee) !== String(deal.assignmentFee ?? "") ||
-    terms.closingDate !== (deal.closingDate || "") ||
-    terms.inspectionDate !== (deal.inspectionDate || "") ||
-    terms.notes !== (deal.notes || "");
 
   async function run(fn) {
     setError("");
@@ -570,22 +708,59 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
   // The broker reads "15k" as 15,000 and refuses what it can't read (400,
   // shown in the bar). An emptied price or fee is cleared only when you say
   // so, and a contract price under 10k or far off our number asks first (409).
+  // The form and the ref move together, so a save queued behind this one (or
+  // the one closing the modal runs) reads what's on screen now.
+  const putTerms = (next) => { termsRef.current = next; setTerms(next); };
   const saveTerms = async () => {
-    const clearing = ["contractPrice", "assignmentFee"].filter((k) => (String(terms[k] ?? "").trim() === "" || parseMoney(terms[k]) === 0) && deal[k] != null);
-    if (clearing.length && !window.confirm(`Clear the ${clearing.map((k) => (k === "contractPrice" ? "contract price" : "assignment fee")).join(" and ")}? Buyers are priced off ${clearing.length > 1 ? "them" : "it"}.`)) return;
-    const body = { ...terms, ...(clearing.length ? { clear: true } : {}) };
+    const t = termsRef.current;
+    const { body, clearing } = termsChanges(t, dealRef.current, { parse: parseMoney });
+    if (!body) return;
+    if (clearing.length && !window.confirm(`Clear the ${clearing.map((k) => (k === "contractPrice" ? "contract price" : "assignment fee")).join(" and ")}? Buyers are priced off ${clearing.length > 1 ? "them" : "it"}.`)) {
+      putTerms(revertTerms(termsRef.current, clearing, dealRef.current));
+      return;
+    }
+    const sent = { ...body };
+    if (clearing.length) body.clear = true;
     setError("");
-    setBusy(true);
+    setTermsSave({ phase: "saving" });
     try {
       let r;
       try { r = await updateDeal(offer.id, body); }
       catch (e) {
-        if (e.status !== 409 || !window.confirm(e.message)) throw e;
+        if (e.status !== 409) throw e;
+        if (!window.confirm(e.message)) {
+          // Not this number: the field goes back to what the deal holds.
+          putTerms(revertTerms(termsRef.current, Object.keys(sent), dealRef.current));
+          setTermsSave({ phase: "" });
+          return;
+        }
         r = await updateDeal(offer.id, { ...body, confirm: true });
       }
-      if (r?.offer) onUpdated(r.offer);
-    } catch (e) { setError(e.message); }
-    finally { setBusy(false); }
+      if (r?.offer) {
+        onUpdated(r.offer);
+        dealRef.current = r.offer.deal;
+        putTerms(settleTerms(termsRef.current, sent, r.offer.deal));
+      }
+      setTermsSave({ phase: "saved" });
+    } catch (e) { setError(e.message); setTermsSave({ phase: "error", error: e.message }); }
+  };
+  const commitTerms = () => {
+    termsChain.current = termsChain.current.then(saveTerms, saveTerms);
+    return termsChain.current;
+  };
+  // A date or anything else that commits on change: the form state lands
+  // first, then the save reads it.
+  const setTermAndSave = (k, v) => {
+    termsRef.current = { ...termsRef.current, [k]: v };
+    setTerms((t) => ({ ...t, [k]: v }));
+    commitTerms();
+  };
+  // Closing saves what's still being typed; the modal goes at once.
+  const close = () => {
+    commitTerms();
+    // The tab was this deal's; the next one opens on its own default.
+    try { const u = new URL(window.location.href); if (u.searchParams.has("tab")) { u.searchParams.delete("tab"); window.history.replaceState(null, "", u); } } catch { /* fine */ }
+    onClose();
   };
 
   // Stop or resume outreach. Stopping pulls back what was already queued,
@@ -623,6 +798,25 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
     return () => { live = false; };
   }, [buyerKey]);
   const proofOnFile = checklist.items.some((it) => it.id === "assignee_funds" && it.done);
+  // Who opened their own package link (the dataroom's per-buyer invites),
+  // read once when the Buyers tab opens: the deal's room, then its invites.
+  const [packageRoom, setPackageRoom] = useState(null); // null | { invites: Map, opened, total } | { none: true }
+  useEffect(() => {
+    if (tab !== "buyers" || packageRoom) return undefined;
+    let live = true;
+    listDatarooms(offer.id)
+      .then(async (rooms) => {
+        const room = (rooms || [])[0];
+        if (!room) { if (live) setPackageRoom({ none: true }); return; }
+        const full = await getDataroom(room.id);
+        const invites = new Map();
+        for (const i of full?.dataroom?.invites || []) if (i?.contactId && i.status !== "revoked") invites.set(i.contactId, i);
+        const views = Number(full?.dataroom?.shareViews) || 0;
+        if (live) setPackageRoom({ invites, total: invites.size, opened: [...invites.values()].filter((i) => Number(i.viewCount) > 0).length, views });
+      })
+      .catch(() => { if (live) setPackageRoom({ none: true, failed: true }); });
+    return () => { live = false; };
+  }, [tab, offer.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function runSuggest() {
     setSuggest({ busy: true });
@@ -645,7 +839,7 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
   const labelCls = "mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500";
 
   return (
-    <div className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:p-8" onClick={onClose}>
+    <div className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:p-8" onClick={close}>
       <div className="w-full max-w-7xl rounded-2xl bg-white p-5 sm:p-7 shadow-xl" onClick={(e) => e.stopPropagation()}>
         <div className="mb-4 flex items-start justify-between gap-4">
           <div>
@@ -683,7 +877,7 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
               title="Open this offer in the editor — rehab scope, comps, document">
               <Pencil size={14} /> Open offer
             </button>
-            <button type="button" onClick={onClose} className="rounded p-1.5 text-slate-400 hover:bg-slate-100">
+            <button type="button" onClick={close} aria-label="Close" className="rounded p-1.5 text-slate-400 hover:bg-slate-100">
               <X size={18} />
             </button>
           </div>
@@ -701,6 +895,15 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
         {!stopped && resumedNote && (
           <p role="status" className="mb-4 rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-900">{resumedNote}</p>
         )}
+        {/* Overview has its own kind and access pickers; two of each would disagree. */}
+        {confirming && tab !== "overview" && (
+          <ConfirmDealCard offer={offer} warnings={confirmNew?.warnings || []} onUpdated={onUpdated} onDone={() => setConfirming(false)} />
+        )}
+        <InspectionCallStrip deal={deal} busy={busy}
+          onFeedback={dealFeedbackUrl(offer.id)}
+          onDates={() => pickTab("paper")}
+          onFellThrough={() => setStage("fell_through")}
+          onGo={() => run(() => updateDealChecklist(offer.id, { id: "inspection", done: true }))} />
 
         {/* Stage */}
         <div className="mb-4">
@@ -824,6 +1027,22 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
                   : `${paused.name || "A buyer"} is a soft commit, so no new blasts, second wave or nudges go to anyone new. Buyers already talking about it are still answered. Put them back to Evaluating and it picks up where it left off.`}
               </p>
             )}
+            {/* The buyer package and what buyers said, beside the buyers
+                (2026-11-23; these were on Terms & paperwork). */}
+            <div className="flex flex-wrap items-center gap-2">
+              <button type="button" onClick={() => onDataroom(offer)} className={BTN}
+                title="Build a secure investor package and text personal links to your buyers">
+                <Lock size={13} /> Investor dataroom
+              </button>
+              <a href={dealFeedbackUrl(offer.id)} target="_blank" rel="noreferrer" className={BTN}
+                title="What every buyer said about this one, in their words, as a page for the listing agent">
+                <MessageSquare size={13} /> Buyer feedback page
+              </a>
+              <span className="text-[11px] text-slate-500">
+                {!packageRoom ? "" : packageRoom.none ? (packageRoom.failed ? "Couldn't read the package." : "No buyer package yet.")
+                  : `Package: ${packageRoom.total} buyer link${packageRoom.total === 1 ? "" : "s"}, ${packageRoom.opened} opened${packageRoom.views ? ` · deal link viewed ${packageRoom.views}×` : ""}`}
+              </span>
+            </div>
             {deal.stage === "under_contract" && <WalkthroughCard key={offer.id} offer={offer} onUpdated={onUpdated} />}
             <div>
               <span className={labelCls}>Disposition investors</span>
@@ -837,6 +1056,11 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
                       </span>
                       {i.contactId in funding && investorStatus(i.status) !== "passed" && (
                         <BuyerMoney fact={funding[i.contactId]} committed={investorStatus(i.status) === "committed"} proofOnFile={proofOnFile} />
+                      )}
+                      {buyerFacts(i, { rsvps: deal.showing?.rsvps || [], invite: packageRoom?.invites?.get(i.contactId) || null }).length > 0 && (
+                        <span className="block pl-3 text-[11px] leading-tight text-slate-500">
+                          {buyerFacts(i, { rsvps: deal.showing?.rsvps || [], invite: packageRoom?.invites?.get(i.contactId) || null }).join(" · ")}
+                        </span>
                       )}
                     </span>
                     <span className="flex shrink-0 items-center gap-1">
@@ -861,6 +1085,10 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
                 ))}
               </div>
               <BuyerFeedback deal={deal} busy={busy} onFix={(body) => run(() => updateDealFeedback(offer.id, body))} />
+              <div className="mt-2">
+                <BuyerRead key={`read-${offer.id}`} deal={deal} busy={busy} labelCls={labelCls} inputCls={inputCls}
+                  onSave={(buyerRead) => run(() => updateDeal(offer.id, { buyerRead }))} />
+              </div>
               <div className="mt-2">
                 <InvestorPicker existingIds={investorIds} busy={busy}
                   onPick={(c) => run(() => addDealInvestor(offer.id, { contactId: c.id, name: c.name }))} />
@@ -942,12 +1170,12 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
             <div>
               <span className={labelCls}>Contract price</span>
               <input className={inputCls} value={terms.contractPrice} placeholder="$"
-                onChange={(e) => setTerms((t) => ({ ...t, contractPrice: e.target.value }))} />
+                onChange={(e) => setTerms((t) => ({ ...t, contractPrice: e.target.value }))} onBlur={commitTerms} />
             </div>
             <div>
               <span className={labelCls}>Assignment fee</span>
               <input className={inputCls} value={terms.assignmentFee} placeholder={`$ — e.g. ${fmtMoney(settings?.wholesaleFee || 15000)}`}
-                onChange={(e) => setTerms((t) => ({ ...t, assignmentFee: e.target.value }))} />
+                onChange={(e) => setTerms((t) => ({ ...t, assignmentFee: e.target.value }))} onBlur={commitTerms} />
               {/* The setting's default filled it at promote: say so, since buyers are priced off it. */}
               {deal.assignmentFeeSource === "setting" && String(terms.assignmentFee) === String(deal.assignmentFee ?? "") && (
                 <div className="mt-1 text-xs font-medium text-amber-800">The default fee from Settings. Type the real one if it's different.</div>
@@ -973,32 +1201,27 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
               <div>
                 <span className={labelCls}>Inspection ends</span>
                 <input type="date" className={inputCls} value={terms.inspectionDate}
-                  onChange={(e) => setTerms((t) => ({ ...t, inspectionDate: e.target.value }))} />
+                  onChange={(e) => setTermAndSave("inspectionDate", e.target.value)} />
               </div>
               <div>
                 <span className={labelCls}>Closing date</span>
                 <input type="date" className={inputCls} value={terms.closingDate}
-                  onChange={(e) => setTerms((t) => ({ ...t, closingDate: e.target.value }))} />
+                  onChange={(e) => setTermAndSave("closingDate", e.target.value)} />
               </div>
             </div>
             {datesNote(deal) && <p className="text-[11px] leading-snug text-slate-600">{datesNote(deal)}</p>}
-            <BuyerRead key={`read-${offer.id}`} deal={deal} busy={busy} labelCls={labelCls} inputCls={inputCls}
-              onSave={(buyerRead) => run(() => updateDeal(offer.id, { buyerRead }))} />
             <div>
               <span className={labelCls}>Notes</span>
               <textarea rows={3} className={inputCls} value={terms.notes} placeholder="Deal notes…"
-                onChange={(e) => setTerms((t) => ({ ...t, notes: e.target.value }))} />
+                onChange={(e) => setTerms((t) => ({ ...t, notes: e.target.value }))} onBlur={commitTerms} />
             </div>
-            {termsDirty && (
-              <button type="button" onClick={saveTerms} disabled={busy}
-                className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60">
-                Save terms
-              </button>
-            )}
+            <p className={`text-[11px] ${termsSave.phase === "error" ? "text-rose-700" : "text-slate-500"}`} aria-live="polite">
+              {savedLine(termsSave) || "Saves as you go: a field when you leave it, a date when you pick it."}
+            </p>
           </div>
           {/* Paperwork — generated documents, uploaded originals, stage history */}
           <div className="space-y-4">
-            <DealDocuments offerId={offer.id} />
+            <DealDocuments offerId={offer.id} onUpdated={onUpdated} />
 
             <div>
               <span className={labelCls}>Stage history</span>
@@ -1030,20 +1253,12 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
                 title="Generate or update the assignment of contract for the committed buyer">
                 <FileText size={13} /> {offer.assignmentPdfUrl ? "Update assignment" : "Generate assignment"}
               </button>
-              <a href={dealFeedbackUrl(offer.id)} target="_blank" rel="noreferrer" className={BTN}
-                title="What every buyer said about this one, in their words, as a page for the listing agent">
-                <MessageSquare size={13} /> Buyer feedback
-              </a>
               <button type="button" onClick={() => setPostMortemOpen(true)} className={BTN}
                 title={deal.stage === "fell_through" ? "Why it died: the numbers against the buyer ceiling, what every buyer and the agent said, and what to do differently" : "The scorecard against the buyer ceiling, and the threads' reading"}>
                 <ClipboardCheck size={13} /> {deal.postMortem ? "Post-mortem" : "Write post-mortem"}
               </button>
-              <button type="button" onClick={() => onDataroom(offer)}
-                className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold hover:bg-slate-50"
-                title="Build a secure investor package and text personal links to your buyers">
-                <Lock size={13} /> Investor dataroom
-              </button>
             </div>
+            <p className="text-[11px] text-slate-500">The investor dataroom, the buyer feedback page and what buyers said it's worth are on the Buyers tab.</p>
 
             <button type="button" onClick={removeThisDeal} disabled={busy}
               className="flex items-center gap-1.5 text-xs font-medium text-slate-400 hover:text-red-600">
@@ -1069,13 +1284,51 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
   );
 }
 
+const isSfr = (o) => normalizeAsset(o.asset)?.type === "sfr";
+const withSends = (updated, old) =>
+  (updated?.deal && !updated.deal.sends && old?.deal?.sends ? { ...updated, deal: { ...updated.deal, sends: old.deal.sends } } : updated);
+
+/**
+ * dealsBook(deals, { only, showTerminal, sfrOnly }) → { book, active, closed, fell, potentialFees, shown }
+ *
+ * The lane (`only`) narrows the book once, before anything is counted, so the
+ * tiles on Luxury → Deals count luxury deals and the Offers page's count flip
+ * deals (2026-11-23; they used to count every deal whatever the lane).
+ */
+export function dealsBook(deals = [], { only = null, showTerminal = false, sfrOnly = false } = {}) {
+  const book = typeof only === "function" ? deals.filter(only) : deals;
+  const active = book.filter((o) => !TERMINAL.has(o.deal.stage));
+  const closed = book.filter((o) => o.deal.stage === "closed");
+  const fell = book.filter((o) => o.deal.stage === "fell_through");
+  const potentialFees = active.reduce((s, o) => s + (Number(o.deal.assignmentFee) || 0), 0);
+  const shown = (showTerminal ? book : active).filter((o) => !sfrOnly || isSfr(o));
+  return { book, active, closed, fell, potentialFees, shown };
+}
+
 // `only`: a predicate that narrows the deals to one lane (the Luxury page).
-export default function DealsView({ settings, onEdit, only = null }) {
+// `focus`: { id, fresh, warnings } — open this deal on mount; `fresh` (promote
+// just made it) opens it to confirm its terms. The standalone page reads the
+// same from ?deal_id= and ?confirm=1.
+// `needs`: GHL's Needs Matt list (OfferApp; needs-view.js): a deal it names
+// carries the reason, `onNeedsCount` hears how many, and `focusNeeds` asks
+// once for just those deals (the Deals pill's "Needs you").
+export default function DealsView({ settings, onEdit, only = null, focus = null, onFocused = null, needs = [], onNeedsCount = null, focusNeeds = false, onNeedsFocused = null }) {
   const [deals, setDeals] = useState(null);
+  const [needsOnly, setNeedsOnly] = useState(false);
   const [error, setError] = useState("");
   const [selectedId, setSelectedId] = useState(() => {
+    if (focus?.id) return focus.id;
     try { return new URLSearchParams(window.location.search).get("deal_id") || null; } catch { return null; }
   });
+  const [confirmNew, setConfirmNew] = useState(() => {
+    if (focus?.id) return focus.fresh ? { id: focus.id, warnings: focus.warnings || [] } : null;
+    try {
+      const q = new URLSearchParams(window.location.search);
+      return q.get("confirm") === "1" && q.get("deal_id") ? { id: q.get("deal_id"), warnings: [] } : null;
+    } catch { return null; }
+  });
+  // Used once: coming back to Deals later opens the list.
+  useEffect(() => { if (focus) onFocused?.(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [showTerminal, setShowTerminal] = useState(false);
   // Single family only (Matt, 2026-10-01: focus on SFR). Off by default so a
   // deal of another kind already under contract never drops out of sight.
@@ -1087,9 +1340,18 @@ export default function DealsView({ settings, onEdit, only = null }) {
   useEffect(() => {
     listDeals().then(setDeals).catch((e) => setError(e.message));
   }, []);
+  useEffect(() => {
+    if (!focusNeeds) return;
+    setNeedsOnly(true);
+    onNeedsFocused?.();
+  }, [focusNeeds]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const needDeals = deals ? needsCounts(attachNeeds(typeof only === "function" ? deals.filter(only) : deals, needs)).deals : null;
+  useEffect(() => { if (needDeals != null) onNeedsCount?.(needDeals); }, [needDeals]);   // eslint-disable-line react-hooks/exhaustive-deps
 
+  // A route answers with the offer as stored; the list's own count of buyers
+  // reached (deal.sends) rides along until the next load.
   const patchDeal = (updated) => {
-    setDeals((list) => (list || []).map((o) => (o.id === updated.id ? updated : o)));
+    setDeals((list) => (list || []).map((o) => (o.id === updated.id ? withSends(updated, o) : o)));
     setAssigning((o) => (o && o.id === updated.id ? updated : o));
   };
   const dropDeal = (id) => {
@@ -1106,14 +1368,10 @@ export default function DealsView({ settings, onEdit, only = null }) {
   };
 
   if (error) return <ErrorBar>{error}</ErrorBar>;
-  if (!deals) return <SkeletonRows cols={9} rows={5} />;
+  if (!deals) return <SkeletonRows cols={8} rows={5} />;
 
-  const active = deals.filter((o) => !TERMINAL.has(o.deal.stage));
-  const closed = deals.filter((o) => o.deal.stage === "closed");
-  const fell = deals.filter((o) => o.deal.stage === "fell_through");
-  const potentialFees = active.reduce((s, o) => s + (Number(o.deal.assignmentFee) || 0), 0);
-  const isSfr = (o) => normalizeAsset(o.asset)?.type === "sfr";
-  const shown = (showTerminal ? deals : active).filter((o) => (typeof only !== "function" || only(o)) && (!sfrOnly || isSfr(o)));
+  const { book, active, closed, fell, potentialFees, shown: inLane } = dealsBook(deals, { only, showTerminal, sfrOnly });
+  const shown = attachNeeds(inLane, needs).filter((o) => !needsOnly || o.needsMatt);
   const selected = selectedId ? deals.find((o) => o.id === selectedId) : null;
 
   const kpis = [
@@ -1125,6 +1383,7 @@ export default function DealsView({ settings, onEdit, only = null }) {
 
   return (
     <>
+      <MachineTrouble />
       <div className="mb-3">
         <KpiRow items={kpis} cols="sm:grid-cols-4" />
       </div>
@@ -1143,10 +1402,8 @@ export default function DealsView({ settings, onEdit, only = null }) {
                   <th className="px-4 py-2.5">Property</th>
                   <th className="px-4 py-2.5">Agent</th>
                   <th className="px-4 py-2.5">Stage</th>
-                  <th className="px-4 py-2.5">Disposition</th>
-                  <th className="px-4 py-2.5 text-right">Contract</th>
-                  <th className="px-4 py-2.5 text-right">Fee</th>
-                  <th className="px-4 py-2.5 text-right">Assignment</th>
+                  <th className="px-4 py-2.5">Buyers</th>
+                  <th className="px-4 py-2.5" title="Contract price → what the buyer pays · our fee">Contract → buyer · fee</th>
                   <th className="px-4 py-2.5">Inspection</th>
                   <th className="px-4 py-2.5">Closing</th>
                   <th className="px-4 py-2.5">Next</th>
@@ -1158,7 +1415,6 @@ export default function DealsView({ settings, onEdit, only = null }) {
                   const d = o.deal;
                   const closing = dateInfo(d.closingDate);
                   const inspection = dateInfo(d.inspectionDate);
-                  const assignment = assignmentTotal(d.contractPrice, d.assignmentFee);
                   const cl = TERMINAL.has(d.stage) ? null : resolveChecklist(d);
                   const clDone = cl ? cl.items.filter((i) => i.done).length : 0;
                   return (
@@ -1168,6 +1424,7 @@ export default function DealsView({ settings, onEdit, only = null }) {
                       <td className="max-w-[24rem] truncate px-4 py-2.5 font-medium" title={o.address || undefined}>
                         {o.address || "—"}
                         <KindBadge asset={o.asset} />
+                        {o.needsMatt && <span className="ml-1.5 align-middle"><NeedsPill need={o.needsMatt} /></span>}
                       </td>
                       <td className="whitespace-nowrap px-4 py-2.5">
                         {o.contactId ? (
@@ -1177,16 +1434,8 @@ export default function DealsView({ settings, onEdit, only = null }) {
                         ) : (o.contactName || "—")}
                       </td>
                       <td className="whitespace-nowrap px-4 py-2.5"><StagePill stage={d.stage} /></td>
-                      <td className="whitespace-nowrap px-4 py-2.5"><InvestorSummary deal={d} /></td>
-                      <td className="whitespace-nowrap px-4 py-2.5 text-right font-semibold tabular-nums">
-                        {d.contractPrice ? fmtMoney(d.contractPrice) : "—"}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-2.5 text-right font-semibold tabular-nums text-emerald-700">
-                        {d.assignmentFee ? fmtMoney(d.assignmentFee) : "—"}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-2.5 text-right font-semibold tabular-nums">
-                        {assignment ? fmtMoney(assignment) : "—"}
-                      </td>
+                      <td className="min-w-[14rem] max-w-[22rem] px-4 py-2.5"><DispoCell deal={d} /></td>
+                      <td className="whitespace-nowrap px-4 py-2.5"><MoneyCell deal={d} /></td>
                       <td className="whitespace-nowrap px-4 py-2.5">
                         {inspection ? (
                           <span className={inspection.days < 0 ? "text-slate-400" : ""}>
@@ -1194,6 +1443,7 @@ export default function DealsView({ settings, onEdit, only = null }) {
                             <span className="ml-1 text-xs text-slate-400">{TERMINAL.has(d.stage) ? "" : inspectionSub(inspection.days)}</span>
                           </span>
                         ) : <span className="text-slate-400">—</span>}
+                        {!TERMINAL.has(d.stage) && <div><InspectionCallStrip deal={d} compact /></div>}
                       </td>
                       <td className="whitespace-nowrap px-4 py-2.5">
                         {closing ? (
@@ -1229,24 +1479,31 @@ export default function DealsView({ settings, onEdit, only = null }) {
               </tbody>
             </table>
           </TableCard>
+          {(needsOnly || needDeals > 0) && (
+            <button type="button" onClick={() => setNeedsOnly((v) => !v)} aria-pressed={needsOnly}
+              className="mr-4 mt-2 text-xs font-medium text-rose-700 underline decoration-rose-300 underline-offset-2 hover:text-rose-900">
+              {needsOnly ? "Show every deal" : `Only the ones on GHL's Needs Matt stage (${needDeals})`}
+            </button>
+          )}
           {(closed.length > 0 || fell.length > 0) && (
             <button type="button" onClick={() => setShowTerminal((v) => !v)}
               className="mt-2 text-xs font-medium text-slate-500 underline decoration-slate-300 underline-offset-2 hover:text-slate-900">
               {showTerminal ? "Hide" : "Show"} closed & fell-through ({closed.length + fell.length})
             </button>
           )}
-          {deals.some((o) => !isSfr(o)) && (
+          {book.some((o) => !isSfr(o)) && (
             <button type="button" onClick={() => setSfrOnly((v) => !v)} aria-pressed={sfrOnly}
               className="ml-4 mt-2 text-xs font-medium text-slate-500 underline decoration-slate-300 underline-offset-2 hover:text-slate-900">
-              {sfrOnly ? "Show every kind of house" : `Single family only (${(showTerminal ? deals : active).filter(isSfr).length})`}
+              {sfrOnly ? "Show every kind of house" : `Single family only (${(showTerminal ? book : active).filter(isSfr).length})`}
             </button>
           )}
         </>
       )}
 
       {selected && (
-        <DealModal offer={selected} settings={settings}
-          onClose={() => setSelectedId(null)}
+        <DealModal key={selected.id} offer={selected} settings={settings}
+          confirmNew={confirmNew?.id === selected.id ? confirmNew : null}
+          onClose={() => { setSelectedId(null); setConfirmNew(null); }}
           onUpdated={patchDeal}
           onRemoved={dropDeal}
           onAssignment={(o) => setAssigning(o)}

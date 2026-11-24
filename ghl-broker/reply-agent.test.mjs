@@ -697,6 +697,9 @@ test("an investor-tagged contact gets the deal book, and the fee never reaches t
   const { client } = ghlStubFor(["investor-active"]);
   const store = fakeStore();
   store.listDeals = async () => [DEAL];
+  // The reply offers the package, so the deal has one (2026-11-23: an offer
+  // of a package nobody built waits for Matt).
+  store.listDatarooms = async () => [{ id: "r1", locationId: "LOC", offerId: "o1", status: "active", kind: "deal", snapshot: {} }];
   let seen;
   const { job } = await startReply({
     client, locationId: "LOC", saved: SAVED, store, contactId: "c1", message: "what's the price on 54th?",
@@ -9542,11 +9545,29 @@ test("what the seller owes on a house we never priced is not filed as their numb
 });
 
 test("the too-far-apart goodbye ends by asking for their next fixer", async () => {
-  const { d, statuses } = await farCounterAt({ message: "Seller says 450k is where they are on 12 Elm.", counterAmount: 450000 });
+  const { d, statuses } = await farCounterAt({ message: "Seller says 450k is the lowest she'll go on 12 Elm.", counterAmount: 450000 });
   assert.match(d.reply, /too far apart on this one, so I'll pass/);
   assert.match(d.reply, /Got anything else that needs work or would be a good flip\?$/, "the voice branch's closing ask, the NEXT ONE question in its words");
   assert.doesNotMatch(d.reply, /keep me in mind|I'm here/i);
   assert.doesNotMatch(d.reply, /[—–!]/, "no dashes, no exclamation marks");
+  assert.ok(statuses.includes("passed"));
+});
+
+// The 2026-11-23 audit (neg-3): the goodbye went out within minutes to
+// agents who had only told us where the seller was, not that it was final.
+// Our number stands (the counter hold) or the draft waits for Matt; the
+// goodbye is for a final no, or a number out of reach (Matt, 2026-09-16).
+test("an agent who names the seller's number without saying it's final doesn't get the goodbye", async () => {
+  const { d, statuses } = await farCounterAt({ message: "Seller says 420k is where they'd like to be on 12 Elm.", counterAmount: 420000 });
+  assert.doesNotMatch(d.reply, /too far apart/);
+  assert.ok(!statuses.includes("passed"), `nothing filed as a pass: ${statuses}`);
+  assert.notEqual(d.intent, "rejection", d.summary);
+  assert.ok(d.counterHold || d.needsHuman || d.status === "draft", `our number holds, or it waits for Matt: ${d.status} ${d.autoSend?.reason}`);
+});
+
+test("an agent who says the seller won't go any lower still gets the goodbye", async () => {
+  const { d, statuses } = await farCounterAt({ message: "Seller won't go any lower than 420k on 12 Elm.", counterAmount: 420000 });
+  assert.match(d.reply, /too far apart on this one, so I'll pass/);
   assert.ok(statuses.includes("passed"));
 });
 
@@ -9765,4 +9786,477 @@ test("the bot never recites the saved answer to are you a bot", () => {
   assert.equal(p.includes(saved), false);
   assert.match(p, /IDENTITY: if they ask whether you are a bot.*return an EMPTY reply, needsHuman true, humanReason "they asked if this is a bot"/);
   assert.match(p, /Never claim to be a person, never claim to be a bot/);
+});
+
+
+// Luxury lots (Matt, 2026-11-23: "don't price these, we will handle all
+// underwriting on luxury stuff"). A homeowner the lot finder texted has no
+// offer row, and the reply gate read "no row" as "the machine prices it", so a
+// draft promising a number later today went through clean. The owner's prompt
+// keeps the owner playbook and never takes the agent-worded pricing line.
+import { MATT_PRICES_LINE } from "./conversation-context.js";
+test("a lot owner's reply that promises a number is held", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["lot-owner", "lot-pocket-hillcrest"]);
+  const store = fakeStore();
+  let seen;
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: { ...SAVED, lotFinder: { bot: "draft" } }, store, contactId: "c1", message: "What would you pay for it?", channel: "sms",
+    deps: { draft: async (args) => { seen = args; return { ...DRAFT, intent: "question", propertyAddress: "",
+      reply: "Good question, I'll have a number for you later today." }; } },
+  });
+  await settle(); await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.autoSendable, false);
+  assert.match(d.flags.join(" · "), /no number yet/);
+  assert.equal(JSON.stringify(seen).includes(MATT_PRICES_LINE), false, "the agent-worded pricing line stays out of an owner's prompt");
+});
+
+// The Slack ping for an owner who answered names the street (shared/slack-notify.js
+// owner_answered), and the owner has no offer row to find it on: the reply
+// event carries the street our first text was about.
+test("a lot owner's answer is recorded with the street our first text asked about", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["lot-owner"]);
+  const store = fakeStore();
+  await store.appendContactEvents("LOC", "c1", [
+    { type: "import", at: "2026-11-20T18:00:00.000Z", address: "9 Old Mill Rd", source: "lot-finder", dedupeKey: "imp" },
+    { type: "lot_owner_queued", at: "2026-11-21T18:00:00.000Z", address: "4 Fenwick Ln", source: "lot-finder", dedupeKey: "q1", data: { step: "open" } },
+  ]);
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: { ...SAVED, lotFinder: { bot: "draft" } }, store, contactId: "c1", message: "Maybe, depends on the number", channel: "sms",
+    deps: { draft: async () => ({ ...DRAFT, intent: "question", propertyAddress: "", reply: "Fair enough. What would you need to see?" }) },
+  });
+  await settle(); await settle();
+  assert.equal(job.status, "done", job.error);
+  const replied = (await store.listContactEvents("LOC", "c1")).filter((e) => e.type === "lot_owner_replied");
+  assert.equal(replied.length, 1);
+  assert.equal(replied[0].address, "4 Fenwick Ln");
+  assert.equal(JSON.stringify(replied[0]).includes("depends on the number"), false, "never their words");
+});
+
+
+/* ---------- land we'd have turned down, a close-out on a house they handed us (2026-11-23 audit) ---------- */
+
+import { needsMattKind as needsMattKindOf } from "./shared/needs-matt.js";
+import { LANE_HOLD_FLAG } from "./shared/lane-holds.js";
+
+// R7 / neg-8: "That's outside our lane… not land development" went to an
+// agent whose land became a ~$4M contract only because Matt followed up.
+test("an agent who offers a buildable lot doesn't get 'outside our lane', the reply waits for Matt", async () => {
+  _resetJobs();
+  const { client, calls } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", sendsEnabled: true,
+    message: "I have a buildable lot on 14 Hazel Way in Bellevue, owner wants a quiet sale. Interested?",
+    deps: { draft: async () => ({ ...DRAFT, intent: "new_property", propertyAddress: "14 Hazel Way, Bellevue, WA 98004",
+      reply: "Appreciate you thinking of me. That's outside our lane, we're not land development. Got anything that needs work?" }) },
+  });
+  await settle(); await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.notEqual(d.status, "sent");
+  assert.notEqual(d.status, "scheduled");
+  assert.ok(d.flags.includes(LANE_HOLD_FLAG), d.flags.join(" | "));
+  assert.ok(!(d.actions || []).some((a) => a.type === "retire_unsent_offer"), "nothing closed on the house");
+  assert.ok(!calls.some(([m, p]) => m === "POST" && p === "/conversations/messages"), "nothing went to them");
+  assert.equal(needsMattKindOf({ kind: "draft_waiting", draftId: d.id, contactId: "c1" }, { draftsById: new Map([[d.id, d]]) }), "paper", "Needs Matt has it");
+});
+
+// R11: "Keep me in mind if anything rougher comes up" to an agent who had
+// just told us the roof and the foundation.
+test("an agent who tells us the roof and foundation are shot doesn't get the canned close-out", async () => {
+  _resetJobs();
+  const { client, calls } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const fixes = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", sendsEnabled: true,
+    message: "Roof is shot and the foundation has settled on 12 Elm.",
+    deps: { draft: async ({ fix } = {}) => { if (fix) fixes.push(fix); return { ...DRAFT, intent: "deal_available", propertyAddress: "12 Elm St",
+      reply: "Appreciate it. Keep me in mind if anything rougher comes up." }; } },
+  });
+  await settle(); await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.notEqual(d.status, "sent");
+  assert.notEqual(d.status, "scheduled");
+  assert.ok(d.flags.some((f) => /brushes off a house they handed us/.test(f)), d.flags.join(" | "));
+  assert.ok(fixes.length <= 1, "one rewrite at most, asking for the details");
+  assert.ok(!calls.some(([m, p]) => m === "POST" && p === "/conversations/messages"), "nothing went to them");
+});
+
+/* ---------- the float gate (2026-11-23 audit, neg-5) ---------- */
+
+// Floats on houses the agent had called remodeled drew "not even close" and
+// "stop wasting my time"; others followed our own condition question by a
+// few minutes, before the agent could answer it.
+const floatHouse = () => ({ id: "o-larch", address: "51 Larch St, Puyallup, WA 98371", contactId: "c1", cashAmount: 265000, status: "new", createdAt: new Date().toISOString(),
+  autoUnderwrite: { passed: true, compsUsedCount: 4 } });
+const tryFloat = async (drafts) => {
+  _resetJobs();
+  const client = withMessages(ghlStubFor(["agent"]).client, []);
+  const offer = floatHouse();
+  const store = fakeStore(drafts);
+  store.listOffers = async () => [offer];
+  let drafted = false;
+  const r = await startProactive({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", kind: "realm_check", offer, sendsEnabled: true,
+    deps: { draft: async () => { drafted = true; return { ...DRAFT, intent: "realm_check", reply: "We'd likely land around 265k as-is." }; } },
+  });
+  return { r, drafted };
+};
+
+test("an agent who called the house remodeled gets no machine number on it", async () => {
+  const { r, drafted } = await tryFloat([{ id: "in1", locationId: "LOC", contactId: "c1", party: "agent", status: "sent", inbound: "It was fully remodeled last year, move-in ready.",
+    reply: "Thanks for the heads up.", propertyAddress: "51 Larch St, Puyallup, WA 98371", createdAt: hoursAgo(20), sentAt: hoursAgo(20) }]);
+  assert.equal(r.job, null);
+  assert.match(String(r.skipped), /called it done/);
+  assert.equal(drafted, false);
+});
+
+test("no machine number goes minutes after we asked about the house's condition", async () => {
+  const { r, drafted } = await tryFloat([
+    { id: "in1", locationId: "LOC", contactId: "c1", party: "agent", status: "sent", inbound: "Got a fixer on Larch St, seller wants out.",
+      reply: "Is it big-ticket stuff like roof, foundation or systems, or more paint and flooring? And what's got the seller selling?",
+      propertyAddress: "51 Larch St, Puyallup, WA 98371", createdAt: hoursAgo(0.2), sentAt: hoursAgo(0.1) },
+  ]);
+  assert.equal(r.job, null);
+  assert.match(String(r.skipped), /asked about its condition/);
+  assert.equal(drafted, false);
+});
+
+/* ---------- they asked our number, and the reply didn't give one (2026-11-23 audit, R1) ---------- */
+
+import { owedPromises } from "./shared/promise-owed.js";
+import { openPromises } from "./shared/promise-resolver.js";
+
+test("an agent who asks what we'd pay and gets an answer with no number is owed one, and Matt hears about it", async () => {
+  const asked = { ...openDraft(), party: "agent", inbound: "Seller is at 400. What would you offer on 12 Elm?", reply: "Thanks for the details. How soon is the seller hoping to close?", propertyAddress: "12 Elm St, Renton, WA" };
+  const priced = { ...openDraft(), id: "d2", contactId: "c2", party: "agent", inbound: "What would you offer on 9 Oak?", reply: "We'd be around 310k as-is on 9 Oak.", propertyAddress: "9 Oak Ave, Kent, WA" };
+  const store = fakeStore([asked, priced]);
+  const client = { call: async () => ({ messageId: "m1" }) };
+  await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true });
+  const made = await store.listContactEvents("LOC", "c1", { types: ["promise_made"] });
+  assert.equal(made.length, 1, "their ask is a number we owe");
+  assert.equal(made[0].data.what, "number");
+  assert.equal(made[0].data.by, "their_ask");
+  const events = made.map((e) => ({ ...e, contactId: "c1" }));
+  assert.equal(owedPromises({ events, now: Date.now() + 25 * 3600000 }).length, 1, "a day on, a number owed (Needs Matt)");
+  // Never the machine's "still working on it" text: we never said we would.
+  assert.equal(openPromises(events, { now: Date.now() + 5 * 3600000 }).length, 0);
+  // Our number in the answer: nothing owed.
+  await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d2", live: true });
+  assert.equal((await store.listContactEvents("LOC", "c2", { types: ["promise_made"] })).length, 0);
+});
+
+test("an agent who asks our best after our offer went out on that house isn't logged as owed a new number", async () => {
+  const asked = { ...openDraft(), party: "agent", inbound: "What's your best offer on 12 Elm?", reply: "We're holding where we are on it for now.", propertyAddress: "12 Elm St, Renton, WA" };
+  const store = fakeStore([asked]);
+  store.listOffers = async () => [{ id: "o-elm", contactId: "c1", address: "12 Elm St, Renton, WA", cashAmount: 300000, status: "sent", sends: [{ ts: new Date(Date.now() - 86400000).toISOString() }] }];
+  await sendReplyDraft({ client: { call: async () => ({ messageId: "m1" }) }, store, locationId: "LOC", draftId: "d1", live: true });
+  assert.equal((await store.listContactEvents("LOC", "c1", { types: ["promise_made"] })).length, 0, "our number is already out there: the counter hold's business");
+});
+
+
+/* ---------- buyers get answers, not promises (the 2026-11-23 buyer audit) ---------- */
+
+import { handLines } from "./reply-agent.js";
+
+const buyerClient = () => {
+  const { client } = ghlStub();
+  client.call = ((orig) => async (path, opts) => {
+    if (/^\/contacts\/c1$/.test(path)) return { contact: { id: "c1", firstName: "Alex", lastName: "Buyer", tags: ["investor"] } };
+    return orig(path, opts);
+  })(client.call);
+  return client;
+};
+const BUYER_DEAL = {
+  id: "o1", address: "2010 NE 54th St, Seattle, WA 98105", cashAmount: 420000,
+  calc: { inputs: { arv: 600000, repairs: 40000 } },
+  snapshot: { comps: { result: { info: { beds: 3, baths: 2, sqft: 1440, yearBuilt: 1952 } } } },
+  deal: { stage: "under_contract", contractPrice: 420000, assignmentFee: 25000, investors: [{ contactId: "c1", name: "Alex Buyer", status: "evaluating" }] },
+};
+const buyerStore = ({ room = true } = {}) => {
+  const store = fakeStore();
+  store.listDeals = async () => [BUYER_DEAL];
+  store.listDatarooms = async () => (room ? [{ id: "r1", locationId: "LOC", offerId: "o1", status: "active", kind: "deal", snapshot: {} }] : []);
+  return store;
+};
+const BUYER_SAVED = { ...SAVED, conversationAi: { enabled: true, parties: { investor: { autoSend: { enabled: true, intents: ["interested", "question"] } } } } };
+
+// "Pulling the package together now" went 23 hours before the link did, on a
+// deal that had a package the whole time.
+// Unattended package links are the dial's Full (dispoAutopilot.autoInvite).
+const BUYER_SAVED_FULL = { ...BUYER_SAVED, dispoAutopilot: { autoInvite: true } };
+test("a buyer reply that offers the package on a deal that has one sends the link with it", async () => {
+  _resetJobs();
+  const store = buyerStore();
+  const invites = [];
+  const { job } = await startReply({ client: buyerClient(), locationId: "LOC", saved: BUYER_SAVED_FULL, store, contactId: "c1", message: "got photos on 54th?", channel: "sms", sendsEnabled: true,
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "interested", confidence: "high", reply: "Here are the photos on 54th.", propertyAddress: "2010 NE 54th St", counterAmount: 0 }),
+      dataroomInviteGuard: async () => ({ ok: false, reason: "" }),
+      issueDataroomInvite: async (a) => { invites.push(a); return { sent: true, address: "2010 NE 54th St" }; },
+    } });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  const act = (d.actions || []).find((a) => a.type === "send_dataroom_invite");
+  assert.ok(act, `the link was planned: ${(d.actions || []).map((a) => a.type)} · ${d.flags.join(" · ")}`);
+  assert.equal(act.mode, "auto");
+  assert.equal(invites[0]?.addressHint, BUYER_DEAL.address);
+});
+
+// What went wrong (2026-11-23 review of the buyer branch): the link went by
+// itself with the dial on Normal, and a "here are the photos" reply could go
+// with the link left waiting for a click.
+test("with package links not set to go by themselves, a reply that says here's the package waits with its link", async () => {
+  _resetJobs();
+  const store = buyerStore();
+  const invites = [];
+  const { job } = await startReply({ client: buyerClient(), locationId: "LOC", saved: BUYER_SAVED, store, contactId: "c1", message: "got photos on 54th?", channel: "sms", sendsEnabled: true,
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "interested", confidence: "high", reply: "Here are the photos on 54th.", propertyAddress: "2010 NE 54th St", counterAmount: 0 }),
+      dataroomInviteGuard: async () => ({ ok: false, reason: "" }),
+      issueDataroomInvite: async (a) => { invites.push(a); return { sent: true }; },
+    } });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(invites.length, 0, "no link went by itself");
+  assert.equal(d.autoSend.decided, false);
+  assert.match(d.autoSend.reason, /offers the package and the link waits for your Send/);
+  assert.notEqual(d.status, "scheduled");
+  assert.ok((d.actions || []).some((a) => a.type === "send_dataroom_invite" && a.mode === "ask"), "the link is one click away");
+});
+
+test("a reply that says here's the package to a buyer not on that deal yet waits for Matt", async () => {
+  _resetJobs();
+  const store = buyerStore();
+  store.listDeals = async () => [{ ...BUYER_DEAL, deal: { ...BUYER_DEAL.deal, investors: [] } }];
+  const invites = [];
+  const { job } = await startReply({ client: buyerClient(), locationId: "LOC", saved: BUYER_SAVED_FULL, store, contactId: "c1", message: "got photos on 54th?", channel: "sms", sendsEnabled: true,
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "interested", confidence: "high", reply: "Here are the photos on 54th.", propertyAddress: "2010 NE 54th St", counterAmount: 0 }),
+      dataroomInviteGuard: async () => ({ ok: false, reason: "" }),
+      issueDataroomInvite: async (a) => { invites.push(a); return { sent: true }; },
+    } });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(invites.length, 0);
+  assert.equal(d.autoSend.decided, false, `held: ${d.autoSend.reason}`);
+  assert.notEqual(d.status, "scheduled");
+});
+
+test("a buyer sent a link an hour ago gets no second one, even with an older link on the same room", async () => {
+  _resetJobs();
+  const store = buyerStore();
+  const hourAgo = new Date(Date.now() - 3600000).toISOString();
+  const tenDays = new Date(Date.now() - 10 * 86400000).toISOString();
+  // Newest first, the way both store backends list them.
+  store.listDataroomInvitesByContact = async () => [
+    { id: "i2", dataroomId: "r1", contactId: "c1", sentAt: hourAgo, createdAt: hourAgo },
+    { id: "i1", dataroomId: "r1", contactId: "c1", sentAt: tenDays, createdAt: tenDays },
+  ];
+  const invites = [];
+  const { job } = await startReply({ client: buyerClient(), locationId: "LOC", saved: BUYER_SAVED_FULL, store, contactId: "c1", message: "photos on 54th again?", channel: "sms", sendsEnabled: true,
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "interested", confidence: "high", reply: "Here are the photos on 54th again.", propertyAddress: "2010 NE 54th St", counterAmount: 0 }),
+      dataroomInviteGuard: async () => ({ ok: false, reason: "" }),
+      issueDataroomInvite: async (a) => { invites.push(a); return { sent: true }; },
+    } });
+  await settle();
+  assert.equal(invites.length, 0, "the link from an hour ago counts, not the one from ten days ago");
+});
+
+test("a buyer reply that promises photos on a deal with no package built waits for Matt", async () => {
+  _resetJobs();
+  const store = buyerStore({ room: false });
+  const { job } = await startReply({ client: buyerClient(), locationId: "LOC", saved: BUYER_SAVED, store, contactId: "c1", message: "got photos on 54th?", channel: "sms", sendsEnabled: true,
+    deps: { draft: async () => ({ ...DRAFT, intent: "interested", confidence: "high", reply: "Pulling the photos together now, will send shortly.", propertyAddress: "2010 NE 54th St", counterAmount: 0 }) } });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.autoSendable, false);
+  assert.match(d.flags.join(" · "), /no package built for it/);
+});
+
+test("a buyer who asks about the alley on a deal that never said gets a reply held for Matt, not the package link", async () => {
+  _resetJobs();
+  const store = buyerStore();
+  let redrafts = 0;
+  const { job } = await startReply({ client: buyerClient(), locationId: "LOC", saved: BUYER_SAVED, store, contactId: "c1", message: "Is there alley access on 54th?", channel: "sms", sendsEnabled: true,
+    deps: { draft: async (args) => { if (args.fix) redrafts++; return { ...DRAFT, intent: "question", confidence: "high", reply: "Good question, here's the package.", propertyAddress: "2010 NE 54th St", counterAmount: 0 }; } } });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.autoSendable, false);
+  assert.match(d.flags.join(" · "), /they asked alley access on 2010 NE 54th St and the deal record doesn't have it/);
+  assert.equal(redrafts, 0, "no rewrite is paid for what isn't on file");
+  assert.ok(!(d.actions || []).some((a) => a.type === "send_dataroom_invite" && a.mode === "auto"), "the link doesn't go in place of the answer");
+});
+
+test("a buyer who asks how many beds is told from the record, and the deal line carries the size", async () => {
+  _resetJobs();
+  const store = buyerStore();
+  let seen;
+  const { job } = await startReply({ client: buyerClient(), locationId: "LOC", saved: BUYER_SAVED, store, contactId: "c1", message: "How many beds on 54th?", channel: "sms", sendsEnabled: true,
+    deps: { draft: async (args) => { seen = args; return { ...DRAFT, intent: "question", confidence: "high", reply: "3 bed, 2 bath.", propertyAddress: "2010 NE 54th St", counterAmount: 0 }; } } });
+  await settle();
+  assert.match(seen.context.text, /size: 3bd 2ba 1,440 sqft, built 1952/);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.autoSendable, true, d.flags.join(" · "));
+});
+
+test("a buyer who gave an email is never told deals only go out by text", () => {
+  const g = evaluateReplyGates({ draft: { ...DRAFT, intent: "buybox_update", reply: "Got the email, but these go out by text." }, party: "investor", allowedAmounts: [],
+    inboundMessage: "send deals to sam@example.com", buyer: { inbound: "send deals to sam@example.com", deal: null, prior: [] } });
+  assert.equal(g.ok, false);
+  assert.match(g.flags.join(" · "), /deals go by email too/);
+});
+
+test("a buyer reply that promises an answer from the park, or a second still-waiting, waits for Matt", () => {
+  const park = evaluateReplyGates({ draft: { ...DRAFT, intent: "question", reply: "Let me check with the park and get back to you." }, party: "investor", allowedAmounts: [],
+    inboundMessage: "is the lot rent going up?", buyer: { inbound: "is the lot rent going up?", deal: null, prior: [] } });
+  assert.match(park.flags.join(" · "), /an answer from someone else/);
+  const twice = evaluateReplyGates({ draft: { ...DRAFT, intent: "status_check", reply: "Still waiting on the seller, will let you know." }, party: "investor", allowedAmounts: [],
+    inboundMessage: "any word?", buyer: { inbound: "any word?", deal: null, prior: [{ text: "Still waiting to hear on that one.", at: new Date().toISOString() }] } });
+  assert.match(twice.flags.join(" · "), /still waiting a second time/);
+  // An agent's reply is read as before.
+  assert.equal(evaluateReplyGates({ draft: { ...DRAFT, reply: "Let me check with the seller." }, party: "agent", allowedAmounts: [410000], inboundMessage: "?" })
+    .flags.some((f) => /someone else/.test(f)), false);
+});
+
+// Investor-engaged-5 #155: "pulling those photos together now" went 55
+// minutes after Matt sent the photo link himself, past the 45-minute
+// stand-aside, which only read the last text of ours.
+test("Matt's text to a buyer in the last hour makes the bot stand aside, even after a machine text since", async () => {
+  const at = (min) => new Date(Date.now() - min * 60000).toISOString().slice(0, 16).replace("T", " ");
+  const transcript = [
+    `[${at(70)}] THEM sms: interested, send photos`,
+    `[${at(55)}] US sms: Here you go https://photos.example/abc`,
+    `[${at(20)}] US sms: Walkthrough is Sat 10-12.`,
+    `[${at(5)}] THEM sms: thanks, what's the ARV?`,
+  ].join("\n");
+  const store = fakeStore([{ id: "w", locationId: "LOC", contactId: "c1", status: "sent", sentText: "Walkthrough is Sat 10-12.", createdAt: iso(1000) }]);
+  assert.equal(await humanHasThread({ store, locationId: "LOC", contactId: "c1", transcript, minutes: 45 }), null, "the last text of ours was the machine's");
+  const hand = await handLines({ store, locationId: "LOC", contactId: "c1", transcript, minutes: 120 });
+  assert.equal(hand.length, 1);
+  assert.ok(hand[0].minutesAgo >= 54 && hand[0].minutesAgo <= 56);
+  assert.match(hand[0].text, /photos\.example/);
+  // Nothing of Matt's in two hours: nothing.
+  assert.deepEqual(await handLines({ store, locationId: "LOC", contactId: "c1", transcript: `[${at(300)}] US sms: hi`, minutes: 120 }), []);
+});
+
+// Investor-on-deal-1 #15: a buyer said yes and asked for access, nobody
+// answered for four days, and the house went to another buyer.
+test("a buyer who says they'll take it puts a call-now ping in Needs Matt, and the reply waits for him", async () => {
+  _resetJobs();
+  const store = buyerStore();
+  const { job } = await startReply({ client: buyerClient(), locationId: "LOC", saved: BUYER_SAVED, store, contactId: "c1", message: "I'll take 54th, what do you need from me?", channel: "sms", sendsEnabled: true,
+    deps: { draft: async () => ({ ...DRAFT, intent: "wants_to_buy", confidence: "high", reply: "Great, let me confirm it's still available and get back to you today.", propertyAddress: "2010 NE 54th St", counterAmount: 0 }) } });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const [ping] = (await store.listContactEvents("LOC", "c1")).filter((e) => e.type === "call_wanted");
+  assert.ok(ping, "Matt hears about it");
+  assert.equal(ping.data.wants, "buy");
+  assert.equal(ping.data.callNow, true);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.notEqual(d.status, "sent");
+  assert.equal(d.autoSendable, false);
+});
+
+test("a buyer who asks when they can see it, read as a question, still puts a call-now ping in", async () => {
+  _resetJobs();
+  const store = buyerStore();
+  await startReply({ client: buyerClient(), locationId: "LOC", saved: BUYER_SAVED, store, contactId: "c1", message: "When can I see 54th?", channel: "sms", sendsEnabled: true,
+    deps: { draft: async () => ({ ...DRAFT, intent: "question", confidence: "high", reply: "Which day works for you?", propertyAddress: "2010 NE 54th St", counterAmount: 0 }) } });
+  await settle();
+  const [ping] = (await store.listContactEvents("LOC", "c1")).filter((e) => e.type === "call_wanted");
+  assert.equal(ping?.data?.wants, "walkthrough");
+  assert.equal(ping?.data?.callNow, true);
+});
+
+// The 2026-11-23 buyer audit (dispo-13): "got the email, but these go out by
+// text", and the partner never got a deal.
+test("a buyer who names a partner to get deals puts a row in for Matt to add them, and nothing contacts the partner", async () => {
+  _resetJobs();
+  const store = buyerStore();
+  const client = buyerClient();
+  const { job } = await startReply({ client, locationId: "LOC", saved: BUYER_SAVED, store, contactId: "c1", message: "Send these to my partner Jo too, jo@example.com", channel: "sms", sendsEnabled: true,
+    deps: { draft: async () => ({ ...DRAFT, intent: "looking_for_deals", confidence: "high", needsHuman: true, humanReason: "they want their partner added", reply: "Will do, thanks.", propertyAddress: "", counterAmount: 0 }) } });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const [ev] = (await store.listContactEvents("LOC", "c1")).filter((e) => e.type === "referral_mentioned");
+  assert.ok(ev, "Matt gets the row");
+  assert.equal(ev.party, "investor");
+  assert.deepEqual([ev.data.name, ev.data.relation, ev.data.email, ev.data.buyer], ["Jo", "partner", "jo@example.com", true]);
+  assert.equal(ev.data.phrase, undefined, "never their words");
+});
+
+const buyerThreadClient = (messages) => {
+  const base = buyerClient();
+  return { ...base, call: async (path, opts = {}) => {
+    if (path.startsWith("/conversations/search")) return { conversations: [{ id: "cv1" }] };
+    if (path.startsWith("/conversations/cv1/messages")) return { messages: { messages } };
+    return base.call(path, opts);
+  } };
+};
+const msgAgo = (id, direction, body, min) => ({ id, direction, messageType: "TYPE_SMS", body, dateAdded: new Date(Date.now() - min * 60000).toISOString() });
+
+// Investor-engaged-5 #155: Matt texted the photo link, the buyer wrote back
+// with their numbers 55 minutes later, and the bot answered by itself,
+// promising the photos again.
+test("a buyer Matt texted 50 minutes ago is left to Matt, not answered by the bot", async () => {
+  _resetJobs();
+  const store = buyerStore();
+  const client = buyerThreadClient([
+    msgAgo("m1", "inbound", "interested, got photos?", 70),
+    msgAgo("m2", "outbound", "Here you go https://photos.example/abc", 50),
+    msgAgo("m3", "inbound", "nice. what's the ARV on it?", 1),
+  ]);
+  const { job } = await startReply({ client, locationId: "LOC", saved: BUYER_SAVED, store, contactId: "c1", message: "nice. what's the ARV on it?", channel: "sms", sendsEnabled: true,
+    deps: { draft: async () => ({ ...DRAFT, intent: "question", confidence: "high", reply: "ARV is around 600k.", propertyAddress: "2010 NE 54th St", counterAmount: 0 }) } });
+  await settle();
+  // The thread is his (the stand-aside that already held for 45 minutes on
+  // the last text of ours): the bot holds, and nothing is sent.
+  assert.equal(job.status, "held");
+  assert.match(job.heldReason, /you replied to them 5\d minutes ago/);
+  assert.equal(((await store.listReplyDrafts("LOC", { contactId: "c1" })) || []).filter((d) => d.status === "sent" || d.status === "scheduled").length, 0);
+});
+
+test("a buyer Matt sent the photo link to 90 minutes ago doesn't get the package link again from the bot", async () => {
+  _resetJobs();
+  const store = buyerStore();
+  const client = buyerThreadClient([
+    msgAgo("m1", "inbound", "interested, got photos?", 100),
+    msgAgo("m2", "outbound", "Here you go https://photos.example/abc", 90),
+    msgAgo("m3", "inbound", "thanks, what are the beds?", 1),
+  ]);
+  const invites = [];
+  const { job } = await startReply({ client, locationId: "LOC", saved: BUYER_SAVED, store, contactId: "c1", message: "thanks, what are the beds?", channel: "sms", sendsEnabled: true,
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "interested", confidence: "high", reply: "3 bed, 2 bath. Here's the package too.", propertyAddress: "2010 NE 54th St", counterAmount: 0 }),
+      dataroomInviteGuard: async () => ({ ok: true, address: BUYER_DEAL.address, score: 90 }),
+      issueDataroomInvite: async (a) => { invites.push(a); return { sent: true, address: "2010 NE 54th St" }; },
+    } });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(invites.length, 0, "no link went");
+  assert.ok(!(d.actions || []).some((x) => x.type === "send_dataroom_invite" && x.mode === "auto"));
+  assert.match(d.flags.join(" · "), /you sent them photos or a link 9\d minutes ago/);
+});
+
+// The package text the app sent itself is not Matt's hand: after the bot's
+// own link, the buyer's next question is still the bot's to answer.
+test("the package link the app texted a buyer doesn't make the bot stand aside as if Matt sent it", async () => {
+  const { inviteMessage } = await import("./dataroom.js");
+  const at = (min) => new Date(Date.now() - min * 60000).toISOString().slice(0, 16).replace("T", " ");
+  const room = { address: "1820 Alder Way, Kentwood, WA 98000", snapshot: { numbers: { investorPrice: 250000 } } };
+  for (const name of ["Dana Quill", ""]) {
+    const sent = inviteMessage({ room, invite: { name }, link: "https://deals.example/d/abc" }).split("\n")[0];
+    const transcript = `[${at(20)}] US sms: ${sent}\n[${at(2)}] THEM sms: what's the ARV?`;
+    assert.deepEqual(await handLines({ store: fakeStore([]), locationId: "LOC", contactId: "c1", transcript, minutes: 120 }), [], sent);
+  }
 });

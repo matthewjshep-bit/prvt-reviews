@@ -364,7 +364,9 @@ export function backlogTotal(leaks = {}) {
 // healthy one runs: "day" (a daily window), "workday", or "tick".
 export const LINE_JOBS = {
   followUp: { label: "Follow-up sweep", every: "day" },
-  outreach: { label: "Outreach autopilot (county pull)", every: "day" },
+  // A workday: the sweep runs Monday to Friday unless set otherwise, and a
+  // weekend away is not a stall (2026-11-23).
+  outreach: { label: "Outreach autopilot (county pull)", every: "workday" },
   outreachFollowUp: { label: "Outreach 14-day follow-up", every: "day" },
   agentPulse: { label: "Agent check-in", every: "workday" },
   buyerPulse: { label: "Buyer check-in", every: "workday" },
@@ -374,12 +376,16 @@ export const LINE_JOBS = {
   tierCheck: { label: "Tier check", every: "day" },
   enrichNightly: { label: "Nightly enrich", every: "day" },
   conversationAudit: { label: "Nightly audit", every: "day" },
-  daytimeDriver: { label: "Daytime pass", every: "day" },
+  // Every couple of hours on machine days; weekends off by default, so a
+  // workday job: a Monday morning isn't two days late.
+  daytimeDriver: { label: "Daytime pass", every: "workday" },
   coach: { label: "Nightly coach", every: "day" },
   calls: { label: "Call sweep", every: "tick" },
   uwQueue: { label: "Underwrite queue", every: "tick" },
   ghlMirror: { label: "GHL mirror", every: "tick" },
-  deliveryWatch: { label: "Delivery check (only while on)", every: "tick" },
+  // Every two hours (shared/delivery.js DELIVERY_EVERY_MS), not every tick.
+  deliveryWatch: { label: "Delivery check (only while on)", every: "tick", everyMs: 2 * 3600000 },
+  laneBreaker: { label: "Lane breaker", every: "tick" },
   outreachScorecard: { label: "Text scoreboard", every: "day" },
   // The broker's own start (ghl-broker/boot.js): "failed" when it restarted
   // without a new commit, which is a crash or a manual restart.
@@ -394,6 +400,12 @@ export const LINE_JOBS = {
   cardSync: { label: "Card sync", every: "tick" },
   handReplies: { label: "Texts typed in GHL", every: "tick" },
   slack: { label: "Slack posts", every: "tick", soft: /^(rate limited|started:|off)/ },
+  // 2026-11-23 (AH-5): the luxury lane's lot finder and the gatekeeper line,
+  // both weekday mornings (lot-finder.js, gatekeeper-sweep.js).
+  lotFinder: { label: "Lot finder", every: "workday" },
+  gatekeepers: { label: "Gatekeeper line", every: "workday" },
+  // The paid keys' daily read (ghl-broker/key-health.js, AH-1).
+  keyHealth: { label: "Key check", every: "day" },
 };
 
 // How often a healthy job runs. Late is more than twice this, counted only
@@ -417,7 +429,7 @@ const inJobTime = (job, t) => {
  * job's own time have passed since it last ran, and now is inside that time.
  */
 export function jobIsLate(job = {}, lastRunMs, now = Date.now()) {
-  const cadence = CADENCE_MS[job.every];
+  const cadence = job.everyMs || CADENCE_MS[job.every];
   if (!cadence || lastRunMs == null || !(now > lastRunMs) || !inJobTime(job, now)) return false;
   const limit = 2 * cadence;
   if (job.every === "day" && !job.hours) return now - lastRunMs > limit;
@@ -450,7 +462,7 @@ export function lineJobs(cursors = [], { now = Date.now(), switches = {} } = {})
     const lastError = String(last.error || "");
     const hardError = Boolean(lastError) && !(j.soft && j.soft.test(lastError));
     return {
-      name, label: j.label, every: j.every, lastRunAt,
+      name, label: j.label, every: j.every, ...(j.everyMs ? { everyMs: j.everyMs } : {}), lastRunAt,
       hoursAgo: t != null ? round1((now - t) / HOUR_MS) : null,
       failed: d.failed === true || last.status === "error" || hardError,
       late: switches?.[name] === true && Boolean(c) && jobIsLate(j, t, now),

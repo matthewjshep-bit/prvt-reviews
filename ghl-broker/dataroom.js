@@ -52,6 +52,10 @@ export const expiryFromDays = (days) => {
 // the whole address, and no "Hi there" when we have no name. Until then it
 // read "Hi there — here's the deal package on … This link is yours only and
 // it's tracked — please don't forward it."
+// 2026-11-23 (the buyer audit, dispo-8): no "keep it to yourself" either.
+// Buyers forward deals to their partners anyway, and the line read as cold
+// (one answered it with Stop). The link is still theirs, so their opens are
+// still counted to them.
 export function inviteMessage({ room, invite, link }) {
   const first = firstNameOf(invite.name || "");
   const address = room.address || room.snapshot?.property?.address || "";
@@ -60,7 +64,7 @@ export function inviteMessage({ room, invite, link }) {
   return (
     `${first ? `Hi ${first}, here's` : "Here's"} the package on ${street}` +
     (price > 0 ? ` (${fmtMoney(price)})` : "") + `:\n${link}\n` +
-    `It's set up just for you, so please keep it to yourself.`
+    `Send it to a partner too if they want a look.`
   );
 }
 
@@ -1424,8 +1428,7 @@ export function renderRoom({ snap, token, invite, viewCount = 1, backLink = "", 
           ? `Prepared for <strong>${esc(recipient)}</strong>${invite?.phone ? ` (…${esc(String(invite.phone).slice(-4))})` : ""}
              · opened ${viewCount} time${viewCount === 1 ? "" : "s"}
              · ${esc(new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" }))}
-             ${invite?.expiresAt ? `<br>This link expires ${esc(dateLabel(invite.expiresAt))}.` : ""}
-             <br>This link is yours alone — please don't forward it.`
+             ${invite?.expiresAt ? `<br>This link expires ${esc(dateLabel(invite.expiresAt))}.` : ""}`
           : `Prepared by <strong>${esc(company.name || company.signer || "us")}</strong>
              · ${esc(new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" }))}
              ${invite?.expiresAt ? `<br>This link expires ${esc(dateLabel(invite.expiresAt))}.` : ""}`}
@@ -1435,9 +1438,7 @@ export function renderRoom({ snap, token, invite, viewCount = 1, backLink = "", 
     ${backLink ? `<p style="text-align:center;margin:0 0 18px"><a href="${esc(backLink)}"
       style="font-size:13px;font-weight:600;text-decoration:none">← See every current deal</a></p>` : ""}
 
-    <p class="foot">${recipient
-      ? `Confidential. This package was issued to ${esc(recipient)} and every view is logged. `
-      : ""}Figures are estimates for underwriting, not an appraisal or a guarantee of value —
+    <p class="foot">Figures are estimates for underwriting, not an appraisal or a guarantee of value —
       verify independently during your inspection period.</p>`;
 
   return page({

@@ -342,3 +342,11 @@ test("last night's 'they want a call' or 'let's set a time' goes to GHL's calls"
   assert.equal(ghlCallKind(row("scheduling")), "urgent");
   assert.equal(ghlCallKind(row("question")), null);
 });
+
+// The 2026-11-23 buyer audit (dispo-4): a buyer's yes to buy is a phone
+// call, not a draft to approve.
+test("a held reply to a buyer who wants to buy is a call on the Desk", () => {
+  const drafts = [{ id: "b", intent: "wants_to_buy" }];
+  const { rows } = foldDesk([draftRow("b")], { drafts });
+  assert.equal(rows[0].section, "call");
+});

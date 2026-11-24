@@ -5,7 +5,7 @@
 // texts started anywhere else — the nightly audit's nudges, the agent
 // check-in — so nothing texts an agent around them. startProactive asks it.
 
-import { focusOf, focusHolds, machineTexts, spacingHolds, callOwedHolds, UNPROMPTED_AGENT_KINDS, OFF_FOCUS_KINDS, CALL_WAIT_KINDS } from "./shared/agent-focus.js";
+import { focusOf, focusHolds, machineTexts, spacingHolds, callOwedHolds, numberOwedHolds, UNPROMPTED_AGENT_KINDS, OFF_FOCUS_KINDS, CALL_WAIT_KINDS } from "./shared/agent-focus.js";
 import { CALL_OWED_EVENT_TYPES, OWED_WINDOW_DAYS } from "./shared/promise-owed.js";
 import { threadHealth, HOUSE_OVER_REASONS } from "./shared/thread-health.js";
 import { openOfferIdle, AGENT_PULSE_EVENT_TYPES } from "./shared/agent-pulse.js";
@@ -46,21 +46,34 @@ export async function agentTurnReason({ store, locationId, contactId, kind = "",
   }
   return focusHolds({ kind, address, focus })
     || spacingHolds({ kind, sent: machineTexts(drafts || []), now, minHours: fu.minHoursBetween, perWeek: fu.maxPerContactPerWeek })
-    || await callOwedReason({ store, locationId, contactId, kind, now });
+    || await callOwedReason({ store, locationId, contactId, kind, drafts: drafts || [], now });
 }
 
 /**
- * callOwedReason({ store, locationId, contactId, kind, now }) → reason | null
+ * callOwedReason({ store, locationId, contactId, kind, drafts, now }) → reason | null
  *
  * A call we owe them (booked, missed or promised) goes first: the check-in
  * and the cold ladder's repeat rungs wait (shared/agent-focus.js
- * callOwedHolds, 2026-11-09). One small read of their call events, only for
- * those kinds. A read that fails holds nothing back.
+ * callOwedHolds, 2026-11-09). So does a number or the written offer we
+ * promised them (numberOwedHolds, 2026-11-23). One small read of their call
+ * and promise events, only for those kinds. A read that fails holds nothing
+ * back.
  */
-export async function callOwedReason({ store, locationId, contactId, kind = "", now = Date.now() }) {
+export async function callOwedReason({ store, locationId, contactId, kind = "", drafts = null, now = Date.now() }) {
   if (!contactId || !CALL_WAIT_KINDS.has(kind) || typeof store?.listContactEvents !== "function") return null;
   const events = await store.listContactEvents(locationId, contactId, {
     types: [...CALL_OWED_EVENT_TYPES], since: new Date(now - OWED_WINDOW_DAYS * 86400000).toISOString(), limit: 300,
   }).catch(() => []);
-  return callOwedHolds({ kind, events: events || [], now });
+  const call = callOwedHolds({ kind, events: events || [], now });
+  if (call) return call;
+  // A number we owe them goes first too (2026-11-23 audit, numberOwedHolds):
+  // their texts of ours and their offers say whether it went, read only when
+  // a promise is on the record.
+  const list = (events || []).map((e) => ({ ...e, contactId: e?.contactId || contactId }));
+  if (!list.some((e) => e.type === "promise_made")) return null;
+  const [sent, offers] = await Promise.all([
+    drafts || (typeof store?.listReplyDrafts === "function" ? store.listReplyDrafts(locationId, { contactId, limit: 40 }).catch(() => []) : []),
+    typeof store?.listOffers === "function" ? store.listOffers(locationId, { contactId, limit: 200, lean: true }).catch(() => []) : [],
+  ]);
+  return numberOwedHolds({ kind, events: list, sentDrafts: sent || [], offers: offers || [], now });
 }

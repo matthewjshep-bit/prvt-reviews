@@ -10,6 +10,7 @@
 
 import { answersInbound, MACHINE_STARTED_KINDS, SERVICE_KINDS } from "./shared/follow-up.js";
 import { machineWorkday } from "./shared/follow-up-engine.js";
+import { heldDraft } from "./shared/lane-breaker.js";
 import { scrubMessage } from "./app-errors.js";
 
 // A send GHL refused without taking it goes again after these waits
@@ -245,7 +246,7 @@ export function waitsForAWorkday(d) {
   return MACHINE_STARTED_KINDS.has(kind) || kind === "blast_open";
 }
 
-export async function sendDueDrafts({ store, locations = [], live = false, now = Date.now(), send, enabledFor = null, windowFor = null, log = () => {}, maxPerTick = MAX_SENDS_PER_TICK, paceMs = PACE_MS, random = Math.random, stopping = () => false }) {
+export async function sendDueDrafts({ store, locations = [], live = false, now = Date.now(), send, enabledFor = null, windowFor = null, heldKindsFor = null, log = () => {}, maxPerTick = MAX_SENDS_PER_TICK, paceMs = PACE_MS, random = Math.random, stopping = () => false }) {
   const out = { sent: 0, failed: 0, recovered: 0, returned: 0, deferred: 0, afterHours: 0 };
   for (const { locationId, client } of locations) {
     // Two texts never leave in the same second, and a tick sends at most a
@@ -271,6 +272,27 @@ export async function sendDueDrafts({ store, locations = [], live = false, now =
         updatedAt: new Date(now).toISOString(),
       }).catch(() => {});
       out.recovered++;
+    }
+    // A kind of text the lane breaker stopped (lane-breaker.js: its texts
+    // were carrier-blocked or STOPped) goes back to a draft instead of out,
+    // until Matt clears the lane. Only what the machine started; an answer
+    // to their own text is never held here. Written only while the row is
+    // still scheduled.
+    if (heldKindsFor && scheduled.some((d) => !answersInbound(d) && Date.parse(d.sendAt || "") <= now)) {
+      const held = await heldKindsFor(locationId).catch(() => null);
+      if (held?.size) {
+        const keep = [];
+        for (const d of scheduled) {
+          const kind = d.outbound?.kind;
+          if (!kind || !held.has(kind) || answersInbound(d) || inFlight.has(d.id) || !(Date.parse(d.sendAt || "") <= now)) { keep.push(d); continue; }
+          const next = heldDraft(d, kind, held.get(kind), now);
+          const wrote = typeof store.updateReplyDraftIf === "function"
+            ? await store.updateReplyDraftIf(d.id, "scheduled", next).catch(() => false)
+            : await store.updateReplyDraft(d.id, next).then(() => true, () => false);
+          if (wrote) out.laneHeld = (out.laneHeld || 0) + 1;
+        }
+        scheduled = keep;
+      }
     }
     // Belt and braces behind the kill switch: the route that switches the
     // bot off already holds what was counting down, but a config written any

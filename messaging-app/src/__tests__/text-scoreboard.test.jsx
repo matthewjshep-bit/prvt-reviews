@@ -3,8 +3,6 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { buildOutreachScorecard, sendsFrom, outcomesFrom } from "@shared/outreach-scorecard.js";
 import { TextScoreboard } from "../TextScoreboard.jsx";
-import { SideCard } from "../OverviewTab.jsx";
-import { autopilotOverview } from "@shared/autopilot-overview.js";
 
 const NOW = Date.parse("2026-11-09T20:00:00Z");
 const ago = (d) => new Date(NOW - d * 86400000).toISOString();
@@ -30,10 +28,4 @@ test("the scoreboard shows each first text with its own replies and STOPs, small
 test("before the first night the scoreboard says when it comes, and after a failed night says so", () => {
   expect(renderToStaticMarkup(<TextScoreboard data={null} />)).toContain("worked out each night at 4am Pacific");
   expect(renderToStaticMarkup(<TextScoreboard data={{ card: null, status: "error", error: "read failed" }} />)).toContain("Last night&#x27;s read failed");
-});
-
-test("Overview shows how many stopped beside how many replied", () => {
-  const page = { groups: [{ key: "agent", mechanisms: [{ key: "outreach_nudge", label: "Cold-agent follow-up", sent: 20, replied: 3, stopped: 2, planned: 0 }] }] };
-  const html = renderToStaticMarkup(<SideCard side={autopilotOverview(page).sides[0]} />);
-  expect(html).toContain("3 replied · 2 stopped (10%)");
 });

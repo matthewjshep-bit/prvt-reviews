@@ -188,9 +188,11 @@ export async function runPromiseSweep({ client, locationId, saved = {}, store, s
     const lastKept = list.filter((e) => e.type === "promise_kept").at(-1)?.at || "";
     // A promise you typed yourself is yours to keep: no "still working on
     // it" text in your name. Today's owed row carries it (promise-owed.js).
+    // So is a number they asked for that our answer didn't give (by
+    // "their_ask", 2026-11-23): we never said we'd send one.
     // A call, a time to walk it, the earnest money: a person keeps those, and
     // Today carries them (shared/promise-owed.js owedPersonPromises).
-    const open = list.filter((e) => e.type === "promise_made" && e.data?.by !== "you" && !PERSON_PROMISES.has(e.data?.what) && String(e.at) > lastKept);
+    const open = list.filter((e) => e.type === "promise_made" && e.data?.by !== "you" && e.data?.by !== "their_ask" && !PERSON_PROMISES.has(e.data?.what) && String(e.at) > lastKept);
     const owed = list.filter((e) => e.type === "promise_owed" && String(e.at) >= lastKept).at(-1) || null;
     if (!open.length && !owed) continue;
     out.considered++;
