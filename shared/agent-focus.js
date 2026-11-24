@@ -27,7 +27,7 @@
 import { effectiveStatus, OPEN_STATUSES, dealIsOver, pushesToPaper } from "./offer-status.js";
 import { currentOffers, houseKey, isDraftOffer, pricedAt } from "./current-offer.js";
 import { MACHINE_STARTED_KINDS } from "./follow-up.js";
-import { callOwedWait } from "./promise-owed.js";
+import { callOwedWait, owedPromises } from "./promise-owed.js";
 
 const HOUR_MS = 3600000;
 const DAY_MS = 24 * HOUR_MS;
@@ -187,6 +187,27 @@ export function callOwedHolds({ kind = "", events = [], now = Date.now() } = {})
   if (!owed) return null;
   const until = new Date(owed.until).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "America/Los_Angeles" });
   return `${owed.reason}: the call goes first, so the check-in waits until ${until}`;
+}
+
+/* ---------- a number we owe goes first (2026-11-23) ---------- */
+
+/**
+ * numberOwedHolds({ kind, events, sentDrafts, offers, now }) → reason | null
+ *
+ * The 2026-11-23 audit (R1): agents we'd promised a number got the generic
+ * check-in instead. While a number or the written offer we promised them is
+ * open (shared/promise-owed.js owedPromises, from the moment it was said:
+ * not kept by a price, a pass or the offer, not "…if it pencils", not
+ * dismissed), the check-in and the cold ladder's rungs wait. The number is
+ * Matt's (Needs Matt has it once it's due); nothing here sends one.
+ */
+export function numberOwedHolds({ kind = "", events = [], sentDrafts = [], offers = [], now = Date.now() } = {}) {
+  if (!CALL_WAIT_KINDS.has(kind)) return null;
+  const contactId = (events || []).find((e) => e?.contactId)?.contactId || "_";
+  const owed = owedPromises({ events: (events || []).map((e) => ({ ...e, contactId: e?.contactId || contactId })), sentDrafts, offers, now, afterHours: 0 })[0];
+  if (!owed) return null;
+  const street = String(owed.address || "").split(",")[0].trim();
+  return `we owe them ${owed.what === "paper" ? "the written offer" : "a number"}${street ? ` on ${street}` : ""}: it goes first, so the check-in waits`;
 }
 
 /* ---------- the light touch ---------- */
