@@ -10,6 +10,7 @@
 import React, { Suspense, lazy, useEffect, useRef } from "react";
 import { ExternalLink, Loader2, X } from "lucide-react";
 import { offerEditorUrl } from "./api.js";
+import { dealHref } from "./links.js";
 
 const NewOffer = lazy(() => import("./NewOffer.jsx"));
 
@@ -57,7 +58,7 @@ export default function OfferEditorSheet({ offer, settings, contactId = null, ad
             <Suspense fallback={<div className="flex items-center gap-2 text-sm text-slate-500"><Loader2 size={14} className="animate-spin" /> Opening the offer…</div>}>
               <NewOffer key={offer?.id || "new"} settings={settings} restore={offer} initialContactId={offer ? undefined : contactId || undefined}
                 initialAddress={offer ? undefined : address || undefined} onSettingsSaved={() => {}} onOpenOffer={onOpenOffer} onOfferSaved={onSaved}
-                onDeal={onDeal || (() => { window.location.href = `/deals${window.location.search}`; })} />
+                onDeal={onDeal || ((x, extra) => { window.location.href = dealHref(x, extra); })} />
             </Suspense>
           )}
         </div>

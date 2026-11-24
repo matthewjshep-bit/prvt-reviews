@@ -1146,9 +1146,9 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
       const r = await promoteDeal(o.id);
       patchPeek(r.offer);
       setPeek(null);
-      onDeal?.();
+      onDeal?.(r.offer || o, { fresh: true, warnings: r.warnings || [] });
     } catch (e) {
-      if (e.status === 409) { setPeek(null); onDeal?.(); } // already a deal — just go there
+      if (e.status === 409) { setPeek(null); onDeal?.(o); } // already a deal — just go there
       else setError(e.message);
     }
   }
@@ -1174,7 +1174,7 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
       patchPeek(r.offer);
       if (r.offer?.id && r.offer.id === rowRef.current?.id) adopt(r.offer);
       onOfferSaved?.(r.offer); // the shell holds the offer being edited
-      if (r.promoted) { setPeek(null); onDeal?.(); }
+      if (r.promoted) { setPeek(null); onDeal?.(r.offer || o, { fresh: true, warnings: r.warnings || [] }); }
     } catch (e) { setError(e.message); }
     setStatusBusy(false);
   }

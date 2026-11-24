@@ -29,7 +29,7 @@ import DealTimeline from "./DealTimeline.jsx";
 import DealParties from "./DealParties.jsx";
 import DealAccess from "./DealAccess.jsx";
 import DealKind from "./DealKind.jsx";
-import { assetLabel, normalizeAsset } from "@shared/asset-type.js";
+import { assetLabel, normalizeAsset, isLuxuryLot } from "@shared/asset-type.js";
 import { resolveChecklist, dueWords } from "@shared/deal-checklist.js";
 // A deal keeps its deadlines and records who bought it (2026-11-09).
 import { ymdLabel } from "@shared/deal-checklist.js";
@@ -46,7 +46,7 @@ import {
 // Stage vocabulary and the pill live in ui.jsx so History can render a stage
 // without importing from a sibling view. Re-exported here for the modules that
 // already reach for them through DealsView.
-export { DEAL_STAGES, STAGE, StagePill, DealModal, InvestorSummary, DispoCell, MoneyCell, InspectionCallStrip };
+export { DEAL_STAGES, STAGE, StagePill, DealModal, InvestorSummary, DispoCell, MoneyCell, InspectionCallStrip, ConfirmDealCard };
 const TERMINAL = new Set(["closed", "fell_through"]);
 
 const STATUS_DOT = {
@@ -553,7 +553,55 @@ function KindBadge({ asset }) {
   return <span className="ml-2 rounded-full bg-violet-100 px-2 py-0.5 align-middle text-[11px] font-semibold text-violet-900">{assetLabel(a)}</span>;
 }
 
-function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignment, onDataroom, onEdit, onEnrich }) {
+// The deal promote just made, to confirm before buyers are priced off it
+// (2026-11-23): the contract price, the fee (amber when it's the Settings
+// default), the dates and where they came from, the kind, and what promote
+// warned about. The fields themselves are on Terms & paperwork, which the
+// modal opens on; the kind and access pickers sit right here.
+function ConfirmDealCard({ offer, warnings = [], onUpdated, onDone }) {
+  const deal = offer.deal || {};
+  const fromSetting = deal.assignmentFeeSource === "setting";
+  const lines = (warnings.length ? warnings : (offer.warnings || []).filter((w) => /^(buyer ceiling|before signing|pre-sell buyers)/i.test(String(w))))
+    .map(String).filter(Boolean);
+  const row = (label, value, cls = "") => (
+    <div className="flex items-baseline justify-between gap-3 border-b border-blue-100 py-1 last:border-0">
+      <span className="text-xs text-slate-600">{label}</span>
+      <span className={`text-sm font-semibold tabular-nums ${cls}`}>{value}</span>
+    </div>
+  );
+  return (
+    <section aria-label="Confirm the deal" className="mb-4 rounded-xl border border-blue-200 bg-blue-50/60 p-3">
+      <div className="mb-2 flex items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold text-slate-900">Confirm the deal</div>
+          <div className="text-xs text-slate-600">Buyers are priced off these. Anything off, fix it on Terms &amp; paperwork below.</div>
+        </div>
+        <button type="button" className={BTN} onClick={onDone}>Looks right</button>
+      </div>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div>
+          {row("Contract price", deal.contractPrice ? fmtMoney(deal.contractPrice) : "not set", deal.contractPrice ? "" : "text-amber-800")}
+          {row("Our fee", deal.assignmentFee ? `${fmtMoney(deal.assignmentFee)}${fromSetting ? " (Settings default)" : ""}` : "not set", fromSetting || !deal.assignmentFee ? "text-amber-800" : "")}
+          {row("Inspection ends", deal.inspectionDate ? ymdLabel(deal.inspectionDate) : "not set", deal.inspectionDate ? "" : "text-amber-800")}
+          {row("Closing", deal.closingDate ? ymdLabel(deal.closingDate) : "not set", deal.closingDate ? "" : "text-amber-800")}
+          {row("Kind", `${assetLabel(offer.asset) || "not set"}${isLuxuryLot(offer) ? " · luxury lot" : ""}`)}
+          {datesNote(deal) && <p className="mt-1 text-[11px] leading-snug text-slate-600">{datesNote(deal)}</p>}
+        </div>
+        <div className="space-y-3">
+          <DealKind offer={offer} onUpdated={onUpdated} />
+          <DealAccess key={`confirm-access-${offer.id}`} offer={offer} onUpdated={onUpdated} />
+        </div>
+      </div>
+      {lines.length > 0 && (
+        <ul className="mt-2 list-inside list-disc space-y-0.5 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          {lines.map((w) => <li key={w}>{w}</li>)}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignment, onDataroom, onEdit, onEnrich, confirmNew = null }) {
   const deal = offer.deal;
   // Derived, never stored: change a buyer's standing and the banner and the
   // broker's own gates agree without a second switch to keep in step.
@@ -572,7 +620,10 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   // Which tab: kept in ?tab= so a link from Today can open the right one.
+  const [confirming, setConfirming] = useState(Boolean(confirmNew));
   const [tab, setTab] = useState(() => {
+    // A deal promote just made opens on its terms, to be confirmed.
+    if (confirmNew) return "paper";
     try { const t = new URLSearchParams(window.location.search).get("tab"); return DEAL_TABS.some((x) => x.key === t) ? t : "overview"; } catch { return "overview"; }
   });
   const pickTab = (t) => {
@@ -787,6 +838,9 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
         )}
         {!stopped && resumedNote && (
           <p role="status" className="mb-4 rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-900">{resumedNote}</p>
+        )}
+        {confirming && (
+          <ConfirmDealCard offer={offer} warnings={confirmNew?.warnings || []} onUpdated={onUpdated} onDone={() => setConfirming(false)} />
         )}
         <InspectionCallStrip deal={deal} busy={busy}
           onFeedback={dealFeedbackUrl(offer.id)}
@@ -1183,12 +1237,25 @@ export function dealsBook(deals = [], { only = null, showTerminal = false, sfrOn
 }
 
 // `only`: a predicate that narrows the deals to one lane (the Luxury page).
-export default function DealsView({ settings, onEdit, only = null }) {
+// `focus`: { id, fresh, warnings } — open this deal on mount; `fresh` (promote
+// just made it) opens it to confirm its terms. The standalone page reads the
+// same from ?deal_id= and ?confirm=1.
+export default function DealsView({ settings, onEdit, only = null, focus = null, onFocused = null }) {
   const [deals, setDeals] = useState(null);
   const [error, setError] = useState("");
   const [selectedId, setSelectedId] = useState(() => {
+    if (focus?.id) return focus.id;
     try { return new URLSearchParams(window.location.search).get("deal_id") || null; } catch { return null; }
   });
+  const [confirmNew, setConfirmNew] = useState(() => {
+    if (focus?.id) return focus.fresh ? { id: focus.id, warnings: focus.warnings || [] } : null;
+    try {
+      const q = new URLSearchParams(window.location.search);
+      return q.get("confirm") === "1" && q.get("deal_id") ? { id: q.get("deal_id"), warnings: [] } : null;
+    } catch { return null; }
+  });
+  // Used once: coming back to Deals later opens the list.
+  useEffect(() => { if (focus) onFocused?.(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [showTerminal, setShowTerminal] = useState(false);
   // Single family only (Matt, 2026-10-01: focus on SFR). Off by default so a
   // deal of another kind already under contract never drops out of sight.
@@ -1345,8 +1412,9 @@ export default function DealsView({ settings, onEdit, only = null }) {
       )}
 
       {selected && (
-        <DealModal offer={selected} settings={settings}
-          onClose={() => setSelectedId(null)}
+        <DealModal key={selected.id} offer={selected} settings={settings}
+          confirmNew={confirmNew?.id === selected.id ? confirmNew : null}
+          onClose={() => { setSelectedId(null); setConfirmNew(null); }}
           onUpdated={patchDeal}
           onRemoved={dropDeal}
           onAssignment={(o) => setAssigning(o)}

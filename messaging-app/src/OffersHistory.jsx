@@ -341,9 +341,10 @@ export default function OffersHistory({ onEdit, onNew = null, onDeal, settings: 
     try {
       const r = await promoteDeal(o.id);
       patchOffer(r.offer);
-      onDeal?.();
+      // Onto the new deal, to confirm its fee, dates and kind.
+      onDeal?.(r.offer || o, { fresh: true, warnings: r.warnings || [] });
     } catch (e) {
-      if (e.status === 409) onDeal?.(); // already a deal — just go there
+      if (e.status === 409) onDeal?.(o); // already a deal — just go there
       else setError(e.message);
     }
     setPromoting(null);
@@ -368,7 +369,7 @@ export default function OffersHistory({ onEdit, onNew = null, onDeal, settings: 
       patchOffer(r.offer);
       // Promotion navigates to the Deals tab — leaving the popout open over it
       // would strand you on top of the thing you just landed on.
-      if (r.promoted) { closeDetail(); onDeal?.(); }
+      if (r.promoted) { closeDetail(); onDeal?.(r.offer || o, { fresh: true, warnings: r.warnings || [] }); }
     } catch (e) { setError(e.message); }
     setStatusBusy(null);
   }
@@ -660,7 +661,7 @@ export default function OffersHistory({ onEdit, onNew = null, onDeal, settings: 
             onPrev={prevId ? () => goTo(prevId) : null} onNext={nextId ? () => goTo(nextId) : null}
             onClose={closeSplit} onDetails={(o) => openDetail(o)} onSend={(o) => setSending(o)}
             onChanged={(o) => refreshContact(o?.contactId)}
-            onStatusChanged={(r) => { if (r?.offer) patchOffer(r.offer); if (r?.promoted) onDeal?.(); }}
+            onStatusChanged={(r) => { if (r?.offer) patchOffer(r.offer); if (r?.promoted) onDeal?.(r.offer, { fresh: true, warnings: r.warnings || [] }); }}
             onDeal={onDeal} settings={appSettings || settings} picker={picker} />
         </div>
         {modals}
