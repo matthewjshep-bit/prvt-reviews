@@ -195,11 +195,24 @@ export async function runSlackEvents({ store = defaultStore, locationId, client 
   // What's owed, oldest first: one item per event per stream, and one per
   // deal for the buyer texts of a wave.
   const items = [];
+  // A route with its own claim (an owner's texts in one day) is one post: the
+  // first event this run carries the others' keys, so all are claimed together.
+  const byClaim = new Map();
   for (const e of events) {
     if (e.type === "blast_sent") continue;
     for (const route of routeEvent(e)) {
       if (!streamOn(cfg, route.stream)) continue;
       const key = slackClaimKey("ev", `${e.id}:${route.stream}`);
+      if (route.claim) {
+        const shared = slackClaimKey("ev", `${route.claim}:${route.stream}`);
+        if (posted[key] || posted[shared]) continue;
+        const it = byClaim.get(shared);
+        if (it) { it.keys.push(key); continue; }
+        const fresh = { keys: [shared, key], ev: e, route };
+        byClaim.set(shared, fresh);
+        items.push(fresh);
+        continue;
+      }
       if (!posted[key]) items.push({ keys: [key], ev: e, route });
       // A backfill with `refresh` re-renders the posts that opened a thread
       // (a new format, 2026-10-25), editing them in place.

@@ -1,16 +1,19 @@
 // lot-finder.js — the luxury teardown lane's front end: find the old houses
 // on big lots in a builders' pocket, find their owners' cell numbers, and
-// say hello with a price (Matt, 2026-11-23: "automate this entire thing from
-// finding properties to skiptrace to sending text").
+// say hello (Matt, 2026-11-23: "automate this entire thing from finding
+// properties to skiptrace to sending text").
 //
 // A pocket is a circle around an address: lots at least this big, houses
 // built before this year, owned at least this long. The parcels come from
 // the property-data API (owner of record, mailing address, year built, lot,
 // last sale); the cell numbers from the skip trace; the contact goes into
-// GHL tagged `lot-owner` and gets one short text that names the price band
-// up front, then one follow-up a day later. A reply ends the machine's part:
-// the bot never answers a homeowner (reply-agent.js handsOffReason), the
-// Desk says call them now.
+// GHL tagged `lot-owner` and gets one short text that names their street and
+// neighborhood, never a number (Matt, 2026-11-23: no price band in the first
+// text; he prices every luxury lot), then one follow-up a day later. A reply
+// ends the texts: Matt gets a #needs-matt ping to call (shared/slack-notify.js
+// owner_answered), and the bot drafts an answer that never names a number
+// (OWNER_PLAYBOOK; the reply gate holds a number or a promise of one), sends
+// it only when lotFinder.bot is "send", and writes nothing when it's "off".
 //
 // Washington: RCW 19.190.060 limits unsolicited commercial texts to WA cell
 // phones. The text step ships behind its own switch (OWNER_SMS_ENABLED) and
@@ -18,6 +21,9 @@
 //
 // Pure: the settings, the owner row off a property record, who to trace, the
 // phones worth keeping, the words, and what's due next.
+
+import { isLuxuryLot } from "./asset-type.js";
+import { effectiveStatus } from "./offer-status.js";
 
 export const LOT_OWNER_TAG = "lot-owner";
 export const LOT_OWNER_TAG_PATTERNS = ["lot-owner", "lot-pocket-*"];
@@ -110,7 +116,7 @@ export function normalizeLotFinder(raw) {
   };
 }
 
-/** A pocket is ready when it has a center and a name to say (the price band is for the reply). */
+/** A pocket is ready when it has a center and a name to say (the price band is Matt's own reference, never said). */
 export function pocketReady(p) {
   return Boolean(p && p.enabled !== false && p.lat && p.lng && (p.name || p.address));
 }
@@ -519,3 +525,34 @@ export const BUILDER_PLAYBOOK =
   "ASSIGNMENT, AGENT FEES, EARNEST, CLOSING DATE: a person's call — say you'll confirm today and set needsHuman. Never promise a timeline the deal record doesn't show.";
 
 const MAX_PLAYBOOK = 4000;
+
+/* ---------- owners who answered (the Luxury page) ---------- */
+
+/**
+ * repliesByOwner(events) → [{ contactId, at, street, replies }], newest answer first.
+ * One row a person from their lot_owner_replied events: the newest answer,
+ * the street it carries (the newest one that has one), and how many.
+ */
+export function repliesByOwner(events = []) {
+  const by = new Map();
+  for (const e of events || []) {
+    if (e?.type !== LOT_OWNER_EVENTS.replied || !e.contactId) continue;
+    const r = by.get(e.contactId) || { contactId: e.contactId, at: "", street: "", streetAt: "", replies: 0 };
+    r.replies++;
+    if (String(e.at || "") > r.at) r.at = String(e.at || "");
+    const street = String(e.address || "").split(",")[0].trim();
+    if (street && String(e.at || "") >= r.streetAt) { r.street = street; r.streetAt = String(e.at || ""); }
+    by.set(e.contactId, r);
+  }
+  return [...by.values()].map(({ streetAt, ...r }) => r).sort((a, b) => b.at.localeCompare(a.at));
+}
+
+/**
+ * hasLotOffer(offers) → true when Matt has made the owner a luxury-lot offer:
+ * one with a number on it, or one that moved past a draft (sent, passed…).
+ * A draft the machine held with no number is still his to price.
+ */
+export function hasLotOffer(offers = []) {
+  return (offers || []).some((o) => o && isLuxuryLot(o)
+    && (Number(o.cashAmount) > 0 || !["draft", "new"].includes(effectiveStatus(o))));
+}

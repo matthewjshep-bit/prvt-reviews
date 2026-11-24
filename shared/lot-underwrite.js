@@ -95,6 +95,43 @@ export const sampleLotDeal = () => copy(SAMPLE_LOT_DEAL);
 
 const str = (v, max) => String(v ?? "").trim().slice(0, max);
 
+/**
+ * lotDealFromSubject(subject, { name, askingPrice, sqft }) → a lot deal with this
+ * lot's own facts in it (2026-11-24): its size, year built and house size off
+ * the property record the machine already read. No comps and no number: those
+ * are Matt's (luxury-lane rules).
+ */
+export function lotDealFromSubject(subject = null, { name = "", askingPrice = 0, sqft = 0 } = {}) {
+  const s = subject || {};
+  return normalizeLotDeal({
+    ...copy(DEFAULT_LOT_DEAL),
+    name, askingPrice: Number(askingPrice) || 0,
+    lotSqft: Number(s.lotSqft) || 0,
+    yearBuilt: Number(s.yearBuilt) || 0,
+    houseSqft: Number(s.sqft) || Number(sqft) || 0,
+  });
+}
+
+/**
+ * teardownSuggestions(rows) → lot comps ({ label, price, lotSqft, yearBuilt, houseSqft, soldAt })
+ * from the pocket scan's sold teardowns (ghl-broker/lot-finder.js scanPocketZillow),
+ * newest sale first, as many as the comps table holds. Suggestions for Matt to
+ * add, never counted until he does.
+ */
+export function teardownSuggestions(rows = []) {
+  return (rows || []).filter((r) => r && Number(r.price) > 0 && String(r.address || "").trim())
+    .slice().sort((a, b) => String(b.saleDate || "").localeCompare(String(a.saleDate || "")))
+    .slice(0, 30)
+    .map((r) => ({
+      label: str(String(r.address).split(",")[0], 80),
+      price: Math.max(0, num(r.price)),
+      lotSqft: Math.max(0, num(r.lotSqft)),
+      yearBuilt: Math.max(0, Math.round(num(r.yearBuilt))),
+      houseSqft: Math.max(0, num(r.sqft)),
+      soldAt: str(r.saleDate, 7),
+    }));
+}
+
 /** normalizeLotDeal(raw) → every field a finite number, the tables trimmed to real rows. */
 export function normalizeLotDeal(raw = {}) {
   const d = DEFAULT_LOT_DEAL;

@@ -102,6 +102,13 @@ const isHotNote = (ev) => ev?.type === "note" && /^(flagged )?hot\b/.test(phrase
 // DRAFT_ONLY_HOLD / SKELETON_HOLD); events before data.draftOnly carry only that.
 const isDraftOnlyHold = (d = {}) => d.draftOnly === true || (Array.isArray(d.held) && DRAFT_ONLY_RX.test(String(d.held[0] || "")));
 
+// The day a reply came, on Matt's clock: the claim that keeps it to one ping a person a day.
+const PACIFIC_DAY = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles" });
+const answeredClaim = (kind, ev = {}) => {
+  const t = Date.parse(ev?.at || "");
+  return ev?.contactId && Number.isFinite(t) ? `${kind}:${ev.contactId}:${PACIFIC_DAY.format(new Date(t))}` : null;
+};
+
 const DEAD = { offer_passed: "they passed", offer_we_passed: "we passed", offer_unavailable: "no longer available", offer_no_response: "no response", tier1_passed: "passed from Tier 1" };
 const LOUD_STAGES = new Set(["closed", "fell_through"]);
 
@@ -125,6 +132,8 @@ const LOUD_STAGES = new Set(["closed", "fell_through"]);
  *   opensOnly  only when there's no thread yet: a house moved back into
  *              Tier 1 isn't posted twice
  *   statusOnly posts nothing; only the thread's status emoji is looked at again
+ *   claim      (optional) the key the post is claimed by in place of the event's
+ *              own, so several events make one post (an owner's texts in a day)
  *
  * Empty for anything Slack doesn't hear about.
  */
@@ -161,6 +170,11 @@ export function routeEvent(ev = {}) {
   // 2026-11-10): the bot never books or promises one, so it's a ping to him
   // in Needs Matt, a post of its own (shared/call-words.js).
   else if (t === "call_wanted") out.push({ stream: "needsMatt", kind: "call_wanted", thread: null, ...base });
+  // A lot owner (or a gatekeeper) the machine wrote to answered (2026-11-23):
+  // Matt prices every lot and makes the call, and the Desk row this used to
+  // make is gone. One ping a person a Pacific day, however many texts they send.
+  else if (t === "lot_owner_replied") out.push({ stream: "needsMatt", kind: "owner_answered", thread: null, ...base, claim: answeredClaim("owner_answered", ev) });
+  else if (t === "gatekeeper_replied") out.push({ stream: "needsMatt", kind: "gatekeeper_answered", thread: null, ...base, claim: answeredClaim("gatekeeper_answered", ev) });
   else if (t === "underwrite_started") uw("started");
   else if (t === "underwrite_done") { uw("done", { update: true }); acq("uw_done", { replyOnly: true }); }
   // A skeleton or draft-only run only made Matt a draft (Matt, 2026-10-25:
@@ -177,7 +191,7 @@ export const SLACK_EVENT_TYPES = Object.freeze([
   "tier1_added", "ghl_stage_moved", "offer_sent", "offer_revised", "offer_countered", "realm_yes",
   "note", "offer_accepted", ...Object.keys(DEAD), "deal_promoted", "deal_stage", "investor_committed", "investor_evaluating",
   "investor_passed", "dataroom_viewed", "call_booked", "underwrite_started", "underwrite_done", "underwrite_held",
-  "underwrite_failed", "underwrite_dropped", "blast_sent", "call_wanted",
+  "underwrite_failed", "underwrite_dropped", "blast_sent", "call_wanted", "lot_owner_replied", "gatekeeper_replied",
 ]);
 
 /**
@@ -291,7 +305,7 @@ const ICON = {
   buyer_passed: ":white_circle:", viewed: ":open_file_folder:", walkthrough: ":calendar:", waves: ":mega:",
   started: ":hourglass_flowing_sand:", done: ":white_check_mark:", held: ":warning:", failed: ":x:", dropped: ":double_vertical_bar:",
   uw_done: ":white_check_mark:", uw_held: ":warning:", uw_failed: ":x:",
-  call_wanted: ":telephone_receiver:",
+  call_wanted: ":telephone_receiver:", owner_answered: ":house:", gatekeeper_answered: ":telephone_receiver:",
 };
 
 const STAGE_SAY = { under_contract: "under contract", buyer_found: "buyer found", assigned: "assigned", closed: "closed", fell_through: "fell through" };
@@ -341,6 +355,7 @@ export function renderEvent(route, ev = {}, ctx = {}) {
   const d = ev?.data || {};
   if (kind === "tier1") return renderTier1(ev, ctx);
   if (kind === "call_wanted") return renderCallWanted(ev, ctx);
+  if (kind === "owner_answered" || kind === "gatekeeper_answered") return renderAnswered(kind, ev, ctx);
   const head = `${ICON[kind] || ":small_blue_diamond:"} ${headline(kind, ev, ctx)}`;
   const lines = [head];
   if (kind === "held" || kind === "uw_held") {
@@ -405,6 +420,27 @@ export function renderCallWanted(ev = {}, ctx = {}) {
   const blocks = [{ type: "section", text: { type: "mrkdwn", text } }];
   if (link) blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: link }] });
   const plain = `${who} ${walk ? `wants to see ${where || "the house"}` : `wants a call${where ? ` about ${where}` : ""}`}${when ? ` (${when})` : ""}`;
+  return { text: clip(plain, 150), blocks };
+}
+
+/**
+ * renderAnswered(kind, ev, ctx) → the Needs Matt ping when a lot owner or a
+ * gatekeeper the machine wrote to answers: their first name, the street, and
+ * @Matt. Never a phone, an email or what they wrote.
+ */
+export function renderAnswered(kind, ev = {}, ctx = {}) {
+  const at = ctx.mattUserId ? `<@${ctx.mattUserId}> ` : "";
+  const owner = kind === "owner_answered";
+  const where = street(ev?.address || (owner ? ctx.address : ""));
+  const name = ctx.firstName || "";
+  const who = owner
+    ? (name ? `${esc(name)}${where ? `, the owner of *${esc(where)}*,` : " (a lot owner)"}` : where ? `The owner of *${esc(where)}*` : "A lot owner")
+    : `${name ? `${esc(name)} (a gatekeeper the machine wrote to)` : "A gatekeeper the machine wrote to"}`;
+  const text = `${ICON[kind]} ${at}${who} answered — call.`;
+  const link = slackLinks({ appUrl: ctx.appUrl, appLink: ctx.appLink, locationId: ctx.locationId, contactId: ev?.contactId });
+  const blocks = [{ type: "section", text: { type: "mrkdwn", text } }];
+  if (link) blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: link }] });
+  const plain = `${name || (owner ? "A lot owner" : "A gatekeeper")}${where ? ` (${where})` : ""} answered — call`;
   return { text: clip(plain, 150), blocks };
 }
 

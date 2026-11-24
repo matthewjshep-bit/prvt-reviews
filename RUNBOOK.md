@@ -405,7 +405,19 @@ big and old enough (`pocketFor` in `shared/lot-finder.js`; `luxuryLaneFor` in
   never passed, never a read asked of the agent;
 - any save of an offer on such a house (the editor, a re-quote) stamps
   `asset.lane = "luxury"` whoever made it, so the Luxury page's Offers and
-  Deals list every one and the lot analyzer opens it.
+  Deals list every one and the lot analyzer opens it. The editor reads the
+  lane off the row whoever stamped it (a held draft is stamped by
+  `underwrite`), so a held lot opens in the lot analyzer, not on comps; comps
+  only once the lane is turned off on it (2026-11-24). A held lot's draft also
+  saves `model: "lot"`, the luxury pick and a lot deal with the lot's size,
+  year built and house size (`lotDealFromSubject`); comps and the number stay
+  Matt's.
+- **Prefill, for Matt only** (2026-11-24): the lot analyzer opens with the
+  lot's own facts, and offers the sold teardowns the pocket's weekly scan read
+  (kept on the `lotFinderPulls` cursor as `teardowns[pocketId]`, served by
+  `GET /api/lot-finder/teardowns?lat&lng` for the pocket around the house) as
+  **suggestions with Add**: none is counted until he adds it, and none of it
+  reaches the bot or a text.
 
 ## The lot finder — parcels → skip trace → owner texts, and the builders who buy there (2026-11-23)
 
@@ -470,9 +482,9 @@ the numbers before switching a pocket on.
    contact = the principal, company = the entity. Someone already
    in GHL as an agent or a buyer is left as they are. Dry unless
    `OUTREACH_IMPORTS_ENABLED`, like every import.
-5. **Texts**: the first text names the street and the price band in the
-   method's shape (eight variants, `OPEN_TEXTS`: who we are, the address,
-   respect for their time, the band, cash and no agent fees, one soft ask);
+5. **Texts**: the first text names the street and the neighborhood, never a
+   number (Matt, 2026-11-23: no price band in the first text; eight variants,
+   `OPEN_TEXTS`: who we are, the builders we work with, the address, one soft ask);
    one follow-up `followUpDays` after the first actually went
    (`lot_owner_sent`, never the draft); then nothing (`nextOwnerStep`). House
    rules hold: no dollar sign, one question, no "following up"; a text that
@@ -494,17 +506,26 @@ wearing the **owner playbook** (party `agent`, `partySource lot_owner`, lane
 `owner`; `OWNER_PLAYBOOK` in `shared/lot-finder.js`, Matt's own words added
 from Autopilot → Lots): a homeowner, not an agent; we work with builders and
 say so; only the lot and what they need, never the roof or the kitchen; the
-price band and the eight percent openly, the Zestimate line, a counter is a
-number not a no; privacy, certainty, a couple of months after closing; no
+price is Matt's (never a number, a range or a band; Matt prices every lot), the
+eight percent a listing would cost them, the Zestimate line, a number from
+them is a counter not a no; privacy, certainty, a couple of months after closing; no
 "cash", no assign/fee words, no "other fixers". The listing-agent blocks that
 don't fit are left out of the system prompt (`buildSystemPrompt({ lane })`),
 the range-only float and the "a person prices it" line are off for them, and
 the agent instructions (buy box, focus rule) are replaced. **The reply waits
 for Matt** (`decideAutoSend` code `owner_lane`) unless `lotFinder.bot` is
 `send`; `off` hands the thread off with no draft. Every inbound from one writes
-`lot_owner_replied`, which ends the finder's texts, and the Desk shows
-`call_lot_owner_replied` (score 98): call now, then again. "Worth way more
-than that" is a reply, not a dead lead.
+`lot_owner_replied` (with the street our first text was about, never their
+words), which ends the finder's texts. Since the Desk is retired, Matt hears
+it in **Slack `#needs-matt`** (`owner_answered`, an @-mention: first name, the
+street, "answered — call"; one ping a person a Pacific day however many texts
+they send; a `gatekeeper_replied` is the same post, `gatekeeper_answered`), and
+the Luxury page lists them under **Owners who answered**. "Worth way more than
+that" is a reply, not a dead lead. **The bot never names or promises a
+number to an owner** (2026-11-24): owners count as priced by hand for the
+reply gate (`numberByHand` in `loadAgentContext` → `claimFacts`), so a draft
+like "I'll have a number for you today" is flagged `NUMBER_TIME_FLAG` and
+held; the agent-worded `MATT_PRICES_LINE` stays out of the owner prompt.
 
 A **builder** in front of a luxury-lot deal talks to the investor-side bot with
 the **builder playbook** (lane `builder`, set when a deal in their context is a
@@ -7340,7 +7361,7 @@ text.
 
 | Stream (`saved.slack.streams`) | Channel | What posts |
 |---|---|---|
-| needsMatt | `#needs-matt` | What lands in GHL's **Needs Matt** stage (needs-matt.js's list): a yes to approve, paper to sign, a house to price. Once each, with an @-mention. With `ghlStages` off, the GHL ping rows (`pingReasons`) instead. Since 2026-11-10 also someone asking for a call or a walkthrough, or naming a time (`call_wanted`, from the event sweep, a post of its own with an @-mention: first name, the house, the time words) |
+| needsMatt | `#needs-matt` | What lands in GHL's **Needs Matt** stage (needs-matt.js's list): a yes to approve, paper to sign, a house to price. Once each, with an @-mention. With `ghlStages` off, the GHL ping rows (`pingReasons`) instead. Since 2026-11-10 also someone asking for a call or a walkthrough, or naming a time (`call_wanted`, from the event sweep, a post of its own with an @-mention: first name, the house, the time words). Since 2026-11-24 also a lot owner or a gatekeeper the machine wrote to answering (`lot_owner_replied` / `gatekeeper_replied` → `owner_answered` / `gatekeeper_answered`: first name, the street, "answered — call"; one a person a Pacific day, by the route's own `claim` key) |
 | acquisitions | `#acquisitions` | **The Tier 1 list** (Matt, 2026-10-25: "just the tier 1s that have been flagged, not the back-and-forth"). The only post in the channel is a house reaching Tier 1 (`tier1_added`, a card moved to Tier 1), once per house. The post is itemized, one thing a line, with the links underneath: **Tier 1 flagged: <street>**, Agent (full name — from the record, else read from GHL), Address (full), Description (the summary of what they said, else why it's Tier 1). Its offer sent or revised, counter, in the realm, hot, agreed, contract, underwrite result and pass reply quietly in that thread, never in the channel feed, and only once the thread exists. A house an agent merely named isn't posted |
 | underwrites | `#underwrites` | **Real underwrites only**: a run that prices the house, edited in place from running to priced (number, ARV, rehab), held (the reasons) or failed. A skeleton or draft-only run (`autoUnderwriteMode` skeleton/draft, Matt prices by hand, 2026-10-25) only makes a draft: it posts nowhere, here or in the house's Tier 1 thread. With skeleton on, this channel is nearly silent (only full runs a person starts). Also an address that left the queue without running |
 | dispositions | `#dispositions` | **One thread per deal**: the new deal (contract, fee, closing), each wave of buyer texts as one line ("sent to 25 buyers"), a buyer looking, passing or committed, the package opened, a walkthrough booked, the stage. Closed and fell through also show in the channel |

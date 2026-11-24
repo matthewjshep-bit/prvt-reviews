@@ -3,9 +3,13 @@
 //
 //   GET  /api/lot-finder                 settings, counts per pocket, switches, last run
 //   GET  /api/lot-finder/owners          { pocketId?, status?, limit? } → owner rows
+//   GET  /api/lot-finder/answered        → owners who answered with no lot offer yet (the Luxury page)
 //   POST /api/lot-finder/owners/:key/status   { status: skipped | do_not_contact | new }
 //   POST /api/lot-finder/suggest         { address, radiusMiles? } → the pocket's numbers off Zillow
-//   POST /api/lot-finder/run             { dryRun, wait } → run the day now
+//   GET  /api/lot-finder/teardowns       { lat, lng } → the pocket around a house and its sold teardowns (comps to add)
+//   GET  /api/lot-finder/job             → { job, last }: the light read the tab polls during a run
+//   POST /api/lot-finder/run             { dryRun, wait } → run the day now (the tab sends
+//                                        wait:false and polls GET /job until last.id is this job's)
 //
 // Settings are saved through PATCH /api/offers/settings { lotFinder }. Nothing
 // here sends a text: the run writes drafts, and they schedule themselves only
@@ -14,8 +18,9 @@
 import express from "express";
 import { store } from "../store.js";
 import { geocodeAddress } from "../geocode.js";
-import { normalizeLotFinder, normalizePocket, OWNER_STATUSES } from "../shared/lot-finder.js";
-import { startLotFinder, getLotFinderJob, scanPocketZillow, CURSOR_NAME, OWNER_SMS_ENABLED, traceKeyOf, propertyKeyOf } from "../lot-finder.js";
+import { normalizeLotFinder, normalizePocket, OWNER_STATUSES, milesApart } from "../shared/lot-finder.js";
+import { teardownSuggestions } from "../shared/lot-underwrite.js";
+import { startLotFinder, getLotFinderJob, scanPocketZillow, CURSOR_NAME, OWNER_SMS_ENABLED, traceKeyOf, propertyKeyOf, ownersWhoAnswered } from "../lot-finder.js";
 
 const fail = (res, err) => res.status(err?.http || 500).json({ error: err?.message || String(err) });
 const OUTREACH_IMPORTS_ENABLED = () => process.env.OUTREACH_IMPORTS_ENABLED === "true";
@@ -54,8 +59,38 @@ export default function createLotFinderRouter({ resolveLocation, getSettings = (
         switches: { ownerSms: OWNER_SMS_ENABLED(), imports: OUTREACH_IMPORTS_ENABLED(), sends: process.env.CARD_SENDS_ENABLED === "true",
           traceKey: Boolean(traceKeyOf(saved)), propertyKey: Boolean(propertyKeyOf(saved)), apifyToken: Boolean(String(saved.apifyToken || "").trim()) },
         last: cursor?.doc?.last || null, lastDaily: cursor?.doc?.lastDaily || null, failed: Boolean(cursor?.doc?.failed), error: cursor?.doc?.error || null,
-        job: job ? { status: job.status, trigger: job.trigger, startedAt: job.startedAt, finishedAt: job.finishedAt, error: job.error } : null,
+        job: job ? { id: job.id, status: job.status, trigger: job.trigger, startedAt: job.startedAt, finishedAt: job.finishedAt, error: job.error } : null,
       });
+    } catch (err) { fail(res, err); }
+  });
+
+  // The run's state and last result only, for the tab to poll while a run
+  // goes: GET / reads every owner row, too heavy to ask for every few seconds.
+  router.get("/job", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const cursor = await store.getJobCursor(locationId, CURSOR_NAME).catch(() => null);
+      const job = getLotFinderJob(locationId);
+      res.json({ last: cursor?.doc?.last || null,
+        job: job ? { id: job.id, status: job.status, trigger: job.trigger, startedAt: job.startedAt, finishedAt: job.finishedAt, error: job.error } : null });
+    } catch (err) { fail(res, err); }
+  });
+
+  // The pocket around a house and the sold teardowns its last scan read, as
+  // comps for Matt to add in the lot analyzer. Suggestions only: nothing is
+  // priced with them, and none of it reaches the bot.
+  router.get("/teardowns", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const lat = Number(req.query.lat), lng = Number(req.query.lng);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng) || (!lat && !lng)) return res.json({ pocket: null, comps: [] });
+      const saved = (await getSettings(locationId)) || {};
+      const pockets = normalizeLotFinder(saved.lotFinder).pockets.filter((p) => p.lat && p.lng && milesApart({ lat, lng }, p) <= p.radiusMiles);
+      const p = pockets.sort((a, b) => milesApart({ lat, lng }, a) - milesApart({ lat, lng }, b))[0];
+      if (!p) return res.json({ pocket: null, comps: [] });
+      const cur = await store.getJobCursor(locationId, `${CURSOR_NAME}Pulls`).catch(() => null);
+      const kept = cur?.doc?.teardowns?.[p.id] || null;
+      res.json({ pocket: { id: p.id, name: p.name }, scannedAt: kept?.at || null, comps: teardownSuggestions(kept?.rows || []) });
     } catch (err) { fail(res, err); }
   });
 
@@ -66,6 +101,14 @@ export default function createLotFinderRouter({ resolveLocation, getSettings = (
       const status = OWNER_STATUSES.includes(String(req.query.status || "")) ? String(req.query.status) : null;
       const limit = Math.min(2000, Math.max(1, Number(req.query.limit) || 500));
       res.json({ owners: await store.listLotOwners(locationId, { pocketId, status, limit }) });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Cheap: one event read for the window, then an offer and a profile read per owner shown.
+  router.get("/answered", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      res.json({ owners: await ownersWhoAnswered({ store, locationId }) });
     } catch (err) { fail(res, err); }
   });
 
@@ -110,7 +153,7 @@ export default function createLotFinderRouter({ resolveLocation, getSettings = (
       const dryRun = req.body?.dryRun === false ? null : true;
       const job = startLotFinder({ client, locationId, saved, store, sendsEnabled: process.env.CARD_SENDS_ENABLED === "true", deps, dryRun, trigger: "manual", rescan: req.body?.rescan === true });
       if (req.body?.wait) await job.done;
-      res.json({ ok: true, job: { status: job.status, startedAt: job.startedAt, error: job.error,
+      res.json({ ok: true, job: { id: job.id, status: job.status, startedAt: job.startedAt, error: job.error,
         ...(job.result ? { dryRun: job.result.dryRun, pockets: job.result.pockets, traced: job.result.traced, imported: job.result.imported, texts: job.result.texts, rows: job.result.rows.slice(0, 100) } : {}) } });
     } catch (err) { fail(res, err); }
   });

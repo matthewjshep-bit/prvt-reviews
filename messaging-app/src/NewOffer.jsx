@@ -14,13 +14,13 @@ import { ASSET_TYPE_LABELS, MH_LAND, MH_LAND_LABELS, assetFromHomeType } from "@
 import { buildUnderwriteCalc, modelForAsset, runUnderwrite as runAnalyzer } from "@shared/underwrite-model.js";
 import { blankIncomeDeal } from "@shared/income-underwrite.js";
 import { blankLandDeal } from "@shared/land-underwrite.js";
-import { blankLotDeal } from "@shared/lot-underwrite.js";
+import { lotDealFromSubject } from "@shared/lot-underwrite.js";
 import {
   addContactNote, cancelUnderwrite, getContactDetail, getContactNotes, getOffer, getUnderwrite,
   ghlContactUrl, listDatarooms, listOffers, previewDocument, promoteDeal, publishOffer, runUnderwrite, brickedRead, saveDraft,
   saveOfferWorkspace, saveSettings, searchContacts, setOfferStatus, suggestAddresses, updateDataroom,
   updateOffer, zillowUrl,
-  requoteOffer, MAKE_CURRENT,
+  requoteOffer, MAKE_CURRENT, getLotTeardowns,
 } from "./api.js";
 import { LIVE as UW_LIVE, PHASE as UW_PHASE } from "./UnderwriteStrip.jsx";
 import CompsPane from "./CompsPane.jsx";
@@ -960,8 +960,14 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
   // The kind of house you picked (shared/asset-type.js), or null to go by
   // what Zillow said on the subject record. Kept in the workspace so a draft
   // reopens on it; a pick already saved on the offer is the starting point.
+  // A row in the luxury lane, whoever stamped it: auto-underwrite stamps the
+  // draft it held (by "underwrite") without an asset pick in its snapshot, so
+  // the lane is read off the row itself (2026-11-24: a held lot draft opened in
+  // the flip calculator). A pick saved without the lane means it was turned off.
+  const rowLuxury = restore?.asset?.lane === "luxury" && !(snap?.assetPick && snap.assetPick.lane !== "luxury");
   const [assetPick, setAssetPick] = useState(() => snap?.assetPick
     || (fromOffer?.asset?.by === "you" ? { type: fromOffer.asset.type, land: fromOffer.asset.land || "", ...(fromOffer.asset.lane ? { lane: fromOffer.asset.lane } : {}) } : null)
+    || (rowLuxury ? { type: "sfr", land: "", lane: "luxury" } : null)
     // A new offer on the Luxury page starts as a luxury lot (OfferApp.jsx startLane).
     || (!restore && startLane === "luxury" ? { type: "sfr", land: "", lane: "luxury" } : null));
   const zillowAsset = assetFromHomeType(subjectInfo?.homeType);
@@ -973,6 +979,8 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
   const [uwModel, setUwModel] = useState(() => {
     const m = snap?.model || fromOffer?.calc?.model;
     if (m === "income" || m === "land" || m === "lot") return m;
+    // A luxury lot is priced by the lot; comps only once the lane is turned off.
+    if (rowLuxury) return "lot";
     return !restore && startLane === "luxury" ? "lot" : "comps";
   });
   // The luxury teardown lane (shared/asset-type.js): a single-family house
@@ -995,9 +1003,19 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
   const incomeKind = assetType === "commercial" ? "commercial" : "multi_family";
   const dealKey = uwModel === "land" ? "land" : uwModel === "lot" ? "lot" : incomeKind;
   const uwDeal = uwModel === "comps" ? null
-    : uwDeals[dealKey] || (uwModel === "land" ? blankLandDeal() : uwModel === "lot" ? blankLotDeal() : blankIncomeDeal(incomeKind));
+    : uwDeals[dealKey] || (uwModel === "land" ? blankLandDeal() : uwModel === "lot" ? lotDealFromSubject(subjectInfo, { sqft: subjectSqft }) : blankIncomeDeal(incomeKind));
   const setUwDeal = (d) => setUwDeals((m) => ({ ...m, [dealKey]: d }));
   const uwBody = uwModel === "comps" ? undefined : { model: uwModel, deal: uwDeal };
+  // The sold teardowns the lot finder's pocket scan read around this house:
+  // comps Matt can add in the lot analyzer (never counted until he does).
+  const [lotSuggestions, setLotSuggestions] = useState(null);
+  const subjLat = Number(subjectInfo?.lat) || 0, subjLng = Number(subjectInfo?.lng) || 0;
+  useEffect(() => {
+    if (uwModel !== "lot" || !subjLat || !subjLng) { setLotSuggestions(null); return undefined; }
+    let live = true;
+    getLotTeardowns(subjLat, subjLng).then((r) => { if (live) setLotSuggestions(r?.comps?.length ? r : null); }).catch(() => {});
+    return () => { live = false; };
+  }, [uwModel, subjLat, subjLng]);
   // Comps for a mobile home are mobile homes (the pull keeps to houses otherwise).
   const compsHomeType = assetType === "manufactured" ? "MANUFACTURED" : assetType === "multi_family" ? "MULTI_FAMILY" : undefined;
   const [scope, setScope] = useState(snap?.scope || fromOffer?.scope || []); // applied rehab line items
@@ -1836,7 +1854,7 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
           fmtTyped={fmtTyped} />
       )}
       {uwModel === "lot" && (
-        <LotUnderwriter deal={uwDeal} setDeal={setUwDeal} run={uwRun}
+        <LotUnderwriter deal={uwDeal} setDeal={setUwDeal} run={uwRun} suggestions={lotSuggestions}
           asking={moneyNum(inputs.askingPrice)}
           priceOverride={inputs.priceOverride || ""} setPriceOverride={(v) => setInputs((s) => ({ ...s, priceOverride: v }))}
           fmtTyped={fmtTyped} />

@@ -2175,6 +2175,15 @@ export function icebreakerHouse(events = []) {
   return e ? { address: e.address, at: Date.parse(e.at || "") || 0 } : null;
 }
 
+// The street a lot owner was written about: the newest lot-finder text or
+// import on their timeline (the owner has no offer row to read it from).
+export async function lotOwnerStreet(store, locationId, contactId) {
+  const evs = (await store.listContactEvents?.(locationId, contactId, { types: [LOT_OWNER_EVENTS.queued, LOT_OWNER_EVENTS.sent, "import"], limit: 50 }).catch(() => [])) || [];
+  const hit = evs.filter((e) => e && String(e.address || "").trim() && (e.type !== "import" || e.source === "lot-finder"))
+    .sort((x, y) => String(y.at || "").localeCompare(String(x.at || "")))[0];
+  return hit ? String(hit.address).trim() : "";
+}
+
 // The first-text house for a contact, off their timeline.
 export async function firstTextHouse(store, locationId, contactId) {
   const evs = (await store.listContactEvents?.(locationId, contactId, { types: OUR_TEXT_EVENT_TYPES, limit: 50 }).catch(() => [])) || [];
@@ -2715,9 +2724,12 @@ export async function assembleConversation({
     /* an opt-out needs the party and nothing else */
   } else if (party === "agent") {
     context = await loadAgentContext({ store, locationId, contactId, custom, now, showMath: Boolean(config.parties.agent?.showMath), transcript: real, focusKinds: saved?.focusKinds,
-      // An owner on a lot: no range-only float, no "a person prices it" line — the
-      // first text already named the band, and the lot offer is the number.
+      // An owner on a lot: Matt prices every luxury lot by hand (2026-11-23), so
+      // the reply gate holds a draft that names or promises a number
+      // (numberByHand). No range-only float, and the agent-worded "a person
+      // prices it" line stays out: OWNER_PLAYBOOK says it to the owner.
       highStakes: lotOwner ? null : config.parties.agent?.realmCheck?.highStakes, mattPrices: lotOwner ? false : underwriteMode(saved) !== "full",
+      numberByHand: lotOwner ? true : underwriteMode(saved) !== "full",
       engineMode: underwriteMode(saved) === "engine" });
     if (lotOwner) context = { ...context, lane: "owner" };
     // The write-up terms' earnest money is a number the bot may say.
@@ -5170,12 +5182,14 @@ async function runReply(job, ctx) {
     at: new Date(now).toISOString(), source: "conversation", ref: job.id, dedupeKey: `reply_held:${job.id}`, data: { reason: String(reason).slice(0, 200) },
   }).catch(() => {});
 
-  // A homeowner on a lot answered: the finder stops writing to them, and the
-  // Desk says call now (shared/call-list.js call_lot_owner_replied) — whether
-  // the bot drafts a reply below or Matt has it off for owners.
+  // A homeowner on a lot answered: the finder stops writing to them, and Matt
+  // gets a Needs Matt ping to call (shared/slack-notify.js owner_answered) —
+  // whether the bot drafts a reply below or Matt has it off for owners. The
+  // event carries the street our first text was about, never their words.
   if (a.lotOwner) {
     await recordEvent({ store, locationId, contactId: job.contactId, party: LOT_OWNER_PARTY, type: LOT_OWNER_EVENTS.replied,
-      at: new Date(now).toISOString(), source: "conversation", ref: job.id, dedupeKey: `${LOT_OWNER_EVENTS.replied}:${job.id}`,
+      at: new Date(now).toISOString(), address: await lotOwnerStreet(store, locationId, job.contactId),
+      source: "conversation", ref: job.id, dedupeKey: `${LOT_OWNER_EVENTS.replied}:${job.id}`,
       data: { channel: job.channel || "sms", call: Boolean(isCall) } }).catch(() => {});
   }
   const handsOff = handsOffReason(a);

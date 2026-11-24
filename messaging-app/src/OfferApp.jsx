@@ -35,6 +35,7 @@ import AutopilotView from "./AutopilotView.jsx";
 import AgentsTab from "./AgentsTab.jsx";
 import GatekeepersTab from "./GatekeepersTab.jsx";
 import LotsTab from "./LotsTab.jsx";
+import OwnersAnswered from "./OwnersAnswered.jsx";
 import { isLuxuryLot } from "@shared/asset-type.js";
 
 // The Offers page is the agent-outreach book; a luxury lot lives on the Luxury
@@ -375,6 +376,8 @@ export default function OfferApp() {
           />
         )}
         {(view === "history" || view === "deals") && <LaneBreakerStrip />}
+        {/* Luxury: homeowners who answered a lot text and wait on Matt's call and number. */}
+        {APP_MODE === "luxury" && (view === "history" || view === "lots") && <OwnersAnswered />}
         {view === "history" && (
           <OffersHistory onEdit={(o) => { setEditing(o); setView("new"); }}
             onNew={(contactId) => { setEditing(null); setInitialContactId(contactId); setFormNonce((n) => n + 1); setView("new"); }}

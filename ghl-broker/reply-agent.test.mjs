@@ -9766,3 +9766,50 @@ test("the bot never recites the saved answer to are you a bot", () => {
   assert.match(p, /IDENTITY: if they ask whether you are a bot.*return an EMPTY reply, needsHuman true, humanReason "they asked if this is a bot"/);
   assert.match(p, /Never claim to be a person, never claim to be a bot/);
 });
+
+// Luxury lots (Matt, 2026-11-23: "don't price these, we will handle all
+// underwriting on luxury stuff"). A homeowner the lot finder texted has no
+// offer row, and the reply gate read "no row" as "the machine prices it", so a
+// draft promising a number later today went through clean. The owner's prompt
+// keeps the owner playbook and never takes the agent-worded pricing line.
+import { MATT_PRICES_LINE } from "./conversation-context.js";
+test("a lot owner's reply that promises a number is held", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["lot-owner", "lot-pocket-hillcrest"]);
+  const store = fakeStore();
+  let seen;
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: { ...SAVED, lotFinder: { bot: "draft" } }, store, contactId: "c1", message: "What would you pay for it?", channel: "sms",
+    deps: { draft: async (args) => { seen = args; return { ...DRAFT, intent: "question", propertyAddress: "",
+      reply: "Good question, I'll have a number for you later today." }; } },
+  });
+  await settle(); await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.autoSendable, false);
+  assert.match(d.flags.join(" · "), /no number yet/);
+  assert.equal(JSON.stringify(seen).includes(MATT_PRICES_LINE), false, "the agent-worded pricing line stays out of an owner's prompt");
+});
+
+// The Slack ping for an owner who answered names the street (shared/slack-notify.js
+// owner_answered), and the owner has no offer row to find it on: the reply
+// event carries the street our first text was about.
+test("a lot owner's answer is recorded with the street our first text asked about", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["lot-owner"]);
+  const store = fakeStore();
+  await store.appendContactEvents("LOC", "c1", [
+    { type: "import", at: "2026-11-20T18:00:00.000Z", address: "9 Old Mill Rd", source: "lot-finder", dedupeKey: "imp" },
+    { type: "lot_owner_queued", at: "2026-11-21T18:00:00.000Z", address: "4 Fenwick Ln", source: "lot-finder", dedupeKey: "q1", data: { step: "open" } },
+  ]);
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: { ...SAVED, lotFinder: { bot: "draft" } }, store, contactId: "c1", message: "Maybe, depends on the number", channel: "sms",
+    deps: { draft: async () => ({ ...DRAFT, intent: "question", propertyAddress: "", reply: "Fair enough. What would you need to see?" }) },
+  });
+  await settle(); await settle();
+  assert.equal(job.status, "done", job.error);
+  const replied = (await store.listContactEvents("LOC", "c1")).filter((e) => e.type === "lot_owner_replied");
+  assert.equal(replied.length, 1);
+  assert.equal(replied[0].address, "4 Fenwick Ln");
+  assert.equal(JSON.stringify(replied[0]).includes("depends on the number"), false, "never their words");
+});

@@ -640,9 +640,10 @@ export function callList({
   }
 
   /* 5zz. The lot finder (2026-11-23). A homeowner on a luxury lot answered
-   * our text: call them now, then again. The bot holds every reply from one,
-   * so this row is the only thing that answers them. Only the lot and what
-   * they need matter on the call, never the condition of the house. */
+   * our text: call them now, then again. The bot drafts a reply that waits
+   * for Matt (lotFinder.bot "draft", the default) and never names a number;
+   * Matt hears of it in Slack's #needs-matt (owner_answered). Only the lot and
+   * what they need matter on the call, never the condition of the house. */
   {
     const lotEvents = (events || []).filter((e) => e?.contactId && (e.type === "lot_owner_replied" || e.type === "lot_owner_sent"));
     for (const [c, list] of groupBy(lotEvents, (e) => e.contactId)) {
