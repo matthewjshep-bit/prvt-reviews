@@ -78,3 +78,12 @@ test("the luxury Deals tiles count only luxury deals, and the Offers ones leave 
   expect(offers.closed).toHaveLength(1);
   expect(dealsBook(all).active).toHaveLength(2);
 });
+
+test("uploading the signed assignment hands the deal back, so its checklist line ticks on screen", async () => {
+  const offer = { id: "o1", deal: deal({ checklist: { items: [] } }) };
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ ok: true, document: { id: "d1" }, documents: [{ id: "d1" }], offer }), { status: 200, headers: { "content-type": "application/json" } })));
+  const { uploadDealDoc } = await import("../api.js");
+  const r = await uploadDealDoc("o1", { name: "a.pdf", kind: "Assignment", data: "data:application/pdf;base64,AA==" });
+  expect(r.documents).toEqual([{ id: "d1" }]);
+  expect(r.offer).toEqual(offer);
+});

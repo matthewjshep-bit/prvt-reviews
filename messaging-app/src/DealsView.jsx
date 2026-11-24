@@ -360,7 +360,7 @@ const readAsDataUrl = (file) =>
 // & sale, addenda, title work, inspection reports. Fetched on open instead of
 // riding along on the deals list — most deals are never opened, and the list
 // endpoint is deliberately lean.
-function DealDocuments({ offerId }) {
+function DealDocuments({ offerId, onUpdated }) {
   const [docs, setDocs] = useState(null);
   const [kind, setKind] = useState(DOC_KINDS[0]);
   const [uploading, setUploading] = useState(null); // null | { done, total }
@@ -386,7 +386,9 @@ function DealDocuments({ offerId }) {
     const failed = [];
     for (const [i, file] of files.entries()) {
       try {
-        setDocs(await uploadDealDoc(offerId, { name: file.name, kind, data: await readAsDataUrl(file) }));
+        const r = await uploadDealDoc(offerId, { name: file.name, kind, data: await readAsDataUrl(file) });
+        setDocs(r.documents);
+        if (r.offer) onUpdated?.(r.offer);
       } catch (e) {
         failed.push(`${file.name} — ${e.message}`);
       }
@@ -1088,7 +1090,7 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
           </div>
           {/* Paperwork — generated documents, uploaded originals, stage history */}
           <div className="space-y-4">
-            <DealDocuments offerId={offer.id} />
+            <DealDocuments offerId={offer.id} onUpdated={onUpdated} />
 
             <div>
               <span className={labelCls}>Stage history</span>

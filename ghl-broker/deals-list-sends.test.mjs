@@ -75,3 +75,17 @@ test("both store backends count a deal's sends the same way", async () => {
   assert.equal(counts["no-such-offer"], undefined);
   assert.deepEqual(await store.dealSendCounts(LOC, []), {});
 });
+
+test("uploading the signed assignment ticks Assignment signed on screen: the upload answers with the deal", async () => {
+  const o = await mkDeal();
+  const pdf = Buffer.from("%PDF-1.4\nsigned\n%%EOF");
+  const up = await req("POST", `/api/offers/${o.id}/deal/documents`, {
+    name: "Assignment signed.pdf", kind: "Assignment", data: `data:application/pdf;base64,${pdf.toString("base64")}`,
+  });
+  assert.equal(up.status, 200);
+  assert.equal(up.json.documents.length, 1);
+  assert.ok(up.json.offer?.deal, "the response carries the updated offer");
+  const item = up.json.offer.deal.checklist.items.find((i) => i.doc === "Assignment");
+  assert.ok(item, "the checklist has an item the assignment ticks");
+  assert.equal(item.done, true);
+});

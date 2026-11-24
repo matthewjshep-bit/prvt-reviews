@@ -7907,7 +7907,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           await store.updateOffer(fresh.id, fresh);
         }
       }
-      res.json({ ok: true, document, documents: await store.listDealDocs(ctx.offer.id) });
+      // The deal comes back too (2026-11-23): the checklist line this upload
+      // ticked shows on screen without a reload, and the stage move's
+      // "still open" confirm reads the current list.
+      const offer = await store.getOffer(ctx.offer.id).catch(() => null);
+      res.json({ ok: true, document, documents: await store.listDealDocs(ctx.offer.id), ...(offer?.deal ? { offer } : {}) });
     } catch (err) { fail(res, err); }
   });
 
