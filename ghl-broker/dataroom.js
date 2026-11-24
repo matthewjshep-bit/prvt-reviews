@@ -64,7 +64,7 @@ export function inviteMessage({ room, invite, link }) {
   return (
     `${first ? `Hi ${first}, here's` : "Here's"} the package on ${street}` +
     (price > 0 ? ` (${fmtMoney(price)})` : "") + `:\n${link}\n` +
-    `Feel free to pass it along to a partner.`
+    `Send it to a partner too if they want a look.`
   );
 }
 
