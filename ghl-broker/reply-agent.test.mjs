@@ -9784,3 +9784,54 @@ test("the bot never recites the saved answer to are you a bot", () => {
   assert.match(p, /IDENTITY: if they ask whether you are a bot.*return an EMPTY reply, needsHuman true, humanReason "they asked if this is a bot"/);
   assert.match(p, /Never claim to be a person, never claim to be a bot/);
 });
+
+/* ---------- land we'd have turned down, a close-out on a house they handed us (2026-11-23 audit) ---------- */
+
+import { needsMattKind as needsMattKindOf } from "./shared/needs-matt.js";
+import { LANE_HOLD_FLAG } from "./shared/lane-holds.js";
+
+// R7 / neg-8: "That's outside our lane… not land development" went to an
+// agent whose land became a ~$4M contract only because Matt followed up.
+test("an agent who offers a buildable lot doesn't get 'outside our lane', the reply waits for Matt", async () => {
+  _resetJobs();
+  const { client, calls } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", sendsEnabled: true,
+    message: "I have a buildable lot on 14 Hazel Way in Bellevue, owner wants a quiet sale. Interested?",
+    deps: { draft: async () => ({ ...DRAFT, intent: "new_property", propertyAddress: "14 Hazel Way, Bellevue, WA 98004",
+      reply: "Appreciate you thinking of me. That's outside our lane, we're not land development. Got anything that needs work?" }) },
+  });
+  await settle(); await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.notEqual(d.status, "sent");
+  assert.notEqual(d.status, "scheduled");
+  assert.ok(d.flags.includes(LANE_HOLD_FLAG), d.flags.join(" | "));
+  assert.ok(!(d.actions || []).some((a) => a.type === "retire_unsent_offer"), "nothing closed on the house");
+  assert.ok(!calls.some(([m, p]) => m === "POST" && p === "/conversations/messages"), "nothing went to them");
+  assert.equal(needsMattKindOf({ kind: "draft_waiting", draftId: d.id, contactId: "c1" }, { draftsById: new Map([[d.id, d]]) }), "paper", "Needs Matt has it");
+});
+
+// R11: "Keep me in mind if anything rougher comes up" to an agent who had
+// just told us the roof and the foundation.
+test("an agent who tells us the roof and foundation are shot doesn't get the canned close-out", async () => {
+  _resetJobs();
+  const { client, calls } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const fixes = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", sendsEnabled: true,
+    message: "Roof is shot and the foundation has settled on 12 Elm.",
+    deps: { draft: async ({ fix } = {}) => { if (fix) fixes.push(fix); return { ...DRAFT, intent: "deal_available", propertyAddress: "12 Elm St",
+      reply: "Appreciate it. Keep me in mind if anything rougher comes up." }; } },
+  });
+  await settle(); await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.notEqual(d.status, "sent");
+  assert.notEqual(d.status, "scheduled");
+  assert.ok(d.flags.some((f) => /brushes off a house they handed us/.test(f)), d.flags.join(" | "));
+  assert.ok(fixes.length <= 1, "one rewrite at most, asking for the details");
+  assert.ok(!calls.some(([m, p]) => m === "POST" && p === "/conversations/messages"), "nothing went to them");
+});

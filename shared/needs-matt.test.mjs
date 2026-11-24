@@ -429,3 +429,16 @@ test("a seller's terms on an agreed price land in Needs Matt even when the bot p
   const chat = { ...sent, inbound: "Free after 4 if you want to talk" };
   assert.equal(needsFrom({ offers, sentDrafts: [chat], recentDrafts: [chat], events }).get("qa"), undefined);
 });
+
+// The 2026-11-23 audit (shared/lane-holds.js): a reply held for turning down
+// land, or for a canned close-out on a house they handed us, is Matt's.
+test("a reply held for turning down a lot lands in Needs Matt with why", async () => {
+  const { LANE_HOLD_FLAG } = await import("./lane-holds.js");
+  const d = { id: "d-lot", party: "agent", status: "draft", intent: "new_property", flags: [LANE_HOLD_FLAG], createdAt: "2026-11-20T18:00:00Z", propertyAddress: "14 Hazel Way, Bellevue, WA 98004" };
+  const needs = needsMattByContact([{ kind: "draft_waiting", contactId: "c-lot", draftId: d.id, address: d.propertyAddress }], { drafts: [d], now: Date.parse("2026-11-20T19:00:00Z") });
+  const n = needs.get("c-lot");
+  assert.equal(n.kind, "paper");
+  assert.match(n.why, /offered land, a lot, a teardown or a multi-unit on 14 Hazel Way/);
+  // Sent or dismissed, it's done.
+  assert.equal(needsMattByContact([{ kind: "draft_waiting", contactId: "c-lot", draftId: d.id }], { drafts: [{ ...d, status: "dismissed" }] }).size, 0);
+});

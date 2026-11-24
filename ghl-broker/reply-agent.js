@@ -148,6 +148,7 @@ import { quoteGateFlags, awaitingReprice, otherAgentsNumber, typedAboveBook } fr
 import { sellerOwnNumber, workAfterPricing } from "./shared/number-stance.js";
 import { repriceStaleRow } from "./price-v2.js";
 import { numberTimeFlags, callPromiseFlags, inventedPeopleFlags, contactClaimFlags, sentOfferFlags, claimGateInputs, CALL_OWED_FLAG, CLAIMS_EMAIL_RX } from "./shared/reply-claims.js";
+import { laneHoldFlags, closeOutFlags, LANE_HOLD_RX, CLOSE_OUT_RX } from "./shared/lane-holds.js";
 // Passes, goodbyes and what the bot says about us (the 2026-11-09 audit).
 import { notTheirNumber, NEXT_ONE_QUESTION, nextOneAskedToday } from "./shared/flip-read.js";
 import { asksIfWholesaler, wholesaleFlags, wholesaleAskLine, formsFlags, formsStateOf, WHOLESALE_ASK_FLAG } from "./shared/partner-terms.js";
@@ -1268,6 +1269,14 @@ export function evaluateReplyGates({
   // Their wholesale question is Matt's, and a reply never denies we wholesale
   // or assign; an Oregon house is written on OREF forms (shared/partner-terms.js).
   flags.push(...wholesaleFlags({ reply: draft.reply, party, asked: draft.asksWholesale }));
+  // The 2026-11-23 audit (shared/lane-holds.js): the bot never turns down
+  // land, a lot, a teardown, a multi-unit or a development site (one became
+  // a ~$4M contract only because Matt overrode it), and never sends a canned
+  // close-out to a text that handed us a house. Only adds a hold.
+  if (party === "agent") {
+    flags.push(...laneHoldFlags({ reply: draft.reply, inbound: inboundMessage }));
+    flags.push(...closeOutFlags({ reply: draft.reply, inbound: inboundMessage, address: draft.propertyAddress }));
+  }
   flags.push(...formsFlags(draft.reply, { state: formsState }));
   // They asked whether this is a bot (shared/check-in.js, 2026-11-09): Matt
   // answers that, never the machine. Only adds a hold.
@@ -1344,6 +1353,9 @@ export async function redraftOnGate({ draft, gate, gateFor, config = null, redra
   // A call we promised and never made (shared/reply-claims.js): the agent is
   // waiting on Matt's call, and a rewrite that drops the promise only hides it.
   if (tripped.includes(CALL_OWED_FLAG)) return { draft, gate };
+  // Land, a lot, a teardown, a multi-unit or a development site we turned
+  // down (shared/lane-holds.js): Matt looks at it; a rewrite only hides it.
+  if (tripped.some((f) => LANE_HOLD_RX.test(f))) return { draft, gate };
   const again = await Promise.resolve().then(() => redraft(tripped)).catch(() => null);
   if (!String(again?.reply || "").trim()) return { draft: { ...draft, redraftHeld: { for: tripped, flags: ["the redraft came back empty"] } }, gate };
   const next = { ...draft, reply: again.reply, redraftedFor: tripped, replyBeforeRedraft: draft.reply };
@@ -6111,7 +6123,10 @@ async function runReply(job, ctx) {
   // underwrite stops (threadPassed), and an unsent offer on it is closed.
   // Never on a yes (2026-10-15): a reply that turns down a house they just
   // said yes on is the bot's mistake, not our decision.
-  const replyPassed = (bankSalePass && !yesAfterPass) || (party === "agent" && !qualifyHeld && !numberFirst && !notOurKind && !yesAfterPass
+  // A pass the gates hold for Matt (land we'd have turned down, a canned
+  // close-out on a house they handed us) closes nothing: he looks first.
+  const passHeldForMatt = (gate.flags || []).some((f) => LANE_HOLD_RX.test(f) || CLOSE_OUT_RX.test(f));
+  const replyPassed = (bankSalePass && !yesAfterPass && !passHeldForMatt) || (party === "agent" && !qualifyHeld && !numberFirst && !notOurKind && !yesAfterPass && !passHeldForMatt
     && ["deal_available", "new_property"].includes(draft.intent) && (photosPass || ourReplyPasses(draft.reply))
     && !saysYes(job.originalMessage || job.message) && !askedAfterPass);
   if (replyPassed) {
