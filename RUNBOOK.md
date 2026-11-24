@@ -9647,7 +9647,13 @@ buyers alike:
   the market" (refuses every deal) (`ownWords` in shared/buybox.js). "No
   rehabs over 100k" is a limit, not a no. A deal we can't tell is a fixer
   abstains, and so does a full gut: it's the house read as a builder's, and
-  "land and teardowns, no rehabs" doesn't keep a builder off it. Holding on the investor read's "buying now?" column is a
+  "land and teardowns, no rehabs" doesn't keep a builder off it.
+- (2026-11-23) A builder the book knows only as one who builds (every type
+  held for them is new construction: a `dispo-type-new-construction` tag, a
+  `builder` tag, found off permits) and whose buy box names no rehab
+  appetite isn't sent a house to fix ("they build: lots and teardowns only").
+  Lots, land and a full gut still go to them. "Hold off" and "maxed out" in
+  their saved words read as not buying, like "on hold". Holding on the investor read's "buying now?" column is a
   separate call for Matt and isn't built.
 
 **Who was left off, and why.** `GET /waves/preview` returns `leftOff`: each

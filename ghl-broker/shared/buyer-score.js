@@ -139,6 +139,8 @@ export function buyerDealbreakers(exclusions = "") {
   };
 }
 const SITE_NO = { busy_road: "busy streets", backs_commercial: "commercial next door", railroad: "rail lines" };
+// Why a builder-only buyer isn't sent a fixer (rankForDeal).
+export const BUILDS_ONLY = "they build: lots and teardowns only";
 
 /** isManufacturedTarget(target) → true for a mobile home deal, whose waves go by who buys them, not by city. */
 export const isManufacturedTarget = (t) => t?.asset?.type === "manufactured";
@@ -242,12 +244,19 @@ export function rankForDeal(i = {}, t = {}, { now = Date.now() } = {}) {
   const breakers = buyerDealbreakers(b.exclusions);
   const siteHit = (t.site || []).filter((k) => breakers.site.includes(k));
   const words = ownWordsRefuse(breakers, { rehabDeal: t.rehabDeal ?? null });
+  // A builder the book knows only as one who builds (audit, 2026-11-23,
+  // NL5): every type we hold for them is new construction (a
+  // dispo-type-new-construction tag, a "builder" tag, found off permits) and
+  // their own buy box names no rehab appetite. A house to fix isn't theirs;
+  // a lot, land and a full gut are (rehabDeal false or null).
+  const buildsOnly = t.rehabDeal === true && (mk.types || []).length > 0
+    && mk.types.every((x) => x === "new-construction") && !b.rehabAppetite;
   const dealbreaker = breakers.notBuying ? words
     : refused ? refused
     : siteHit.length ? `they said no ${siteHit.map((k) => SITE_NO[k] || k).join(" or ")}`
     : t.island && breakers.island ? "they don't do islands"
     : t.onMarket && breakers.offMarketOnly ? "they want off-market only"
-    : words;
+    : words || (buildsOnly ? BUILDS_ONLY : null);
   if (dealbreaker) reasons.push(`won't take it (${dealbreaker})`);
 
   // Someone we are actually talking to (shared/talked-to.js) — Matt,

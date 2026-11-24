@@ -228,6 +228,9 @@ const NOT_BUYING_RX = [
   /\b(?:buying\s+(?:is\s+)?)?on\s+hold\b/i,
   /\bpaus(?:ed|ing)\b/i,
   /\btaking\s+a\s+break\b/i,
+  // "hold off for now", "maxed out until we sell" (audit, 2026-11-23, NL5).
+  /\bhold(?:ing)?\s+off\b/i,
+  /\bmaxed\s+out\b/i,
   /\b(?:not|out\s+of)\s+(?:in\s+)?the\s+market\b(?!\s+for\b)/i,
 ];
 
