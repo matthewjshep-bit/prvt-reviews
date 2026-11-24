@@ -1,103 +1,10 @@
-// work-queue.js — the order Today's rows are worked in, and what each row
-// points at. Pure, so the rail, the pane and the keys agree, and the tests
-// can pin it without a browser.
-//
-// The order is the one the old list rendered: Your call, then Stuck, then
-// The machine is on it; inside each, kind by kind in ACTION_KINDS order
-// (then the audit's), and the builder's own order within a kind.
+// work-queue.js — what a work-pane row points at, its keys, and the all-in
+// ratio. Pure, so the pane, the companion and the tests agree. The Desk's
+// rail order and groups went with the Desk (retired 2026-10-20; the code,
+// 2026-11-23).
 
-import { ACTION_GROUPS, ACTION_KINDS } from "@shared/pipeline.js";
-import { AUDIT_ACTION_KINDS } from "@shared/conversation-audit.js";
-import { DESK_SECTIONS, TODAY_SECTIONS, GHL_CALLS_EMPTY } from "@shared/desk.js";
-import { CALL_KINDS } from "@shared/call-list.js";
 import { annotateCurrent, houseKey } from "@shared/current-offer.js";
 import { OPEN_STATUSES, effectiveStatus } from "@shared/offer-status.js";
-
-export const GROUP_ORDER = ["yours", "stuck", "machine"];
-export const ALL_KINDS = [...ACTION_KINDS, ...AUDIT_ACTION_KINDS, ...CALL_KINDS];
-const KIND_RANK = Object.fromEntries(ALL_KINDS.map((k, i) => [k.key, i]));
-export const KIND_LABEL = Object.fromEntries(ALL_KINDS.map((k) => [k.key, k.label]));
-export const GROUP_LABEL = Object.fromEntries(ACTION_GROUPS.map((g) => [g.key, g.label]));
-
-// The rail's groups. The Desk (shared/desk.js) sends Call · Decide · Machine
-// with its rows; a broker that predates it sends the three old groups.
-const GROUP_HINT = { yours: "Decisions only you make.", stuck: "The machine tried and couldn't.", machine: "Already moving." };
-// `field` is the row field a group set reads: the old groups read `group`,
-// the Desk's read `section`.
-export const TODAY_GROUPS = GROUP_ORDER.map((key) => ({ key, field: "group", label: GROUP_LABEL[key], hint: GROUP_HINT[key], folds: key === "machine",
-  ...(key === "yours" ? { empty: "Nothing is waiting on you." } : {}) }));
-// Today: "Needs you" (Matt, 2026-10-13: only urgent work only he can do), then
-// "Today's calls" (2026-10-15: the day's best calls, at most ten).
-export const DESK_GROUPS = TODAY_SECTIONS.map((s) => ({ ...s, field: "section", empty: s.empty || "Nothing needs you right now." }));
-// With calls going to GHL's Manual Actions (desk.ghlCalls, 2026-10-15),
-// Today's calls says where they went when it's empty.
-export const deskGroupsFor = (desk) => (desk?.ghlCalls?.on ? DESK_GROUPS.map((g) => (g.key === "call" ? { ...g, empty: GHL_CALLS_EMPTY } : g)) : DESK_GROUPS);
-export const SECTION_LABEL = { ...GROUP_LABEL, ...Object.fromEntries(DESK_SECTIONS.map((s) => [s.key, s.label])) };
-
-// Which group a row is in. An action with no group (an older broker) is
-// yours; a row in none of the set's groups lands in its first.
-export const groupOf = (a, groups = TODAY_GROUPS) => {
-  const set = groups?.length ? groups : TODAY_GROUPS;
-  const k = a?.[set[0].field || "section"];
-  return set.some((g) => g.key === k) ? k : set[0].key;
-};
-
-/**
- * orderRows(actions, groups?) → actions, in the order they are worked.
- * With the Desk's groups: section by section, in the order the broker
- * ranked them (shared/desk.js foldDesk).
- */
-export function orderRows(actions = [], groups = null) {
-  if (groups?.length && groups !== TODAY_GROUPS) {
-    const rank = Object.fromEntries(groups.map((g, i) => [g.key, i]));
-    return (actions || []).map((a, i) => ({ a, i }))
-      .sort((x, y) => rank[groupOf(x.a, groups)] - rank[groupOf(y.a, groups)] || x.i - y.i)
-      .map(({ a }) => a);
-  }
-  return (actions || [])
-    .map((a, i) => ({ a, i }))
-    .sort((x, y) => GROUP_ORDER.indexOf(groupOf(x.a)) - GROUP_ORDER.indexOf(groupOf(y.a))
-      || (KIND_RANK[x.a.kind] ?? 999) - (KIND_RANK[y.a.kind] ?? 999)
-      || x.i - y.i)
-    .map(({ a }) => a);
-}
-
-/**
- * rowFor(list, id) → the row with that id, or the Desk row that folds a
- * reason with that id (an old ?row= link, or a person whose lead changed).
- */
-export function rowFor(list = [], id) {
-  if (!id) return null;
-  return list.find((r) => r.id === id) || list.find((r) => (r.reasonIds || []).includes(id)) || null;
-}
-
-/** reasonsOf(row) → the row and every reason folded into it: the ones shown and the ones it repeats. */
-export const reasonsOf = (row) => [row, ...(row?.also || []), ...(row?.quiet || [])].filter(Boolean);
-
-/** neighborId(list, id, dir) → the id one step away (dir +1 / -1), or null at an end. */
-export function neighborId(list = [], id, dir = 1) {
-  const i = list.findIndex((r) => r.id === id);
-  if (i < 0) return list[0]?.id ?? null;
-  return list[i + dir]?.id ?? null;
-}
-
-/**
- * nextAfterRemoval(prevList, nextList, id) → id
- *
- * After a refresh: the same row if it is still there; if it was resolved,
- * the row that came after it (or, at the end, the one before it); the first
- * row when nothing else fits.
- */
-export function nextAfterRemoval(prevList = [], nextList = [], id) {
-  const still = new Set(nextList.map((r) => r.id));
-  if (id && still.has(id)) return id;
-  const i = prevList.findIndex((r) => r.id === id);
-  if (i >= 0) {
-    for (let j = i + 1; j < prevList.length; j++) if (still.has(prevList[j].id)) return prevList[j].id;
-    for (let j = i - 1; j >= 0; j--) if (still.has(prevList[j].id)) return prevList[j].id;
-  }
-  return nextList[0]?.id ?? null;
-}
 
 const INVESTOR_KINDS = new Set(["deal_no_buyers", "blast_no_opens", "deal_interest_stalled", "deal_no_dataroom", "investor_price_agreed", "closing_soon", "showing_soon"]);
 const OPEN_DRAFT = new Set(["draft", "scheduled"]);
@@ -160,18 +67,7 @@ export function defaultOfferFor(offers = [], address = "") {
 // The Teach control's row id. A draft row is taught under its draft (the
 // same key the outbox uses), every other row under its own id.
 export const DRAFT_ROW_KINDS = new Set(["draft_waiting", "draft_scheduled"]);
-// Every row can be dismissed from its header, except the two that already
-// carry a Dismiss of their own: a draft (the composer bins it) and an owed
-// promise (it asks why, for the coach).
-export const canDismissRow = (item) => Boolean(item?.id) && !DRAFT_ROW_KINDS.has(item.kind) && !(item.ops || []).some((o) => o.key === "dismiss_promise");
-
 export const teachRowId = (item) => (DRAFT_ROW_KINDS.has(item?.kind) && item.draftId ? `draft:${item.draftId}` : item?.id);
-
-/** What the rail calls a row: the street, else the person, else the title. */
-export function railLabel(item) {
-  const street = String(item?.address || "").split(",")[0].trim();
-  return street || item?.contactName || item?.title || "Untitled";
-}
 
 /**
  * keyIntent(e) → "next" | "prev" | "reply" | "teach" | "offer" | "dismiss" | "help" | null
@@ -200,10 +96,6 @@ export function keyIntent(e) {
 // Put words in the work pane's reply box — the bot's draft or the hand
 // reply, whichever is showing — for a person to read and Send. detail: { text }.
 export const COMPOSE_EVENT = "work-compose";
-
-export const KEYS_HELP = [
-  ["J  ↓", "next row"], ["K  ↑", "previous row"], ["R", "reply"], ["T", "feedback for the bot"], ["O", "edit the offer"], ["D", "dismiss the row"], ["⌘ ↵", "send what you typed"], ["?", "these keys"],
-];
 
 /**
  * allInPct({ price, repairs, arv }) → number | null

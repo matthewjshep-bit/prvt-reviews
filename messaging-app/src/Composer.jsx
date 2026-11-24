@@ -47,8 +47,8 @@ export function DraftComposer({ draft: d, sendsEnabled, serverOffsetMs = 0, onDo
     return () => clearInterval(t);
   }, [scheduled]);
 
-  // The Desk's counter answers write here (COMPOSE_EVENT): the words replace
-  // the draft's, and wait for Send like any edit.
+  // Hold under a counter (OfferPanel CounterAnswers) writes here
+  // (COMPOSE_EVENT): the words replace the draft's, and wait for Send like any edit.
   useEffect(() => {
     const onCompose = (e) => { if (e?.detail?.text) { setText(String(e.detail.text)); setError(""); if (textareaId) document.getElementById(textareaId)?.focus(); } };
     window.addEventListener(COMPOSE_EVENT, onCompose);

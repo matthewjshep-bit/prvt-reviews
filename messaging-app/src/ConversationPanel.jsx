@@ -35,7 +35,8 @@ export function HandReply({ contactId, offerId, name, sendsEnabled, onSent }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState(null);   // { tone, text }
-  // The Desk's counter answers write here (COMPOSE_EVENT); nothing sends until Send.
+  // Hold under a counter (OfferPanel CounterAnswers) writes here
+  // (COMPOSE_EVENT); nothing sends until Send.
   useEffect(() => {
     const onCompose = (e) => { if (e?.detail?.text) { setText(String(e.detail.text)); setNote(null); document.getElementById(REPLY_BOX_ID)?.focus(); } };
     window.addEventListener(COMPOSE_EVENT, onCompose);
