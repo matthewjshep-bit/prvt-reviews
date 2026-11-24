@@ -54,6 +54,8 @@ import NextFollowUp, { groupNext, nextSortKey } from "./NextFollowUp.jsx";
 import { TABS, SUBS, OTHER, ALL_VIEWS, viewFor, defaultTab, tabOf, notSentAge, waitingSince } from "./offer-tabs.js";
 import PipelineStrip from "./PipelineStrip.jsx";
 import { attachNeeds, needsCounts } from "./needs-view.js";
+import { MAX_CONTACT_REREADS, mergeLean } from "./offers-refresh.js";
+import { useLightPoll } from "./light-poll.js";
 import {
   ActivityStamp, AiPill, AttachWarning, BTN, BTN_ICON, BTN_PRIMARY, EmptyState, ErrorBar, FilterChips, KpiRow, Menu, NeedsPill,
   SearchInput, SkeletonRows, SortHeader, StatusDots, StatusMenu, TableCard, passNoteLine,
@@ -292,6 +294,20 @@ export default function OffersHistory({ onNew = null, onDeal, settings: appSetti
       });
     } catch { /* the column says "updates on reload" until then */ }
   }
+  // Every few minutes while the tab shows, the light re-read (offers-
+  // refresh.js): what the bot changed shows without a reload, and What's
+  // next is re-read for the few agents whose rows moved, one at a time.
+  const offersRef = useRef(null);
+  offersRef.current = offers;
+  useLightPoll(async () => {
+    if (!offersRef.current) return;
+    const fresh = await listOffers({ limit: 2000, lean: true });
+    if (!Array.isArray(fresh) || !offersRef.current) return;
+    const { rows, contacts } = mergeLean(offersRef.current, fresh);
+    setOffers(rows);
+    for (const c of contacts.slice(0, MAX_CONTACT_REREADS)) await refreshRef.current(c);
+  }, { enabled: offers !== null });
+
   // An offer saved anywhere — the editor in this window or another — lands in
   // its agent's rows as it's typed.
   const refreshRef = useRef(refreshContact);
