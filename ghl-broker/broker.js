@@ -50,6 +50,7 @@ import { maybeSweepCalls } from "./call-intake.js";
 import { maybeRunGhlCalls } from "./ghl-calls.js";
 import { maybeRunGhlPings } from "./ghl-pings.js";
 import { maybeRunSlack, maybeRunSlackEvents } from "./slack-notify.js";
+import { maybeRunKeyHealth } from "./key-health.js";
 import { maybeRunNeedsMatt } from "./needs-matt.js";
 import { maybeRunDeliveryWatch } from "./delivery-watch.js";
 import { recordError } from "./app-errors.js";
@@ -263,6 +264,16 @@ const TICK_JOBS = [
   { area: "enrich", run: async ({ client, locationId, saved }) => {
     // Awaited: it is async, and an un-awaited rejection escaped the tick.
     if (await maybeStartNightlySweep({ client, locationId, saved, store, utcHour: SWEEP_UTC_HOUR })) console.log(`nightly enrich sweep started for ${locationId}`);
+  } },
+  // The paid keys (key-health.js, 2026-11-23): one free read each from 7am
+  // Pacific, hourly while one is rejected. First, so the underwrite retry
+  // and #machine read today's answer. Off until keyHealth.enabled.
+  { area: "key-health", run: async ({ locationId, saved }) => {
+    const r = await maybeRunKeyHealth({ locationId, saved, store });
+    if (r?.keys) {
+      const rejected = Object.entries(r.keys).filter(([, k]) => k.ok === false).map(([name]) => name);
+      if (rejected.length) console.log(`key check for ${locationId}: rejected ${rejected.join(", ")}`);
+    }
   } },
   // The follow-up clock rides the same tick rather than a third timer: it is
   // a once-a-day decision with the same gates. What it decides lands in the

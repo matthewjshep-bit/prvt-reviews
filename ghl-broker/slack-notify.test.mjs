@@ -786,3 +786,169 @@ test("an agent who asks for a call is one ping in Needs Matt, with their first n
   await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(3) });
   assert.equal(s.of("chat.postMessage").length, 1, "told once");
 });
+
+/* ---------- the jobs that bring in business (2026-11-23 audit, AH-5) ---------- */
+
+// Tuesday 2026-11-17 in Pacific time.
+const TUE = (hh, mm = 0) => Date.parse(`2026-11-17T${String(hh + 8).padStart(2, "0")}:${String(mm).padStart(2, "0")}:00Z`);
+const SWEEP_ON = { ...ON, rentcastApiKey: "rc-test", outreachAutopilot: { enabled: true, hour: 9 } };
+
+test("a switched-on outreach sweep that hasn't run by 1pm is reported late", async () => {
+  const LOC = "loc-outreach-missed";
+  const s = slack();
+  // Monday's run finished; on Tuesday the tick missed the 9am start.
+  const monday = new Date(TUE(9) - 86400000).toISOString();
+  await store.setJobCursor(LOC, "outreach", { at: monday, doc: { lastDaily: monday, tries: 1, last: { status: "done", finishedAt: monday } } });
+  await runSlackPings({ store, locationId: LOC, saved: SWEEP_ON, deps: noPipeline, now: TUE(12, 30) });
+  assert.equal(machinePosts(s).length, 0, "before 1pm it may still run");
+  await runSlackPings({ store, locationId: LOC, saved: ON, deps: noPipeline, now: TUE(13, 15) });
+  assert.equal(machinePosts(s).length, 0, "switched off, never");
+  await runSlackPings({ store, locationId: LOC, saved: SWEEP_ON, deps: noPipeline, now: TUE(13, 15) });
+  assert.equal(machinePosts(s).length, 1);
+  assert.match(said(machinePosts(s)[0]), /<@U012MATT34> Agent sweep: no finished run by 1pm today.*the day's run never started/);
+  await runSlackPings({ store, locationId: LOC, saved: SWEEP_ON, deps: noPipeline, now: TUE(14) });
+  assert.equal(machinePosts(s).length, 1, "once a day");
+});
+
+test("an outreach sweep that finished its run today is never reported as missed", async () => {
+  const LOC = "loc-outreach-ran";
+  const s = slack();
+  const ran = new Date(TUE(9, 30)).toISOString();
+  await store.setJobCursor(LOC, "outreach", { at: new Date(TUE(9)).toISOString(), doc: { lastDaily: new Date(TUE(9)).toISOString(), tries: 1, last: { status: "done", finishedAt: ran } } });
+  await runSlackPings({ store, locationId: LOC, saved: SWEEP_ON, deps: noPipeline, now: TUE(13, 15) });
+  assert.equal(machinePosts(s).length, 0);
+});
+
+test("a lot finder run that fails is told in #machine", async (t) => {
+  const LOC = "loc-lot-fail";
+  const s = slack();
+  const { startLotFinder } = await import("./lot-finder.js");
+  const LOTS = { ...ON, lotFinder: { enabled: true, pockets: [{ id: "p1", name: "Test pocket", lat: 47.6, lng: -122.2 }] } };
+  // The owners' read throws, as a provider refusing the key would.
+  const failing = Object.create(store);
+  failing.listLotOwners = async () => { throw new Error("property search: HTTP 401 invalid api key"); };
+  // The error is kept at the clock's time: Tuesday morning, as in production.
+  t.mock.timers.enable({ apis: ["Date"], now: TUE(10) });
+  const job = startLotFinder({ locationId: LOC, saved: LOTS, store: failing, now: TUE(10), trigger: "daily" });
+  await job.done;
+  t.mock.timers.reset();
+  assert.equal(job.status, "error");
+  const errs = await store.listAppErrorsSince(LOC, new Date(TUE(10) - 3600000).toISOString(), { limit: 10 });
+  assert.ok(errs.some((e) => e.area === "lot-finder"), "kept as an error, not only on the cursor");
+  await runSlackPings({ store, locationId: LOC, saved: LOTS, deps: noPipeline, now: TUE(10, 5) });
+  const posts = machinePosts(s).map(said);
+  assert.ok(posts.some((t) => /Lot finder\* failed its last run/.test(t)), posts.join("\n"));
+  assert.ok(posts.every((t) => /<@U012MATT34>/.test(t)), "a revenue lane on a rejected key: @Matt");
+});
+
+/* ---------- failures that stop the business @Matt (2026-11-23 audit, AH-6) ---------- */
+
+test("a rejected key in the underwriter is told to Matt by name every day it lasts, never with a contact", async () => {
+  const LOC = "loc-stopper-err";
+  const s = slack();
+  const DAY = 86400000;
+  await recordError(store, { locationId: LOC, area: "underwrite", err: new Error("Zillow comps lookup failed (Apify 401)"), context: { contactId: "c-77" }, now: TUE(9) });
+  await runSlackPings({ store, locationId: LOC, saved: ON, deps: noPipeline, now: TUE(9, 5) });
+  assert.equal(machinePosts(s).length, 1);
+  assert.match(said(machinePosts(s)[0]), /<@U012MATT34> New error in \*underwrite\*/);
+  await recordError(store, { locationId: LOC, area: "underwrite", err: new Error("Zillow comps lookup failed (Apify 401)"), now: TUE(11) });
+  await runSlackPings({ store, locationId: LOC, saved: ON, deps: noPipeline, now: TUE(11, 5) });
+  assert.equal(machinePosts(s).length, 1, "once a day");
+  await recordError(store, { locationId: LOC, area: "underwrite", err: new Error("Zillow comps lookup failed (Apify 401)"), now: TUE(9) + DAY });
+  await runSlackPings({ store, locationId: LOC, saved: ON, deps: noPipeline, now: TUE(9, 5) + DAY });
+  assert.equal(machinePosts(s).length, 2, "the next day it's said again");
+  assert.match(said(machinePosts(s)[1]), /<@U012MATT34> Still failing in \*underwrite\*/);
+  assert.doesNotMatch(machinePosts(s).map(said).join("\n"), /c-77/);
+  // The strip's list (routes/dashboard.js /machine) carries it too.
+  const trouble = await store.getJobCursor(LOC, "machineTrouble");
+  assert.equal(trouble.doc.stoppers.length, 1);
+  assert.match(trouble.doc.stoppers[0].text, /Errors in underwrite: Zillow comps lookup failed \(Apify 401\)/);
+});
+
+test("a switched-on revenue job that failed twice today @mentions Matt; a switched-off one doesn't", async () => {
+  const LOC = "loc-stopper-job";
+  const s = slack();
+  const at = new Date(TUE(10)).toISOString();
+  await store.setJobCursor(LOC, "followUp", { at, doc: { lastDaily: at, tries: 2, failed: true, error: "GHL timed out", last: { finishedAt: at, status: "error", error: "GHL timed out" } } });
+  await runSlackPings({ store, locationId: LOC, saved: ON, deps: noPipeline, now: TUE(10, 5) });
+  assert.equal(machinePosts(s).length, 1);
+  assert.doesNotMatch(said(machinePosts(s)[0]), /<@U012MATT34>/, "the follow-up sweep is off: told, not a stopper");
+  const LIVE = { ...ON, aiApiKey: "sk-test", conversationAi: { enabled: true }, outreachAutopilot: { introEmail: { enabled: true } } };
+  const LOC2 = "loc-stopper-job-on";
+  await store.setJobCursor(LOC2, "followUp", { at, doc: { lastDaily: at, tries: 2, failed: true, error: "GHL timed out", last: { finishedAt: at, status: "error", error: "GHL timed out" } } });
+  await runSlackPings({ store, locationId: LOC2, saved: LIVE, deps: noPipeline, now: TUE(10, 5) });
+  assert.equal(machinePosts(s).length, 2);
+  assert.match(said(machinePosts(s)[1]), /<@U012MATT34> \*Follow-up sweep\* failed its last run \(try 2\)/);
+});
+
+// AH-1: a rejected paid key is an @Matt line the first day and every day it lasts.
+test("a rejected Apify key is told to Matt in #machine every day until it's fixed", async () => {
+  const LOC = "loc-key-line";
+  const s = slack();
+  const DAY = 86400000;
+  const since = new Date(TUE(7)).toISOString();
+  const KEYS = { ...ON, keyHealth: { enabled: true } };
+  await store.setJobCursor(LOC, "keyHealth", { at: since, doc: { keys: { apify: { ok: false, status: 401, failingSince: since, checkedAt: since } } } });
+  await runSlackPings({ store, locationId: LOC, saved: KEYS, deps: noPipeline, now: TUE(7, 15) });
+  await runSlackPings({ store, locationId: LOC, saved: KEYS, deps: noPipeline, now: TUE(9) });
+  assert.equal(machinePosts(s).length, 1);
+  assert.match(said(machinePosts(s)[0]), /<@U012MATT34> Zillow comps key \(Apify\) rejected since today \(HTTP 401\)/);
+  const nextRead = new Date(TUE(7, 10) + DAY).toISOString();
+  await store.setJobCursor(LOC, "keyHealth", { at: nextRead, doc: { keys: { apify: { ok: false, status: 401, failingSince: since, checkedAt: nextRead } } } });
+  await runSlackPings({ store, locationId: LOC, saved: KEYS, deps: noPipeline, now: TUE(7, 15) + DAY });
+  assert.equal(machinePosts(s).length, 2);
+  assert.match(said(machinePosts(s)[1]), /rejected since Tue/);
+  const fixedRead = new Date(TUE(7, 10) + 2 * DAY).toISOString();
+  await store.setJobCursor(LOC, "keyHealth", { at: fixedRead, doc: { keys: { apify: { ok: true, checkedAt: fixedRead } } } });
+  await runSlackPings({ store, locationId: LOC, saved: KEYS, deps: noPipeline, now: TUE(7, 15) + 2 * DAY });
+  assert.equal(machinePosts(s).length, 2, "fixed: quiet");
+});
+
+// Review, 2026-11-23: the key lines read the cursor whatever the switch and
+// however old the read, so a key rejected before the check was switched off
+// (or stopped) was @Matt every day for good, even once fixed.
+test("a rejected key the check no longer reads is not told again", async () => {
+  const LOC = "loc-key-line-off";
+  const s = slack();
+  const DAY = 86400000;
+  const at = new Date(TUE(7)).toISOString();
+  await store.setJobCursor(LOC, "keyHealth", { at, doc: { keys: { apify: { ok: false, status: 401, failingSince: at, checkedAt: at } } } });
+  await runSlackPings({ store, locationId: LOC, saved: ON, deps: noPipeline, now: TUE(8) });
+  assert.equal(machinePosts(s).length, 0, "the check is switched off");
+  await runSlackPings({ store, locationId: LOC, saved: { ...ON, keyHealth: { enabled: true } }, deps: noPipeline, now: TUE(8) + 2 * DAY });
+  const posts = machinePosts(s).map(said);
+  assert.ok(posts.every((t) => !/rejected/.test(t)), "its last read is two days old: nothing is known about the key");
+  assert.ok(posts.some((t) => /Key check\* hasn't run/.test(t)), "the check itself stopping is what's told");
+});
+
+// Review, 2026-11-23: a stopper error was read from the last 24 hours and
+// claimed per day, so one that happened once yesterday afternoon was posted
+// again just after midnight as "Still failing", and stoppers pinged overnight.
+test("a rejected key that failed once yesterday isn't told again after midnight, and an overnight one waits for 7am", async () => {
+  const LOC = "loc-stopper-yesterday";
+  const s = slack();
+  await recordError(store, { locationId: LOC, area: "underwrite", err: new Error("Zillow comps lookup failed (Apify 401)"), now: TUE(15) });
+  await runSlackPings({ store, locationId: LOC, saved: ON, deps: noPipeline, now: TUE(15, 5) });
+  assert.equal(machinePosts(s).length, 1);
+  await runSlackPings({ store, locationId: LOC, saved: ON, deps: noPipeline, now: TUE(15) + 9 * 3600000 + 20 * 60000 });
+  assert.equal(machinePosts(s).length, 1, "it never came back today: no 'Still failing' at 12:20am");
+  const LOC2 = "loc-stopper-overnight";
+  const WED = (hh, mm = 0) => TUE(hh, mm) + 86400000;
+  await recordError(store, { locationId: LOC2, area: "underwrite", err: new Error("Zillow comps lookup failed (Apify 401)"), now: WED(2) });
+  await runSlackPings({ store, locationId: LOC2, saved: ON, deps: noPipeline, now: WED(2, 5) });
+  assert.equal(machinePosts(s).length, 1, "2am: held for the morning");
+  assert.equal((await store.getJobCursor(LOC2, "machineTrouble")).doc.stoppers.length, 1, "the strip has it now");
+  await runSlackPings({ store, locationId: LOC2, saved: ON, deps: noPipeline, now: WED(7, 5) });
+  assert.equal(machinePosts(s).length, 2);
+  assert.match(said(machinePosts(s)[1]), /<@U012MATT34>/);
+});
+
+test("a job that failed twice yesterday and once today isn't called failed twice today", async () => {
+  const LOC = "loc-stopper-tries";
+  const s = slack();
+  const LIVE = { ...ON, aiApiKey: "sk-test", conversationAi: { enabled: true }, outreachAutopilot: { introEmail: { enabled: true } } };
+  const yesterday = new Date(TUE(10) - 86400000).toISOString();
+  await store.setJobCursor(LOC, "followUp", { at: yesterday, doc: { lastDaily: yesterday, tries: 2, failed: true, error: "GHL timed out", last: { finishedAt: yesterday, status: "error", error: "GHL timed out" } } });
+  await runSlackPings({ store, locationId: LOC, saved: LIVE, deps: noPipeline, now: TUE(10, 5) });
+  assert.ok(machinePosts(s).every((p) => !/<@U012MATT34>/.test(said(p))), "yesterday's two tries are not today's");
+});

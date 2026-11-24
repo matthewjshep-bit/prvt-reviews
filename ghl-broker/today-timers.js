@@ -14,7 +14,12 @@
 //                     fire. Not braked: it ends a thread, it doesn't push one.
 //   retry_underwrite  deps.startUnderwrite, once per failed run: the daily
 //                     cap, queued if capped, a dry run unless the underwriter
-//                     is live.
+//                     is live. Since 2026-11-23 (audit AH-2) also the book's
+//                     "stopped early" drafts (shared/underwrite-retry.js
+//                     storedRetries), which outlive a redeploy, and a key its
+//                     provider rejected once the key check (key-health.js)
+//                     says it's good again. Once per row (retriedAt), and
+//                     never on a house with a number already on it.
 //
 // Every move is claimed first (`audit_action`), keyed on the offer or the
 // run, so a second pass or a second broker starts nothing twice. This file
@@ -28,6 +33,8 @@ import { threadHealth } from "./shared/thread-health.js";
 import { blockingDraft, blockingReason } from "./shared/follow-up.js";
 import { holdFor } from "./bot-hold.js";
 import { holdLine } from "./shared/bot-hold.js";
+import { storedRetries, houseSettled } from "./shared/underwrite-retry.js";
+import { KEY_HEALTH_CURSOR } from "./shared/machine-health.js";
 
 const iso = (ms) => new Date(ms).toISOString();
 const SPOKE_DAYS = 7;
@@ -35,6 +42,7 @@ const CLAIM_KEY = {
   float: (m) => `audit:timer_float:${m.offerId}`,
   mark_no_response: (m) => `audit:timer_quiet:${m.offerId}`,
   retry_underwrite: (m) => `audit:timer_uw_retry:${m.jobId}`,
+  retry_stored: (m) => `audit:timer_uw_retry:offer:${m.offerId}`,
 };
 
 /**
@@ -62,8 +70,20 @@ export async function runTodayTimers({ client = null, locationId, saved = {}, st
   const drafts = [...held, ...scheduled];
   const events = (spoke || []).filter((e) => e?.contactId).sort((a, b) => String(a.at).localeCompare(String(b.at)));
   const actions = buildPipeline({ offers, drafts, events, jobs: jobsFor(locationId) || [], config, now }).actions;
+  // The key check's last word on each paid key (key-health.js): a run that
+  // died on a rejected key is retried only once that key is good again.
+  const keyHealth = (await Promise.resolve(store.getJobCursor?.(locationId, KEY_HEALTH_CURSOR)).catch(() => null))?.doc || {};
+  // A retry stamps its row first, so the run's own redraft keeps the stamp
+  // and the book's pass below never runs it a second time.
+  const stampRetried = async (offerId) => {
+    if (!offerId) return;
+    const full = await Promise.resolve(store.getOffer?.(offerId)).catch(() => null);
+    if (!full || full.locationId !== locationId) return;
+    await store.updateOffer(full.id, { ...full, autoUnderwrite: { ...(full.autoUnderwrite || {}), retriedAt: iso(now) } });
+  };
+  const retried = new Set();
 
-  for (const m of timerMoves(actions, { config, now })) {
+  for (const m of timerMoves(actions, { config, now, keyHealth })) {
     out.considered++;
     const row = { kind: m.kind, move: m.move, offerId: m.offerId, jobId: m.jobId, contactId: m.contactId, status: "", reason: "" };
     out.results.push(row);
@@ -75,6 +95,14 @@ export async function runTodayTimers({ client = null, locationId, saved = {}, st
       if (m.contactId && (m.move === "float" || m.move === "mark_no_response")) {
         const hold = await holdFor({ store, locationId, contactId: m.contactId, offerId: m.offerId || null, now });
         if (hold.held) { row.status = "stopped"; row.reason = holdLine(hold); continue; }
+      }
+      // A house with a number on it already — Matt's, a later row's, one
+      // that went out, or a pass — is never underwritten again (2026-11-23):
+      // a second engine number could quote above what they were sent.
+      if (m.move === "retry_underwrite") {
+        const self = offers.find((o) => o.id === m.offerId) || { id: m.offerId || null, contactId: m.contactId, address: m.address, createdAt: iso(now) };
+        const settled = houseSettled(self, offers);
+        if (settled) { row.status = "skipped"; row.reason = settled; continue; }
       }
       if (m.move === "float") {
         const [theirs, timeline] = await Promise.all([
@@ -104,9 +132,34 @@ export async function runTodayTimers({ client = null, locationId, saved = {}, st
         if (r?.ok === false) { row.status = "skipped"; row.reason = r.reason || "the status was refused"; } else { row.status = "started"; out.started++; }
       } else {
         if (typeof deps.startUnderwrite !== "function") { row.status = "skipped"; row.reason = "the underwriter is not wired"; continue; }
+        if (m.offerId) retried.add(m.offerId);
+        await stampRetried(m.offerId);
         const r = await deps.startUnderwrite({ contactId: m.contactId, message: "", address: m.address, askingPrice: m.askingPrice || 0, replaceOfferId: m.offerId || null });
         if (r?.skipped) { row.status = "skipped"; row.reason = r.skipped; } else { row.status = r?.queued ? "queued" : "started"; out.started++; }
       }
+    } catch (e) {
+      row.status = "error"; row.reason = String(e?.message || e).slice(0, 160);
+    }
+  }
+
+  // The book's stopped-early drafts (2026-11-23 audit, AH-2): the runs above
+  // are only the ones still in memory, and a redeploy forgets them.
+  for (const m of storedRetries(offers, { keyHealth, now })) {
+    if (retried.has(m.offerId)) continue;
+    out.considered++;
+    const row = { kind: "underwrite_stopped_early", move: "retry_underwrite", offerId: m.offerId, jobId: null, contactId: m.contactId, status: "", reason: "" };
+    out.results.push(row);
+    try {
+      if (typeof deps.startUnderwrite !== "function") { row.status = "skipped"; row.reason = "the underwriter is not wired"; continue; }
+      const claim = await recordEvent({
+        store, locationId, contactId: m.contactId, party: "agent", type: "audit_action", at: iso(now), address: m.address,
+        offerId: m.offerId, source: "sweep", dedupeKey: CLAIM_KEY.retry_stored(m),
+        data: { kind: "timer_retry_underwrite", action: "retry_underwrite", why: m.failure.auth ? "its key is good again" : "the provider failed, not the house" },
+      }).catch(() => ({ inserted: false }));
+      if (!claim.inserted) { row.status = "claimed"; continue; }
+      await stampRetried(m.offerId);
+      const r = await deps.startUnderwrite({ contactId: m.contactId, message: "", address: m.address, askingPrice: m.askingPrice || 0, replaceOfferId: m.offerId });
+      if (r?.skipped) { row.status = "skipped"; row.reason = r.skipped; } else { row.status = r?.queued ? "queued" : "started"; out.started++; }
     } catch (e) {
       row.status = "error"; row.reason = String(e?.message || e).slice(0, 160);
     }

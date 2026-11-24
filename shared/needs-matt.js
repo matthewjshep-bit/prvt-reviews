@@ -298,6 +298,16 @@ export function botTakesHouse(offer) {
   return null;
 }
 
+// The pass clock's start: when the card landed, or, for a house whose
+// underwrite died on a provider's error and was run again, when that retry
+// started (2026-11-23 audit, AH-2: the clock had run out while the key was
+// dead, so a retry that failed again would have been passed at once).
+const clockStart = (need) => {
+  const landed = ms(need?.landedAt);
+  const retried = ms(need?.retriedAt);
+  return landed == null ? null : Math.max(landed, retried ?? landed);
+};
+
 /**
  * needsMattPassDue(need, now, { offDays }) → boolean
  *
@@ -312,10 +322,15 @@ export function botTakesHouse(offer) {
  * (conversationAi autoSend.offDays); and a house the offer engine priced at
  * grade A or B (`need.engine`, engineKeeps) is never passed by it. A grade-C
  * number doesn't keep it: those pass like an unpriced house.
+ *
+ * 2026-11-23 (AH-2): a house whose underwrite died on a provider's error
+ * (`need.waitsRetry`, shared/underwrite-retry.js waitsOnRetry) is never
+ * passed before its one retry; after it, the clock counts from the retry
+ * (`need.retriedAt`).
  */
 export function needsMattPassDue(need, now = Date.now(), { offDays = null } = {}) {
-  if (need?.kind !== "price" || !need.offerId || engineKeeps(need.engine)) return false;
-  const landed = ms(need.landedAt);
+  if (need?.kind !== "price" || !need.offerId || engineKeeps(need.engine) || need.waitsRetry) return false;
+  const landed = clockStart(need);
   return landed != null && workingHoursBetween(landed, now, WORK_TZ, { offDays }) >= PASS_AFTER_HOURS;
 }
 
@@ -325,8 +340,8 @@ export function needsMattPassDue(need, now = Date.now(), { offDays = null } = {}
  * mark, or the engine priced it at grade A or B).
  */
 export function needsMattPassAt(need, { offDays = null } = {}) {
-  if (need?.kind !== "price" || !need.offerId || engineKeeps(need.engine)) return null;
-  const landed = ms(need.landedAt);
+  if (need?.kind !== "price" || !need.offerId || engineKeeps(need.engine) || need.waitsRetry) return null;
+  const landed = clockStart(need);
   return landed == null ? null : new Date(addWorkingHours(landed, PASS_AFTER_HOURS, WORK_TZ, { offDays })).toISOString();
 }
 

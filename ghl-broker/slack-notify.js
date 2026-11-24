@@ -28,11 +28,13 @@
 import { store as defaultStore } from "./store.js";
 import { recordError, scrubMessage } from "./app-errors.js";
 import { claimDailyRun, closeDailyRun, pacificDay } from "./daily-gate.js";
-import { CURSOR_NAME as OUTREACH_CURSOR } from "./outreach-sweep.js";
+import { CURSOR_NAME as OUTREACH_CURSOR, missedDayFor } from "./outreach-sweep.js";
 import { pingReasons } from "./shared/hand-off.js";
 import { pingClaimKey } from "./shared/ghl-pings.js";
 import { buildDigest } from "./shared/digest.js";
 import { lineJobs, errorsByArea, passedUnpriced } from "./shared/line.js";
+import { waitsOnRetry, retryHoldFrom } from "./shared/underwrite-retry.js";
+import { errorIsStopper, stopperKindOfError, jobIsStopper, stopperText, keyTroubles, normalizeKeyHealth, KEY_HEALTH_CURSOR, KEY_HEALTH_HOUR, MACHINE_TROUBLE_CURSOR } from "./shared/machine-health.js";
 import { jobSwitches } from "./job-switches.js";
 import { readYesterdaySpend } from "./ai-spend.js";
 import { addressKey, sameStreetLoose, parseUsAddress } from "./shared/us-address.js";
@@ -49,7 +51,7 @@ import { normalizeConversationAi } from "./shared/conversation-ai.js";
 import { effectiveStatus } from "./shared/offer-status.js";
 import {
   acquisitionStatus, dispositionStatus, houseStatus, withStatus, legacyThreadKey, fullName, normalizeSlack, slackOn, streamOn, routeEvent, threadKeyFor, foldBlasts, renderEvent, renderBlasts, renderPing, renderNeed,
-  renderError, renderJobFailed, renderJobLate, renderMorning, renderEvening, morningCounts, slackClaimKey, firstName, passesToday,
+  renderError, renderJobFailed, renderJobLate, renderKeyTrouble, renderMorning, renderEvening, morningCounts, slackClaimKey, firstName, passesToday,
   SLACK_EVENT_TYPES, MORNING_EVENT_TYPES, SLACK_STREAMS, SLACK_STREAM_LABEL,
 } from "./shared/slack-notify.js";
 
@@ -554,10 +556,28 @@ export async function runSlackPings({ store = defaultStore, locationId, saved = 
     }
   }
   if (streamOn(cfg, "machine")) {
+    const today = pacificDay(now);
+    // Business-stopping failures (shared/machine-health.js, 2026-11-23 audit
+    // AH-6) @mention Matt, once a Pacific day while they last; the strip on
+    // Offers and Deals reads the same list off its own small cursor.
+    const mention = { mention: true, mattUserId: cfg.mattUserId };
+    // The @Matt lines wait for his morning (the key check's first hour): one
+    // that turns up overnight is posted at 7, not at 2am. The strip has it now.
+    const mattAwake = pacificHour(now) >= KEY_HEALTH_HOUR;
+    const stoppers = [];
     const errors = await store.listAppErrorsSince?.(locationId, iso(now - 86400000), { limit: 100 }).catch(() => []) || [];
     for (const e of errors) {
       // A Slack error told to Slack goes nowhere useful; it's on the switchboard.
       if (e?.area === "slack" || !e?.fingerprint) continue;
+      if (errorIsStopper(e, { now })) {
+        stoppers.push({ id: `err:${e.fingerprint}`, text: stopperText("error", e), since: e.firstAt || e.lastAt || null });
+        const key = slackClaimKey("stop", `err:${e.fingerprint}:${today}`);
+        const isNew = (ms(e.firstAt) ?? 0) >= now - 86400000;
+        if (mattAwake && !claimed[key]) owed.push({ key, stream: "machine", kind: "error", msg: renderError({ ...e, reopenedAt: null }, { ...mention, stillFailing: !isNew }) });
+        continue;
+      }
+      // A stopper's kind that didn't happen today was told on its day: not again as a plain error.
+      if (stopperKindOfError(e)) continue;
       // New today, or back today after three quiet days (store.js reopened_at):
       // the comeback is its own claim, so it is told once more.
       const isNew = (ms(e.firstAt) ?? 0) >= now - 86400000;
@@ -567,9 +587,16 @@ export async function runSlackPings({ store = defaultStore, locationId, saved = 
       if (!claimed[key]) owed.push({ key, stream: "machine", kind: "error", msg: renderError(back ? e : { ...e, reopenedAt: null }) });
     }
     const cursors = await store.listJobCursors?.(locationId).catch(() => []) || [];
-    for (const j of lineJobs(cursors, { now, switches: jobSwitches(saved) })) {
+    const switches = jobSwitches(saved);
+    for (const j of lineJobs(cursors, { now, switches })) {
       // Slack's own job told to Slack goes nowhere useful; the evening post and the Line list it.
       if (j.name === "slack" || !j.lastRunAt) continue;
+      if (jobIsStopper(j, switches, { now })) {
+        stoppers.push({ id: `job:${j.name}`, text: stopperText("job", j, { now }), since: j.lastRunAt });
+        const key = slackClaimKey("stop", `job:${j.name}:${today}`);
+        if (mattAwake && !claimed[key]) owed.push({ key, stream: "machine", kind: j.late ? "late" : "job", msg: j.late ? renderJobLate(j, mention) : renderJobFailed(j, mention) });
+        continue;
+      }
       if (j.failed) {
         // A job that runs every tick says so once a day, not every 15 minutes:
         // the day of the failed run, so a failure that stays on a cursor that
@@ -583,15 +610,26 @@ export async function runSlackPings({ store = defaultStore, locationId, saved = 
         if (!claimed[key]) owed.push({ key, stream: "machine", kind: "late", msg: renderJobLate(j) });
       }
     }
+    // A paid key its provider rejects, or Apify's month near its limit
+    // (key-health.js, AH-1): @Matt the first day and every day it lasts.
+    // Only while the check is on, and from a read in the last day: a key
+    // fixed after the check was switched off never @s him again.
+    const keys = await store.getJobCursor?.(locationId, KEY_HEALTH_CURSOR).catch(() => null);
+    for (const t of keyTroubles(keys?.doc || {}, { now, enabled: normalizeKeyHealth(saved?.keyHealth).enabled })) {
+      const key = slackClaimKey("key", `${t.id}:${today}`);
+      if (mattAwake && !claimed[key]) owed.push({ key, stream: "machine", kind: t.kind === "usage" ? "key_usage" : "key", msg: renderKeyTrouble(t, cfg) });
+    }
+    if (!dryRun) await writeTrouble(store, locationId, stoppers, now);
     // A sending day whose outreach sweep opened fewer new agents than
     // outreachAutopilot.minNewAgentsPerDay (outreach-sweep.js emptyDayFor),
     // once a Pacific day, marked on the sweep's cursor as told.
     const sweep = await store.getJobCursor?.(locationId, OUTREACH_CURSOR).catch(() => null);
-    const empty = sweep?.doc?.emptyDay;
-    const today = pacificDay(now);
-    if (empty?.day === today && empty.text && sweep.doc.lastEmptyAlertDay !== today) {
+    // Or no finished run at all by 1pm on a day it's switched on for
+    // (outreach-sweep.js missedDayFor, 2026-11-23): the same line, once a day.
+    const empty = sweep?.doc?.emptyDay?.day === today ? sweep.doc.emptyDay : missedDayFor(sweep, saved, now);
+    if (empty?.day === today && empty.text && sweep?.doc?.lastEmptyAlertDay !== today) {
       const key = slackClaimKey("empty", `${OUTREACH_CURSOR}:${today}`);
-      if (!claimed[key]) owed.push({ key, stream: "machine", kind: "empty_day", msg: renderEmptyDay(empty), after: () => markEmptyDayTold(store, locationId, today) });
+      if (!claimed[key]) owed.push({ key, stream: "machine", kind: "empty_day", msg: renderEmptyDay(empty, empty.missed ? cfg.mattUserId : ""), after: () => markEmptyDayTold(store, locationId, today) });
     }
   }
 
@@ -620,10 +658,22 @@ export async function runSlackPings({ store = defaultStore, locationId, saved = 
   return done();
 }
 
+// The stoppers this run saw, for the strip on Offers and Deals
+// (routes/dashboard.js /machine): written only when the list changed, and
+// re-stamped hourly so the strip can tell a fresh read from a stopped one.
+async function writeTrouble(store, locationId, stoppers, now) {
+  const cur = await store.getJobCursor?.(locationId, MACHINE_TROUBLE_CURSOR).catch(() => null);
+  const same = JSON.stringify((cur?.doc?.stoppers || []).map((x) => x.id)) === JSON.stringify(stoppers.map((x) => x.id));
+  const age = now - (ms(cur?.doc?.at) ?? 0);
+  if (same && age < 30 * 60000) return;
+  await store.setJobCursor?.(locationId, MACHINE_TROUBLE_CURSOR, { at: iso(now), doc: { at: iso(now), stoppers: stoppers.slice(0, 10) } }).catch(() => {});
+}
+
 // The outreach sweep's short day: its own line of counts and reason words
 // (outreach-sweep.js emptyDayFor), which never names a contact.
-function renderEmptyDay(e = {}) {
-  const text = `:warning: ${String(e.text || "").slice(0, 400)}`;
+// A day with no finished run at all stops new-agent outreach: @Matt (2026-11-23).
+function renderEmptyDay(e = {}, mattUserId = "") {
+  const text = `:warning: ${mattUserId ? `<@${mattUserId}> ` : ""}${String(e.text || "").slice(0, 400)}`;
   return { text: text.slice(0, 150), blocks: [{ type: "section", text: { type: "mrkdwn", text } }] };
 }
 
@@ -694,6 +744,9 @@ export async function passesTodayFor({ store = defaultStore, locationId, saved =
   const due = passesToday(doc.needs, { now, offDays });
   if (!due.length) return null;
   const read = async (f) => { try { return await f(); } catch { return null; } };
+  // The runner's own retry hold (needs-matt.js): the same switches, so a
+  // card it will pass is listed and one it holds isn't.
+  const hold = { ...retryHoldFrom(saved), now };
   const still = [];
   for (const d of due.slice(0, PASSES_READ_MAX)) {
     const offer = await read(() => store.getOffer?.(d.offerId));
@@ -701,6 +754,8 @@ export async function passesTodayFor({ store = defaultStore, locationId, saved =
     if ((offer.sends || []).length || offer.floatSentAt) continue;
     const engine = await read(() => engineNumberFor({ store, locationId, offer }));
     if (engineKeeps(engine)) continue;
+    // Its underwrite died on a provider's error and waits for its retry (2026-11-23).
+    if (waitsOnRetry(offer, hold)) continue;
     still.push({ offer, engine });
   }
   if (!still.length) return null;

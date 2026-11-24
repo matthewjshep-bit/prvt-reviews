@@ -14,6 +14,7 @@ import { summarizeFeedback } from "@shared/conversation-ai.js";
 import { FELL_THROUGH_CODES, FELL_THROUGH_LABEL, buyerCeiling, codeFromPassReasons } from "@shared/post-mortem.js";
 import { ClipboardCheck } from "lucide-react";
 import PostMortemModal from "./PostMortemView.jsx";
+import MachineTrouble from "./MachineTrouble.jsx";
 import {
   addDealInvestor, dealDocUrl, deleteDealDoc, getOffer, ghlContactUrl, listDealDocs, listDeals,
   removeDeal, removeDealInvestor, setDealOutreachStopped, suggestInvestors, updateDeal, updateDealInvestor,
@@ -1125,6 +1126,7 @@ export default function DealsView({ settings, onEdit, only = null }) {
 
   return (
     <>
+      <MachineTrouble />
       <div className="mb-3">
         <KpiRow items={kpis} cols="sm:grid-cols-4" />
       </div>

@@ -688,6 +688,11 @@ export const getOutreachScorecard = () =>
   fetch(`${API_BASE}/api/dashboard/outreach-scorecard?${locq()}`).then(j);
 export const getDashboardPipeline = () =>
   fetch(`${API_BASE}/api/dashboard/pipeline?${locq()}`).then(j);
+// The red line on Offers and Deals (2026-11-23): a rejected paid key, Apify
+// near its month's limit, a revenue job stopped. Two small cursors and the
+// settings row on the broker; words only.
+export const getMachineTrouble = () =>
+  fetch(`${API_BASE}/api/dashboard/machine?${locq()}`).then(j);
 // The switchboard alone: { autopilot, conversationEnabled }. The Autopilot
 // tabs read only this; the whole of Today is GET /pipeline.
 export const getDashboardAutopilot = () =>
