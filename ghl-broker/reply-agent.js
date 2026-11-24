@@ -149,6 +149,7 @@ import { sellerOwnNumber, workAfterPricing } from "./shared/number-stance.js";
 import { repriceStaleRow } from "./price-v2.js";
 import { numberTimeFlags, callPromiseFlags, inventedPeopleFlags, contactClaimFlags, sentOfferFlags, claimGateInputs, CALL_OWED_FLAG, CLAIMS_EMAIL_RX } from "./shared/reply-claims.js";
 import { laneHoldFlags, closeOutFlags, LANE_HOLD_RX, CLOSE_OUT_RX } from "./shared/lane-holds.js";
+import { floatHold } from "./shared/float-hold.js";
 // Passes, goodbyes and what the bot says about us (the 2026-11-09 audit).
 import { notTheirNumber, NEXT_ONE_QUESTION, nextOneAskedToday } from "./shared/flip-read.js";
 import { asksIfWholesaler, wholesaleFlags, wholesaleAskLine, formsFlags, formsStateOf, WHOLESALE_ASK_FLAG } from "./shared/partner-terms.js";
@@ -3594,6 +3595,15 @@ export async function startProactive({
   // agent on the same house has a number a person gave them that this one
   // isn't. Read off the thread and the books before any job exists.
   const priceFloat = !personAsked && offer?.cashAmount && offer?.address && (NUMBER_FLOATS.has(kind) || (kind === "take_check" && !subject?.askSeller));
+  // The float gate (shared/float-hold.js, the 2026-11-23 audit, neg-5): no
+  // price on a house the agent called turnkey, remodeled or not a flip, and
+  // none within 12 hours of our own condition question they haven't
+  // answered. Not the hot push: that answers their yes.
+  if (priceFloat && kind !== "hot_push") {
+    const theirDrafts = await store.listReplyDrafts(locationId, { contactId, limit: 40 }).catch(() => []);
+    const held = floatHold({ drafts: theirDrafts || [], address: offer.address, now: typeof deps.now === "function" ? deps.now() : Date.now() });
+    if (held) return { skipped: held.why, floatHold: held, job: null };
+  }
   let thread = "";
   let book = null;
   if (priceFloat) {

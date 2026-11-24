@@ -9835,3 +9835,43 @@ test("an agent who tells us the roof and foundation are shot doesn't get the can
   assert.ok(fixes.length <= 1, "one rewrite at most, asking for the details");
   assert.ok(!calls.some(([m, p]) => m === "POST" && p === "/conversations/messages"), "nothing went to them");
 });
+
+/* ---------- the float gate (2026-11-23 audit, neg-5) ---------- */
+
+// Floats on houses the agent had called remodeled drew "not even close" and
+// "stop wasting my time"; others followed our own condition question by a
+// few minutes, before the agent could answer it.
+const floatHouse = () => ({ id: "o-larch", address: "51 Larch St, Puyallup, WA 98371", contactId: "c1", cashAmount: 265000, status: "new", createdAt: new Date().toISOString(),
+  autoUnderwrite: { passed: true, compsUsedCount: 4 } });
+const tryFloat = async (drafts) => {
+  _resetJobs();
+  const client = withMessages(ghlStubFor(["agent"]).client, []);
+  const offer = floatHouse();
+  const store = fakeStore(drafts);
+  store.listOffers = async () => [offer];
+  let drafted = false;
+  const r = await startProactive({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", kind: "realm_check", offer, sendsEnabled: true,
+    deps: { draft: async () => { drafted = true; return { ...DRAFT, intent: "realm_check", reply: "We'd likely land around 265k as-is." }; } },
+  });
+  return { r, drafted };
+};
+
+test("an agent who called the house remodeled gets no machine number on it", async () => {
+  const { r, drafted } = await tryFloat([{ id: "in1", locationId: "LOC", contactId: "c1", party: "agent", status: "sent", inbound: "It was fully remodeled last year, move-in ready.",
+    reply: "Thanks for the heads up.", propertyAddress: "51 Larch St, Puyallup, WA 98371", createdAt: hoursAgo(20), sentAt: hoursAgo(20) }]);
+  assert.equal(r.job, null);
+  assert.match(String(r.skipped), /called it done/);
+  assert.equal(drafted, false);
+});
+
+test("no machine number goes minutes after we asked about the house's condition", async () => {
+  const { r, drafted } = await tryFloat([
+    { id: "in1", locationId: "LOC", contactId: "c1", party: "agent", status: "sent", inbound: "Got a fixer on Larch St, seller wants out.",
+      reply: "Is it big-ticket stuff like roof, foundation or systems, or more paint and flooring? And what's got the seller selling?",
+      propertyAddress: "51 Larch St, Puyallup, WA 98371", createdAt: hoursAgo(0.2), sentAt: hoursAgo(0.1) },
+  ]);
+  assert.equal(r.job, null);
+  assert.match(String(r.skipped), /asked about its condition/);
+  assert.equal(drafted, false);
+});
