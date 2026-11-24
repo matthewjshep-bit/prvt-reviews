@@ -414,15 +414,20 @@ export function renderCallWanted(ev = {}, ctx = {}) {
   const where = street(ev?.address || ctx.address);
   const when = clip(scrubForSlack(d.when || ""), 40);
   const walk = d.wants === "walkthrough";
-  const what = walk ? `wants to see ${where ? `*${esc(where)}*` : "the house"}` : `wants a call${where ? ` about *${esc(where)}*` : ""}`;
+  const buy = d.wants === "buy";
+  const house = where ? `*${esc(where)}*` : "the house";
+  const what = buy ? `wants to buy ${house}` : walk ? `wants to see ${house}` : `wants a call${where ? ` about *${esc(where)}*` : ""}`;
   const said = when ? ` They named ${esc(when)}.` : "";
   const how = d.voicemail ? " (a voicemail)" : "";
-  const tail = walk ? " Nothing was booked; the time is yours to set." : " The bot didn't book or promise one: call when you choose, or text.";
-  const text = `${ICON.call_wanted} ${at}${esc(who)}${how} ${what}.${said}${tail}`;
+  const tail = buy ? " Nothing was agreed; the price and the paper are yours."
+    : walk ? " Nothing was booked; the time is yours to set." : " The bot didn't book or promise one: call when you choose, or text.";
+  // A buyer's yes or walk ask (the 2026-11-23 buyer audit, dispo-4): call now.
+  const now = d.callNow ? "Call now: " : "";
+  const text = `${ICON.call_wanted} ${at}${now}${esc(who)}${how} ${what}.${said}${tail}`;
   const link = slackLinks({ appUrl: ctx.appUrl, appLink: ctx.appLink, locationId: ctx.locationId, contactId: ev?.contactId });
   const blocks = [{ type: "section", text: { type: "mrkdwn", text } }];
   if (link) blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: link }] });
-  const plain = `${who} ${walk ? `wants to see ${where || "the house"}` : `wants a call${where ? ` about ${where}` : ""}`}${when ? ` (${when})` : ""}`;
+  const plain = `${d.callNow ? "Call now: " : ""}${who} ${buy ? `wants to buy ${where || "the house"}` : walk ? `wants to see ${where || "the house"}` : `wants a call${where ? ` about ${where}` : ""}`}${when ? ` (${when})` : ""}`;
   return { text: clip(plain, 150), blocks };
 }
 

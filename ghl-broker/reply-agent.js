@@ -62,6 +62,7 @@ import { OUTREACH_NUDGE_WINDOW_DAYS } from "./shared/follow-up.js";
 // shared/voice.js's reader returns { text, at, channel } for the voice check; this file's own
 // ourLastTexts (below, the cold ladder's) returns plain text, so the voice one goes by voicePrior.
 import { voiceFlags, hardVoiceKeys, voiceLine, ourLastTexts as voicePrior, VOICE_LINE_RX, EVENT_KINDS as TIME_SET_KINDS } from "./shared/voice.js";
+import { buyerReplyFlags, dealRowFor, offersPackage, SITUATION_FLAG_RX, BUYER_HUMAN_ACTIVE_MIN, BUYER_HAND_LINK_MIN, handSentLink, buyerReferral, PACKAGE_INVITE_RX } from "./shared/buyer-reply.js";
 import { BOOKING_RETIRED, CALL_ASK_RETIRED, callWordsFlags, CALL_WORDS_FLAG_RX, callWanted, CALL_WANTED_EVENT } from "./shared/call-words.js";
 import { checkInPack, routeCheckIn, routesCheckIn, normalizeCheckInRoute, asksIfBot, onlyAsksIfBot, botAskFlags, BOT_ASK_REASON, goesBySaid, goesByOf,
   strictNoHouse, checkInFlags, namesBookHouse, namesAHouse, composeRoute, composes, checkInStamp, openingIndex, nothingToSay, normalizeCheckInComposer, spentHookKeys } from "./shared/check-in.js";
@@ -1065,6 +1066,9 @@ export function evaluateReplyGates({
   // A text about a time already set (the walkthrough reminder) names it;
   // every other machine text is read for a call it promises (shared/call-words.js).
   callCheck = true,
+  // A reply to a buyer (shared/buyer-reply.js, the 2026-11-23 buyer audit):
+  // { inbound, deal, prior, mattSent, now }. Null reads nothing new.
+  buyer = null,
 }) {
   const flags = [];
   if (!draft) return { ok: false, flags: ["no draft was produced"] };
@@ -1282,6 +1286,12 @@ export function evaluateReplyGates({
   // They asked whether this is a bot (shared/check-in.js, 2026-11-09): Matt
   // answers that, never the machine. Only adds a hold.
   flags.push(...botAskFlags({ asked: draft.botAsked }));
+  // A buyer gets the answer or the link, never a promise (shared/buyer-reply.js):
+  // a promise the app can't keep, the package offered with none built or
+  // again after Matt sent it, "still waiting" said twice, "deals only go by
+  // text", a question the deal record can't answer, a walk ask with no
+  // window or access on the deal. Only adds holds.
+  if (party === "investor" && buyer) flags.push(...buyerReplyFlags({ reply: claimed, ...buyer }));
   flags.push(...voiceGateFlags(draft.reply, voice));
   // `ok` is the row's word — a counter is not auto-sendable, full stop. But
   // the lock is the ONE flag a guard may overturn, so it is named apart from
@@ -1357,6 +1367,10 @@ export async function redraftOnGate({ draft, gate, gateFor, config = null, redra
   // Land, a lot, a teardown, a multi-unit or a development site we turned
   // down (shared/lane-holds.js): Matt looks at it; a rewrite only hides it.
   if (tripped.some((f) => LANE_HOLD_RX.test(f))) return { draft, gate };
+  // A buyer's question the deal record can't answer, or a walk ask with no
+  // window or access on the deal (shared/buyer-reply.js): no rewrite fixes
+  // what isn't on file, so none is paid for.
+  if (tripped.some((f) => SITUATION_FLAG_RX.test(f))) return { draft, gate };
   const again = await Promise.resolve().then(() => redraft(tripped)).catch(() => null);
   if (!String(again?.reply || "").trim()) return { draft: { ...draft, redraftHeld: { for: tripped, flags: ["the redraft came back empty"] } }, gate };
   const next = { ...draft, reply: again.reply, redraftedFor: tripped, replyBeforeRedraft: draft.reply };
@@ -2584,6 +2598,48 @@ export async function humanHasThread({ store, client = null, locationId, contact
 }
 
 /**
+ * handLines({ store, locationId, contactId, transcript, minutes, now }) → [{ at, minutesAgo, text, channel }]
+ *
+ * Every text or call of ours in the last `minutes` that a person sent, newest
+ * first: not one of our sent drafts, not the offer documents' text, not a
+ * GHL template. humanHasThread reads only the last line of ours; a buyer
+ * thread reads them all (the 2026-11-23 buyer audit, dispo-11), so Matt's
+ * text an hour ago still counts after a machine text since. With a client,
+ * GHL is asked who sent the newest three (a workflow or automation such as
+ * the missed-call text-back is not Matt); unreadable counts as his.
+ */
+export async function handLines({ store, client = null, locationId, contactId, transcript, minutes = BUYER_HAND_LINK_MIN, now = Date.now() }) {
+  if (!minutes || !contactId) return [];
+  const lines = [];
+  for (const line of String(transcript || "").split("\n")) {
+    const call = /^\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})\] US call(?:$|:| TRANSCRIPT:)/.exec(line);
+    if (call) { lines.push({ ts: Date.parse(`${call[1]}T${call[2]}:00Z`), text: "", channel: "call" }); continue; }
+    const m = /^\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})\] US (\w+): (.*)$/.exec(line);
+    if (m) lines.push({ ts: Date.parse(`${m[1]}T${m[2]}:00Z`), text: m[4].trim(), channel: m[3] });
+  }
+  const recent = lines.filter((l) => Number.isFinite(l.ts) && now - l.ts <= minutes * 60000 && now - l.ts >= -60000).reverse();
+  if (!recent.length) return [];
+  const ours = await store.listReplyDrafts(locationId, { contactId, status: "sent", limit: 20 }).catch(() => []);
+  const norm = (t) => String(t || "").replace(/\s+/g, " ").trim().toLowerCase();
+  const sent = (ours || []).map((d) => norm(d.sentText || d.reply)).filter(Boolean);
+  const out = [];
+  let asked = 0;
+  for (const l of recent) {
+    const said = norm(l.text);
+    if (l.channel !== "call") {
+      if (sent.some((t) => t === said || said.startsWith(t))) continue;
+      if (OUR_OFFER_TEXT_RX.test(l.text) || OUTREACH_OPEN_RX.test(l.text) || WORKFLOW_FOOTER_RX.test(l.text) || PACKAGE_INVITE_RX.test(l.text)) continue;
+      // A GHL workflow or automation (the missed-call text-back, a drip) is no
+      // person either: GHL says who sent it, as humanHasThread asks. Asked for
+      // the newest few only; unreadable still counts as Matt's.
+      if (client && asked < 3) { asked++; if (await sentByMachine({ client, locationId, contactId, last: l })) continue; }
+    }
+    out.push({ at: new Date(l.ts).toISOString(), minutesAgo: Math.max(0, Math.round((now - l.ts) / 60000)), text: l.text, channel: l.channel });
+  }
+  return out;
+}
+
+/**
  * sentByMachine({ client, locationId, contactId, last }) → true when GHL
  * records the transcript's last outbound as sent by a workflow, a bulk send
  * or a campaign rather than a person.
@@ -2771,9 +2827,21 @@ export async function assembleConversation({
   } else if (party === "investor") {
     context = await loadInvestorContext({ store, locationId, contactId, contactName: name, custom, settings: saved || {}, tags, now });
   }
-  const humanActive = light ? null : await humanHasThread({
+  let humanActive = light ? null : await humanHasThread({
     store, client, locationId, contactId, transcript: real, minutes: config.autoSend?.humanActiveMin, now,
   });
+  // A buyer thread (the 2026-11-23 buyer audit, dispo-11): Matt's text or
+  // call in the last hour, not only the last line of ours, makes the bot
+  // stand aside; photos or a link he sent in the last two hours aren't sent
+  // again (shared/buyer-reply.js). Only ever holds.
+  let mattSentLink = null;
+  if (!light && party === "investor" && contactId) {
+    const hand = await handLines({ store, client, locationId, contactId, transcript: real, minutes: BUYER_HAND_LINK_MIN, now });
+    const link = hand.find((h) => h.channel !== "call" && handSentLink(h.text));
+    if (link) mattSentLink = { at: link.at, minutesAgo: link.minutesAgo };
+    const live = humanActive ? null : hand.find((h) => h.minutesAgo <= BUYER_HUMAN_ACTIVE_MIN);
+    if (live) humanActive = { at: live.at, minutesAgo: live.minutesAgo, ...(live.channel === "call" ? { by: "call" } : {}) };
+  }
 
   const playbook = config.parties?.[party] || null;
   const base = playbook ? playbook.instructions : config.routing.genericInstructions;
@@ -2799,7 +2867,7 @@ export async function assembleConversation({
     : null;
 
   return {
-    config, party, partySource, matchedTags: resolved.matched, classified, stampTag, botOff, dnd, dealHold, humanActive, hold, gatekeeper, lotOwner, laneBotOff, lane: context?.lane || "", laneBot: lotFinder.bot, optedOut,
+    config, party, partySource, matchedTags: resolved.matched, classified, stampTag, botOff, dnd, dealHold, humanActive, mattSentLink, hold, gatekeeper, lotOwner, laneBotOff, lane: context?.lane || "", laneBot: lotFinder.bot, optedOut,
     playbook, contact, contactName: name, tags, custom, transcript, context, underwriting, instructions, signer, companyContact,
   };
 }
@@ -5985,13 +6053,28 @@ async function runReply(job, ctx) {
   // first name, the house and any time they named, never their words. One per
   // person a day for each time named; a redraft of the same text is the same.
   if (!isCall || job.call?.missed) {
-    const wanted = callWanted({ party, intent: draft.intent, message: theirLatestWords(a.transcript, job.originalMessage || job.message) });
+    const wanted = callWanted({ party, intent: draft.intent, message: theirLatestWords(a.transcript, job.originalMessage || job.message), walkthrough: draft.walkthrough || "" });
     if (wanted) {
       const day = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles" }).format(new Date(now));
       await recordEvent({ store, locationId, contactId: job.contactId, party, type: CALL_WANTED_EVENT, at: new Date(now).toISOString(),
         address: draft.propertyAddress || "", source: "conversation", ref: job.id,
         dedupeKey: `${CALL_WANTED_EVENT}:${job.contactId}:${day}:${String(wanted.when || "").toLowerCase()}`,
-        data: { intent: wanted.intent, wants: wanted.wants, ...(wanted.when ? { when: wanted.when } : {}), ...(job.call?.missed ? { voicemail: true } : {}) } }).catch(() => {});
+        data: { intent: wanted.intent, wants: wanted.wants, ...(wanted.when ? { when: wanted.when } : {}), ...(wanted.callNow ? { callNow: true } : {}), ...(job.call?.missed ? { voicemail: true } : {}) } }).catch(() => {});
+    }
+  }
+
+  // A buyer naming a partner who should get our deals (the 2026-11-23 buyer
+  // audit, dispo-13): a row for Matt to add them (shared/call-list.js). The
+  // bot never creates the contact or texts them; the reply can't promise to
+  // (shared/buyer-reply.js holds one that does). The event carries their
+  // name, relation and the email or phone they gave, never the words.
+  if (party === "investor" && !isCall) {
+    const named = buyerReferral(job.originalMessage || job.message);
+    if (named) {
+      await recordEvent({ store, locationId, contactId: job.contactId, party, type: "referral_mentioned", at: new Date(now).toISOString(),
+        address: "", source: "conversation", ref: job.id,
+        dedupeKey: `referral_mentioned:${job.contactId}:${referralKey(named)}`,
+        data: { ...named, buyer: true, agentFirst: String(a.contactName || "").trim().split(/\s+/)[0].slice(0, 30) } }).catch(() => {});
     }
   }
 
@@ -6111,6 +6194,12 @@ async function runReply(job, ctx) {
   // our last texts earns the one redraft below, and still tripping, holds a
   // reply that would have sent itself.
   const replyVoice = config.checkIns?.lint !== false ? { kind: "reply", prior: voicePrior(a.transcript), signOff: config.persona?.signOff, channel: job.channel === "email" ? "email" : "sms" } : null;
+  // A reply to a buyer's text (shared/buyer-reply.js): their words since our
+  // last text, our texts before, and photos or a link Matt sent by hand in
+  // the last two hours (assembleConversation's mattSentLink).
+  const buyerGate = party === "investor" && !isCall
+    ? { inbound: theirLatestWords(a.transcript, job.originalMessage || job.message), prior: voicePrior(a.transcript), mattSent: a.mattSentLink || null, now }
+    : null;
   const gateFor = (d) => evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman,
     draft: d, party, allowedAmounts: context.amounts, forbiddenAmounts: context.forbiddenAmounts, staleAmounts: context.staleAmounts || [],
     hiddenAmounts: context.hiddenAmounts || [], ranges: context.ranges || [], inboundMessage: inboundText, channel: job.channel, style: config.style,
@@ -6128,6 +6217,7 @@ async function runReply(job, ctx) {
     quotes: quotesFor(context.offers?.numbers, d.propertyAddress, { sellerAsk: sellerAskIn(d) }),
     formsState: party === "agent" ? formsStateOf(d.propertyAddress, iceHouse?.address) : "",
     voice: replyVoice,
+    buyer: buyerGate ? { ...buyerGate, deal: dealRowFor(context?.deals, d.propertyAddress) } : null,
   });
   let gate = gateFor(draft);
   // A draft a content gate caught — a number not in the book, "cash close",
@@ -6546,6 +6636,44 @@ async function runReply(job, ctx) {
       if (auto.send) plan.auto.push({ ...action, mode: "auto", why: `they answered the deal text on ${where} that offered the details` });
       else plan.suggested.push({ ...action, mode: "ask", why: `they answered the deal text on ${where} — send it with your reply` });
     }
+  }
+  // The reply offers the package on a deal that has one (the 2026-11-23
+  // buyer audit, dispo-6: "pulling the package together now" went 23 hours
+  // before the link did). The link goes with the reply, on a deal they're
+  // already on; one they haven't been sent waits for your Send. Not when
+  // Matt sent photos or a link in the last two hours (the gate holds that
+  // reply), nor a second link on the deal inside a day.
+  if (party === "investor" && !isCall && !a.mattSentLink
+      && ![...plan.auto, ...plan.suggested].some((x) => x.type === "send_dataroom_invite")) {
+    const pkg = offersPackage(draft.reply);
+    const deal = pkg ? dealRowFor(context?.deals, draft.propertyAddress) : null;
+    const sentAt = Date.parse(deal?.invite?.sentAt || "");
+    const linkedToday = Number.isFinite(sentAt) && now - sentAt < 86400000;
+    if (deal?.packageReady && !linkedToday && !doesntKnowUs(theirLatestWords(a.transcript, job.message))) {
+      const where = String(deal.address || "the deal").split(",")[0];
+      const onIt = (context?.deals?.linked || []).includes(deal);
+      const action = { id: `a-pkg-${job.id}`, type: "send_dataroom_invite", status: "pending", party, addressHint: deal.address };
+      plan.suggested = plan.suggested.filter((x) => x.type !== "suggest_dataroom_invite");
+      // Unattended only under dispoAutopilot.autoInvite (the dial's Full); on
+      // Normal or Cautious the link waits for your Send, and so does the reply.
+      const autoInvite = saved?.dispoAutopilot?.autoInvite === true;
+      if (auto.send && onIt && autoInvite) plan.auto.push({ ...action, mode: "auto", why: `the reply offers the ${pkg} on ${where}: the link goes with it` });
+      else plan.suggested.push({ ...action, mode: "ask", why: `the reply offers the ${pkg} on ${where} — send it with your reply` });
+    }
+  }
+  // Photos or a link Matt sent by hand in the last two hours (dispo-11): no
+  // package link goes by itself on top of his, from any path above.
+  if (party === "investor" && a.mattSentLink && plan.auto.some((x) => x.type === "send_dataroom_invite")) {
+    plan.auto = plan.auto.filter((x) => x.type !== "send_dataroom_invite");
+    warnings.push(`no package link: you sent them photos or a link ${a.mattSentLink.minutesAgo} minutes ago`);
+  }
+  // A reply that says the package is here never goes without it (dispo-6,
+  // 2026-11-23 review): when no link rides along by itself — it waits for
+  // your Send, or was skipped (a link already today, a stranger, Matt's own
+  // link) — the reply waits too.
+  if (party === "investor" && !isCall && auto.send && offersPackage(draft.reply)
+      && !plan.auto.some((x) => x.type === "send_dataroom_invite")) {
+    auto = { send: false, code: "switch_off", reason: "needs a person: the reply offers the package and the link waits for your Send" };
   }
   if (a.stampTag) {
     plan.auto.unshift({ id: `a-route-${job.id}`, type: "add_tags", tags: [a.stampTag], mode: "auto", status: "pending", party, why: "routed by the message" });
@@ -7844,6 +7972,8 @@ export async function previewConversation({
     quotes: quotesFor(context.offers?.numbers, draft.propertyAddress, { sellerAsk: sellerAskIn(draft) }),
     formsState: party === "agent" ? formsStateOf(draft.propertyAddress) : "",
     voice: config.checkIns?.lint !== false ? { kind: "reply", prior: voicePrior(a.transcript), signOff: config.persona?.signOff, channel: channel === "email" ? "email" : "sms" } : null,
+    // The preview reads a buyer reply the way the live run does (shared/buyer-reply.js).
+    buyer: party === "investor" ? { inbound: theirLatestWords(a.transcript, message), deal: dealRowFor(context?.deals, draft.propertyAddress), prior: voicePrior(a.transcript), mattSent: a.mattSentLink || null } : null,
   });
   const auto = decideAutoSend({ gate, party, intent: draft.intent, channel, config, sendsEnabled, humanActive: a.humanActive, hold: a.hold });
   const plan = playbook ? planActions({ party, intent: draft.intent, confidence: draft.confidence, playbook, minConfidence: config.autoSend?.minConfidence }) : { auto: [], suggested: [] };

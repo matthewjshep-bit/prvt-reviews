@@ -212,7 +212,7 @@ export function showingContextLines(showing, { contactId = "", now = Date.now() 
   const next = upcomingWindows(s, now);
   const out = [];
   if (next.length) out.push(`walkthrough window${next.length > 1 ? "s" : ""}: ${next.map((w) => windowLabel(w)).join("; ")}`);
-  else out.push("walkthrough: no window set yet; ask which day they could get out, and say you'll line it up with the agent");
+  else out.push("walkthrough: no window set yet; ask which day they could get out, and set needsHuman: Matt lines it up with the agent");
   // How they get in is the deal's access record (shared/deal-access.js),
   // told to the prompt beside this — not the walkthrough's to say.
   const mine = contactId ? s.rsvps.find((r) => r.contactId === contactId) : null;

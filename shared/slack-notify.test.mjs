@@ -367,6 +367,7 @@ test("someone who asks for a call is a Needs Matt ping of its own with their fir
   assert.doesNotMatch(leaky, /555-0187/);
 });
 
+
 // The luxury lane (2026-11-23): Matt prices every lot and calls every owner
 // who answers, but the reply only made a Desk row, and the Desk is gone. Now
 // it's a Needs Matt ping: first name, the street, "answered — call". Never
@@ -394,4 +395,16 @@ test("a lot owner who answers is a Needs Matt ping with their first name and the
   const [gr] = routeEvent(g);
   assert.deepEqual([gr.stream, gr.kind, gr.claim], ["needsMatt", "gatekeeper_answered", "gatekeeper_answered:c-9:2026-11-24"]);
   assert.match(textOf(renderEvent(gr, g, { firstName: "Odile", mattUserId: "U012MATT34" })), /<@U012MATT34> Odile \(a gatekeeper the machine wrote to\) answered — call\./);
+});
+
+
+// The 2026-11-23 buyer audit (dispo-4): a buyer's yes sat four days. The
+// Needs Matt ping for a buyer who wants it or wants to see it says call now.
+test("a buyer who wants to buy or see a house is a call-now ping", () => {
+  const [r] = routeEvent({ type: "call_wanted", party: "investor" });
+  const ev = { type: "call_wanted", party: "investor", contactId: "c-9", address: "9 Larchmont Pl, Kent, WA 98030" };
+  const buy = textOf(renderEvent(r, { ...ev, data: { intent: "wants_to_buy", wants: "buy", callNow: true } }, { firstName: "Rory" }));
+  assert.match(buy, /Call now: Rory wants to buy \*9 Larchmont Pl\*/);
+  const walk = textOf(renderEvent(r, { ...ev, data: { intent: "wants_walkthrough", wants: "walkthrough", callNow: true, when: "Saturday" } }, { firstName: "Rory" }));
+  assert.match(walk, /Call now: Rory wants to see \*9 Larchmont Pl\*\. They named Saturday\./);
 });

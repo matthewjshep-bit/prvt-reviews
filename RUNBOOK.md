@@ -9945,7 +9945,13 @@ buyers alike:
   the market" (refuses every deal) (`ownWords` in shared/buybox.js). "No
   rehabs over 100k" is a limit, not a no. A deal we can't tell is a fixer
   abstains, and so does a full gut: it's the house read as a builder's, and
-  "land and teardowns, no rehabs" doesn't keep a builder off it. Holding on the investor read's "buying now?" column is a
+  "land and teardowns, no rehabs" doesn't keep a builder off it.
+- (2026-11-23) A builder the book knows only as one who builds (every type
+  held for them is new construction: a `dispo-type-new-construction` tag, a
+  `builder` tag, found off permits) and whose buy box names no rehab
+  appetite isn't sent a house to fix ("they build: lots and teardowns only").
+  Lots, land and a full gut still go to them. "Hold off" and "maxed out" in
+  their saved words read as not buying, like "on hold". Holding on the investor read's "buying now?" column is a
   separate call for Matt and isn't built.
 
 **Who was left off, and why.** `GET /waves/preview` returns `leftOff`: each
@@ -10409,6 +10415,84 @@ A sweep of the six live deals that day found 12 replies like that.
   - Either way, only for a buyer who was sent a live deal (on it, or carrying its blast tag) or who named one.
 - **Never moved:** a committed or soft-committed buyer.
 - Being on a deal as evaluating does not quiet the bot. Only a committed buyer holds it (`WORKING_INVESTOR_STATUSES`).
+
+### Buyers get answers, not promises (2026-11-23)
+
+**Why.** The 2026-11-23 buyer audit: every walkthrough and assignment came
+from fast, concrete follow-through, and the bot lost buyers on promises and
+wrong answers. "Pulling the package together now" went 23 hours before the
+link did, on a deal that had a package. "Still waiting on the park" went three
+times in two days. A buyer asking a plain question got the package link. A
+buyer who gave an email was told "these go out by text". "Pulling those
+photos together now" went 55 minutes after Matt sent the photo link himself.
+
+**The reply's checks** (`shared/buyer-reply.js`, read in `evaluateReplyGates`
+for investor replies). Each one only holds:
+
+| Check | Holds a reply when |
+| --- | --- |
+| A promise the app can't keep | it promises a comp breakdown, a bid or an estimate, an answer from the agent, the seller, a park or anyone else, a "let me find out", or to text or add their partner |
+| The package with none built | it offers the photos, the package, the comps or the scope on a deal with no active dataroom |
+| The package Matt just sent | it offers them again within two hours of photos or a link Matt sent by hand |
+| A second "still waiting" | it says we're still waiting on something and a text of ours said one in the last 14 days |
+| "Deals go out by text" | it says deals only go by text, or not by email (deals by email has been live since 2026-10-15) |
+| A question the record can't answer | they asked the address, beds and baths, the size, the lot, the year, the basement, the alley, parking, sewer, zoning or whether it's vacant, and the deal row doesn't have it |
+| A walk ask with nothing on file | they asked when or how they can see it, and the deal has no upcoming window and no access method |
+
+The last two aren't rewritten (`SITUATION_FLAG_RX`): no rewrite fixes what
+isn't on file, so no second model call is paid for.
+
+**The link goes with the reply.** A reply that offers the package on a deal
+that has a room gets `send_dataroom_invite` beside it: by itself only when
+the reply sends itself, they're already on the deal, and
+`dispoAutopilot.autoInvite` is on (the dial's Full); otherwise as an ask for
+your Send, and then the reply waits with it ("the reply offers the package
+and the link waits for your Send"), so no text says "here's the package"
+without the package. Never when Matt sent photos or a link in the last two
+hours, and never a second link on the deal inside a day (read off the newest
+invite on the room).
+
+**What the bot is shown.** Each deal line now carries its size ("size: 3bd
+2ba 1,440 sqft, built 1952, 5,000 sqft lot") from the underwrite's subject
+record. The investor prompt says: answer what they asked first, in the deal's
+own lines, and set needsHuman when the lines don't say; the link goes with
+the reply, so never "pulling it together"; never promise anything else for
+later; deals go by text and email; a partner they name is added by a person.
+The no-window and no-access lines now say to set needsHuman instead of "I'll
+line it up with the agent". Note: a figure the record has but the deal book
+doesn't (1,440 sqft) still trips the invented-number check and waits for you;
+that check wasn't loosened.
+
+**Matt in a buyer thread.** The bot stands aside for an hour
+(`BUYER_HUMAN_ACTIVE_MIN`) after any text or call of Matt's to a buyer, not
+only when his was the last text of ours (`handLines` reads every line of ours
+in the window; a sent draft, the offer text or a GHL template isn't his). The
+stand-aside for agents is unchanged. Between one and two hours after photos
+or a link of his, no package link goes by itself from any path (the blast's
+link on reply, the dataroom guard, the reply's own offer), and a reply that
+offers them again is held.
+
+**A buyer's yes is a call now.** A buyer who wants to buy it
+(`wants_to_buy`), says yes to the walkthrough (`walkthrough: coming`), or
+asks when or how they can see it, whatever the reply read it as, writes a
+`call_wanted` event with `callNow` (shared/call-words.js `callWanted`). The
+#needs-matt ping opens "Call now: Rory wants to buy *9 Larchmont Pl*" or
+"…wants to see…", with the day they named. A held `wants_to_buy` reply is a
+Call row on the Desk (`CALL_INTENTS`), like a walk ask. The reply itself
+still waits for you: `wants_to_buy` and `wants_walkthrough` stay `NEVER_AUTO`.
+
+**A partner they name.** "Send these to my partner Jo too, jo@…" or "add
+my acquisitions manager" (`buyerReferral`) writes a `referral_mentioned`
+event (party investor, `data.buyer`, the name, relation and the email or
+phone they gave, never their words). The Desk shows "Add to the buyer list:
+Jo (Rory's partner)" with the address. The bot never creates the contact or
+texts them, and a reply that promises to is held. Their address is never
+saved as the buyer's own (`emailOwner` reads it as someone else's).
+
+No new switch: all of it only holds or pings, and the one link that can go by
+itself rides the existing `dispoAutopilot.autoInvite` (off unless the dial is
+on Full). The stand-aside asks GHL who sent the newest lines, so a workflow or
+the missed-call text-back is not taken for Matt.
 
 ### Rural: two acres or more (2026-10-08)
 
