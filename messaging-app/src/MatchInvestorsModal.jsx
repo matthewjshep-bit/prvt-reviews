@@ -19,6 +19,41 @@ const FIT_CLS = {
   weak: "bg-slate-50 text-slate-500",
 };
 
+/**
+ * blastResultLine(r) → { text, tone: "ok" | "warn" | "error" }
+ *
+ * What a Find buyers send did, in words. The app path answers with queued,
+ * drafted and waiting counts (and a reason when nothing went: a stopped or
+ * soft-committed deal); only the GHL tag path has `blasted`. Before
+ * 2026-11-23 both read `blasted`, so an app send said 'Tagged undefined'.
+ */
+export function blastResultLine(r) {
+  if (!r) return null;
+  if (r.error) return { text: String(r.error), tone: "error" };
+  const s = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+  if (r.sendWith === "app") {
+    if (r.dryRun) return { text: `Dry run on the server (deal texts are off there): nothing was queued.${r.reason ? ` ${r.reason}.` : ""}`, tone: "warn" };
+    const queued = Number(r.queued) || 0, drafted = Number(r.drafted) || 0, waiting = Number(r.waiting) || 0;
+    if (!queued && !drafted) return { text: `Nothing went out${r.reason ? `: ${r.reason}` : ", every buyer picked already has it or can't be texted"}.`, tone: "warn" };
+    const parts = [
+      queued && `${s(queued, "deal text", "deal texts")} queued, going out over the sending hours`,
+      drafted && `${drafted} waiting for you in the outbox${r.reason ? ` (${r.reason})` : ""}`,
+      waiting && `${waiting} of them held for a buyer's weekly limit`,
+    ].filter(Boolean);
+    return { text: `${parts.join("; ")}.`, tone: "ok" };
+  }
+  if (r.dryRun) return { text: "Server ran a dry run (DISPO_BLASTS_ENABLED is off) — nothing was tagged.", tone: "warn" };
+  const n = Number(r.blasted) || 0;
+  return { text: `Tagged ${s(n, "investor", "investors")} with "${r.blastTag || ""}".`, tone: n ? "ok" : "warn" };
+}
+
+/** pickFits(results, { fit, existingIds }) → Set(contactId): every row (or every `fit` row) not already on the deal. */
+export function pickFits(results = [], { fit = null, existingIds = null } = {}) {
+  return new Set((results || [])
+    .filter((r) => r?.contactId && (!fit || r.fit === fit) && !existingIds?.has(r.contactId))
+    .map((r) => r.contactId));
+}
+
 export default function MatchInvestorsModal({ offer, existingIds, onClose, onLink }) {
   const [data, setData] = useState(null); // null | {error} | match response
   const [strict, setStrict] = useState(false);
@@ -145,6 +180,23 @@ export default function MatchInvestorsModal({ offer, existingIds, onClose, onLin
 
         {data?.results?.length > 0 && (
           <>
+            <div className="mb-1.5 flex flex-wrap items-center gap-2 text-xs">
+              <button type="button" className="font-semibold text-blue-700 underline decoration-blue-200 underline-offset-2 hover:text-blue-900"
+                onClick={() => setSelected(pickFits(data.results, { fit: "strong", existingIds }))}>
+                Select strong fits ({pickFits(data.results, { fit: "strong", existingIds }).size})
+              </button>
+              <button type="button" className="font-semibold text-blue-700 underline decoration-blue-200 underline-offset-2 hover:text-blue-900"
+                onClick={() => setSelected(pickFits(data.results, { existingIds }))}>
+                Select all ({pickFits(data.results, { existingIds }).size})
+              </button>
+              {selected.size > 0 && (
+                <button type="button" className="text-slate-500 underline decoration-slate-300 underline-offset-2 hover:text-slate-800"
+                  onClick={() => setSelected(new Set())}>
+                  Clear
+                </button>
+              )}
+              <span className="text-slate-400">Buyers already on the deal are left out.</span>
+            </div>
             <div className="max-h-[26rem] space-y-1.5 overflow-y-auto">
               {data.results.map((r) => {
                 const already = existingIds?.has(r.contactId);
@@ -197,17 +249,14 @@ export default function MatchInvestorsModal({ offer, existingIds, onClose, onLin
               </button>
             </div>
 
-            {blast && (
-              <div className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-sm">
-                {blast.error ? <span className="text-red-700">{blast.error}</span> : (
-                  <span className={blast.dryRun ? "text-amber-800" : "text-emerald-800"}>
-                    {blast.dryRun
-                      ? "Server ran a dry run (DISPO_BLASTS_ENABLED is off) — nothing was tagged."
-                      : `Tagged ${blast.blasted} investor${blast.blasted === 1 ? "" : "s"} with "${blast.blastTag}".`}
-                  </span>
-                )}
-              </div>
-            )}
+            {blast && (() => {
+              const line = blastResultLine(blast);
+              return (
+                <div role="status" className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-sm">
+                  <span className={line.tone === "error" ? "text-red-700" : line.tone === "warn" ? "text-amber-800" : "text-emerald-800"}>{line.text}</span>
+                </div>
+              );
+            })()}
           </>
         )}
         <LeftOffList leftOff={leftOff} />
