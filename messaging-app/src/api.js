@@ -565,9 +565,11 @@ export const suggestInvestors = (id) =>
 export const listDealDocs = (id) =>
   fetch(`${API_BASE}/api/offers/${encodeURIComponent(id)}/deal/documents?${locq()}`)
     .then(j).then((r) => r.documents);
+// → { documents, offer }: the deal comes back too, so a checklist line the
+// upload ticked (the signed P&S, the assignment) shows without a reload.
 export const uploadDealDoc = (id, { name, kind, data }) =>
   post(`/api/offers/${encodeURIComponent(id)}/deal/documents`, { name, kind, data })
-    .then((r) => r.documents);
+    .then((r) => ({ documents: r.documents, offer: r.offer || null }));
 // The console's own link. Location-gated like every other read in this app.
 export const dealDocUrl = (id, docId, { download = false } = {}) =>
   `${API_BASE}/api/offers/${encodeURIComponent(id)}/deal/documents/${encodeURIComponent(docId)}?${locq()}${download ? "&download=1" : ""}`;

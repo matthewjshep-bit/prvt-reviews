@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { Mail, MessageSquare, Pencil, Phone } from "lucide-react";
 import { PARTY_ROLES, PARTY_LABEL, resolveParties, partyName } from "@shared/deal-parties.js";
 import { updateDeal } from "./api.js";
-import { BTN, BTN_PRIMARY } from "./ui.jsx";
+import { BTN } from "./ui.jsx";
 import ContactLink from "./ContactLink.jsx";
 import ContactSearch from "./ContactSearch.jsx";
 
@@ -23,14 +23,28 @@ export default function DealParties({ offer, settings, onUpdated }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  async function save(role, value) {
-    setError(""); setBusy(true);
+  const [saved, setSaved] = useState(false);
+  // Saves as you go (2026-11-23, no Save button): a contact picked from GHL at
+  // once, a typed field when you leave it. Done closes the row; Clear takes
+  // the deal's own copy off.
+  async function save(role, value, { close = false } = {}) {
+    setError(""); setBusy(true); setSaved(false);
     try {
       const r = await updateDeal(offer.id, { parties: { [role]: value } });
       if (r?.offer) onUpdated(r.offer);
-      setEditing(null);
+      setSaved(true);
+      if (close) setEditing(null);
     } catch (e) { setError(e.message); } finally { setBusy(false); }
   }
+  // Against what the row last held (opened with, or last saved), so leaving
+  // a field untouched never stores a copy of a party the app only inferred.
+  const changed = (role, fields) => Object.keys(EMPTY).some((k) => String(fields[k] || "") !== String(editing?.last?.[k] || ""));
+  const hasAny = (fields) => Object.keys(EMPTY).some((k) => String(fields[k] || "").trim());
+  const commit = (role, fields) => {
+    if (!hasAny(fields) || !changed(role, fields)) return;
+    setEditing((e) => (e && e.role === role ? { ...e, last: fields } : e));
+    save(role, fields);
+  };
 
   return (
     <div className="space-y-1">
@@ -60,7 +74,7 @@ export default function DealParties({ offer, settings, onUpdated }) {
                   {p?.email && <a href={`mailto:${p.email}`} title={`Email ${partyName(p)}`} className="rounded p-1 hover:bg-slate-100 hover:text-slate-800"><Mail size={14} /></a>}
                   {!open && (
                     <button type="button" title={p ? "Edit" : "Add"} className="rounded p-1 hover:bg-slate-100 hover:text-slate-800"
-                      onClick={() => setEditing({ role, fields: { ...EMPTY, ...(p || {}) } })}>
+                      onClick={() => { const fields = { ...EMPTY, ...(p || {}) }; setSaved(false); setEditing({ role, fields, last: fields }); }}>
                       {p ? <Pencil size={14} /> : <span className="px-1 text-xs font-semibold text-blue-600">Add</span>}
                     </button>
                   )}
@@ -69,22 +83,29 @@ export default function DealParties({ offer, settings, onUpdated }) {
               {open && (
                 <div className="mt-2 space-y-2">
                   <ContactSearch busy={busy} autoFocus placeholder={`Find the ${PARTY_LABEL[role].toLowerCase()} in GHL, or type below`}
-                    onPick={(c) => setEditing((e) => ({ ...e, fields: { ...e.fields, contactId: c.id, name: c.name || "", phone: c.phone || "", email: c.email || "" } }))} />
+                    onPick={(c) => {
+                      const fields = { ...editing.fields, contactId: c.id, name: c.name || "", phone: c.phone || "", email: c.email || "" };
+                      setEditing((e) => ({ ...e, fields }));
+                      commit(role, fields);
+                    }} />
                   <div className="grid grid-cols-2 gap-2">
                     {[["name", "Name"], ["company", "Company"], ["phone", "Phone"], ["email", "Email"]].map(([k, label]) => (
-                      <input key={k} className={inputCls} placeholder={label} value={editing.fields[k]}
-                        onChange={(e) => setEditing((x) => ({ ...x, fields: { ...x.fields, [k]: e.target.value } }))} />
+                      <input key={k} className={inputCls} placeholder={label} aria-label={label} value={editing.fields[k]}
+                        onChange={(e) => setEditing((x) => ({ ...x, fields: { ...x.fields, [k]: e.target.value } }))}
+                        onBlur={() => commit(role, editing.fields)} />
                     ))}
                   </div>
-                  <input className={inputCls} placeholder="Note (file number, officer's assistant…)" value={editing.fields.note}
-                    onChange={(e) => setEditing((x) => ({ ...x, fields: { ...x.fields, note: e.target.value } }))} />
+                  <input className={inputCls} placeholder="Note (file number, officer's assistant…)" aria-label="Note" value={editing.fields.note}
+                    onChange={(e) => setEditing((x) => ({ ...x, fields: { ...x.fields, note: e.target.value } }))}
+                    onBlur={() => commit(role, editing.fields)} />
                   {editing.fields.contactId && (
-                    <p className="text-xs text-slate-500">Linked to a GHL contact. <button type="button" className="underline" onClick={() => setEditing((x) => ({ ...x, fields: { ...x.fields, contactId: "" } }))}>Unlink</button></p>
+                    <p className="text-xs text-slate-500">Linked to a GHL contact. <button type="button" className="underline" onClick={() => { const fields = { ...editing.fields, contactId: "" }; setEditing((x) => ({ ...x, fields })); commit(role, fields); }}>Unlink</button></p>
                   )}
-                  <div className="flex gap-1.5">
-                    <button type="button" className={BTN_PRIMARY} disabled={busy} onClick={() => save(role, editing.fields)}>Save</button>
-                    <button type="button" className={BTN} onClick={() => setEditing(null)}>Cancel</button>
-                    {p?.stored && <button type="button" className={`${BTN} ml-auto`} disabled={busy} onClick={() => save(role, null)}>Clear</button>}
+                  <div className="flex items-center gap-1.5">
+                    <button type="button" className={BTN} disabled={busy}
+                      onClick={() => { if (hasAny(editing.fields) && changed(role, editing.fields)) save(role, editing.fields, { close: true }); else setEditing(null); }}>Done</button>
+                    <span className="text-[11px] text-slate-500" aria-live="polite">{busy ? "Saving…" : saved ? "Saved" : "Saves when you leave a field."}</span>
+                    {p?.stored && <button type="button" className={`${BTN} ml-auto`} disabled={busy} onClick={() => save(role, null, { close: true })}>Clear</button>}
                   </div>
                 </div>
               )}

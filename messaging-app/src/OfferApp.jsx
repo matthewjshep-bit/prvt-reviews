@@ -212,6 +212,14 @@ export default function OfferApp() {
   });
   const [initialContactId, setInitialContactId] = useState(() => readParam("contact_id"));
   const [editing, setEditing] = useState(null); // draft/offer being reopened in the form
+  // The deal to open when the Deals view mounts (2026-11-23): a promote lands
+  // on the new deal to confirm its fee, dates and kind, not on the list.
+  const [dealFocus, setDealFocus] = useState(null); // null | { id, fresh, warnings }
+  const openDeal = (x, extra = {}) => {
+    const id = typeof x === "string" ? x : x?.id || null;
+    setDealFocus(id ? { id, fresh: Boolean(extra.fresh), warnings: extra.warnings || [] } : null);
+    setView("deals");
+  };
   const [formNonce, setFormNonce] = useState(0); // bump to remount NewOffer blank
 
   const resetForm = () => {
@@ -370,7 +378,7 @@ export default function OfferApp() {
             // the form isn't remounted — this only re-points `restore` at the
             // saved row, which is what the Offer details popout reads.
             onOfferSaved={(o) => setEditing((cur) => (cur && cur.id === o.id ? o : cur))}
-            onDeal={() => setView("deals")}
+            onDeal={openDeal}
             // On the Luxury page a new offer starts as a luxury lot, priced by the lot.
             startLane={APP_MODE === "luxury" ? "luxury" : ""}
           />
@@ -381,11 +389,12 @@ export default function OfferApp() {
         {view === "history" && (
           <OffersHistory onEdit={(o) => { setEditing(o); setView("new"); }}
             onNew={(contactId) => { setEditing(null); setInitialContactId(contactId); setFormNonce((n) => n + 1); setView("new"); }}
-            onDeal={() => setView("deals")} settings={settings}
+            onDeal={openDeal} settings={settings}
             only={APP_MODE === "luxury" ? isLuxuryLot : APP_MODE === "offers" ? notLuxury : null} />
         )}
         {view === "deals" && (
           <DealsView settings={settings} only={APP_MODE === "luxury" ? isLuxuryLot : APP_MODE === "offers" ? notLuxury : null}
+            focus={dealFocus} onFocused={() => setDealFocus(null)}
             onEdit={APP_MODE === "deals"
               ? (o) => window.open(offerEditorUrl(o.id), "_blank")
               : (o) => { setEditing(o); setView("new"); }} />

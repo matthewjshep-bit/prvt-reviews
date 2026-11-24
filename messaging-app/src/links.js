@@ -40,3 +40,18 @@ export function movedTo(pathname = "", search = "") {
   }
   return null;
 }
+
+/**
+ * dealHref(offerOrId, { fresh }) → "/deals?…": the standalone Deals page, opened on one
+ * deal. `fresh` (a promote just made it) opens it to confirm its fee, dates
+ * and kind (2026-11-23). Used where no shell view can take us there.
+ */
+export function dealHref(offerOrId, { fresh = false } = {}, search = typeof window !== "undefined" ? window.location.search : "") {
+  const id = typeof offerOrId === "string" ? offerOrId : offerOrId?.id || "";
+  const q = new URLSearchParams(search);
+  q.delete("deal_id"); q.delete("confirm");
+  if (id) q.set("deal_id", id);
+  if (id && fresh) q.set("confirm", "1");
+  const qs = q.toString();
+  return `/deals${qs ? `?${qs}` : ""}`;
+}

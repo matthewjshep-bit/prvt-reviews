@@ -2856,9 +2856,19 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const { locationId } = resolveLocation(req);
       const limit = Math.min(500, parseInt(req.query.limit, 10) || 200);
       const deals = await store.listDeals(locationId, { limit });
+      // How many buyers each deal actually went to, by the app or by hand
+      // (2026-11-23): one grouped read, never deal.blasts[].count, which is
+      // what a blast queued (a stopped one included). A failed read leaves
+      // the count off rather than saying zero.
+      const sends = await store.dealSendCounts?.(locationId, deals.map((o) => o.id)).catch(() => null);
       // The Deals tab needs none of the fat calc/snapshot blobs. The kind of
       // house is read off the snapshot first, for a deal older than the field.
-      res.json({ deals: deals.map((o) => { const { snapshot, calc, ...rest } = o; const asset = assetOf(o); return asset ? { ...rest, asset } : rest; }) });
+      res.json({ deals: deals.map((o) => {
+        const { snapshot, calc, ...rest } = o;
+        const asset = assetOf(o);
+        const out = asset ? { ...rest, asset } : rest;
+        return sends ? { ...out, deal: { ...out.deal, sends: sends[o.id] || { sent: 0, lastAt: null } } } : out;
+      }) });
     } catch (err) { fail(res, err); }
   });
 
@@ -7893,7 +7903,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           await store.updateOffer(fresh.id, fresh);
         }
       }
-      res.json({ ok: true, document, documents: await store.listDealDocs(ctx.offer.id) });
+      // The deal comes back too (2026-11-23): the checklist line this upload
+      // ticked shows on screen without a reload, and the stage move's
+      // "still open" confirm reads the current list.
+      const offer = await store.getOffer(ctx.offer.id).catch(() => null);
+      res.json({ ok: true, document, documents: await store.listDealDocs(ctx.offer.id), ...(offer?.deal ? { offer } : {}) });
     } catch (err) { fail(res, err); }
   });
 

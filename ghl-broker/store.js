@@ -11,6 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { dbEnabled, query, migrate } from "./db.js";
+import { DEAL_SENT_TYPES as DEAL_SEND_EVENT_TYPES } from "./shared/buyer-score.js";
 import { OFFER_LIST_FIELDS, LEAN_CALC_SETTINGS, LEAN_CASH_FIELDS, toListOffer, leanOfferDoc, effectiveStatus, OPEN_STATUSES } from "./shared/offer-status.js";
 
 // pg hands bigint back as a string and real as a float; the API speaks numbers.
@@ -1583,6 +1584,21 @@ const pgStore = {
       params
     );
     return rows.map((r) => ({ ...r, at: r.at instanceof Date ? r.at.toISOString() : r.at }));
+  },
+  // How many buyers each deal actually went to (2026-11-23, the Deals list):
+  // distinct contacts with a blast_sent or deal_hand_sent on the offer, and
+  // the newest. One grouped read on contact_events_offer_idx for the whole
+  // list. { [offerId]: { sent, lastAt } }; a deal with none is left out.
+  async dealSendCounts(locationId, offerIds = [], { types = DEAL_SEND_EVENT_TYPES } = {}) {
+    const ids = [...new Set((offerIds || []).filter(Boolean).map(String))];
+    if (!ids.length) return {};
+    const { rows } = await query(
+      `select offer_id as "offerId", count(distinct contact_id)::int as sent, max(at) as "lastAt"
+         from contact_events where location_id = $1 and offer_id = any($2::text[]) and type = any($3::text[])
+        group by offer_id`,
+      [locationId, ids, types]
+    );
+    return Object.fromEntries(rows.map((r) => [r.offerId, { sent: Number(r.sent) || 0, lastAt: r.lastAt instanceof Date ? r.lastAt.toISOString() : r.lastAt || null }]));
   },
   async listContactEventsByOffer(locationId, offerId, { limit = 200 } = {}) {
     const { rows } = await query(
@@ -3180,6 +3196,23 @@ const fileStore = (() => {
       data.coachProposals[id] = full;
       persist();
       return full;
+    },
+    async dealSendCounts(locationId, offerIds = [], { types = DEAL_SEND_EVENT_TYPES } = {}) {
+      ensure();
+      const want = new Set((offerIds || []).filter(Boolean).map(String));
+      if (!want.size) return {};
+      const by = new Map();
+      for (const [k, list] of Object.entries(data.contactEvents)) {
+        if (!k.startsWith(`${locationId}|`)) continue;
+        for (const e of list) {
+          if (!e?.offerId || !want.has(String(e.offerId)) || !types.includes(e.type)) continue;
+          const g = by.get(e.offerId) || { contacts: new Set(), lastAt: null };
+          g.contacts.add(e.contactId);
+          if (!g.lastAt || String(e.at) > g.lastAt) g.lastAt = String(e.at);
+          by.set(e.offerId, g);
+        }
+      }
+      return Object.fromEntries([...by].map(([id, g]) => [id, { sent: g.contacts.size, lastAt: g.lastAt }]));
     },
     async listContactEventsByOffer(locationId, offerId, { limit = 200 } = {}) {
       ensure();

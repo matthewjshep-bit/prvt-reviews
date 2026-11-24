@@ -297,7 +297,7 @@ export function StatusMenu({ offer, onSelect, busy, onDealNav }) {
   // A promoted offer's outcome is settled; the pill becomes a link to the deal.
   if (offer.deal) {
     return (
-      <button type="button" onClick={(e) => { e.stopPropagation(); onDealNav?.(); }}
+      <button type="button" onClick={(e) => { e.stopPropagation(); onDealNav?.(offer); }}
         aria-label={`Under contract — open the Deals tab`}>
         <StagePill stage={offer.deal.stage} small />
       </button>
