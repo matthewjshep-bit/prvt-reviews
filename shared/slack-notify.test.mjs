@@ -366,3 +366,14 @@ test("someone who asks for a call is a Needs Matt ping of its own with their fir
   const leaky = textOf(renderEvent(r, { ...ev, data: { wants: "call", when: "at 3, 425-555-0187" } }, { firstName: "Bryn" }));
   assert.doesNotMatch(leaky, /555-0187/);
 });
+
+// The 2026-11-23 buyer audit (dispo-4): a buyer's yes sat four days. The
+// Needs Matt ping for a buyer who wants it or wants to see it says call now.
+test("a buyer who wants to buy or see a house is a call-now ping", () => {
+  const [r] = routeEvent({ type: "call_wanted", party: "investor" });
+  const ev = { type: "call_wanted", party: "investor", contactId: "c-9", address: "9 Larchmont Pl, Kent, WA 98030" };
+  const buy = textOf(renderEvent(r, { ...ev, data: { intent: "wants_to_buy", wants: "buy", callNow: true } }, { firstName: "Rory" }));
+  assert.match(buy, /Call now: Rory wants to buy \*9 Larchmont Pl\*/);
+  const walk = textOf(renderEvent(r, { ...ev, data: { intent: "wants_walkthrough", wants: "walkthrough", callNow: true, when: "Saturday" } }, { firstName: "Rory" }));
+  assert.match(walk, /Call now: Rory wants to see \*9 Larchmont Pl\*\. They named Saturday\./);
+});

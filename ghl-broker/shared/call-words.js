@@ -26,6 +26,8 @@
 //
 // Pure.
 
+import { walkAsk } from "./buyer-reply.js";
+
 export const BOOKING_RETIRED = true;
 export const CALL_ASK_RETIRED = true;
 
@@ -189,8 +191,18 @@ export function namedTime(text = "") {
  * a time to talk: the intent the reply read, or their own words asking for
  * a call. `wants` is "walkthrough" or "call"; `when` is namedTime's.
  */
-export function callWanted({ party = "", intent = "", message = "" } = {}) {
+export function callWanted({ party = "", intent = "", message = "", walkthrough = "" } = {}) {
   if (party !== "agent" && party !== "investor") return null;
+  // A buyer's yes is a call now (the 2026-11-23 buyer audit, dispo-4: a yes
+  // with an access ask sat four days and the house went to another buyer):
+  // they want to buy it, they said yes to the walkthrough, or they asked
+  // when or how they can see it, whatever the reply read it as.
+  if (party === "investor") {
+    const buys = intent === "wants_to_buy";
+    if (buys || intent === "wants_walkthrough" || walkthrough === "coming" || walkAsk(message)) {
+      return { intent: buys ? "wants_to_buy" : "wants_walkthrough", wants: buys ? "buy" : "walkthrough", when: namedTime(message), callNow: true };
+    }
+  }
   const byIntent = CALL_WANTED_INTENTS.includes(intent);
   if (!byIntent && !asksForACall(message)) return null;
   if (NO_CALLS_RX.test(String(message || "")) && !byIntent) return null;

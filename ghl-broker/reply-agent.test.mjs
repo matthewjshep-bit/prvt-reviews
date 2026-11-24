@@ -9893,3 +9893,32 @@ test("Matt's text to a buyer in the last hour makes the bot stand aside, even af
   // Nothing of Matt's in two hours: nothing.
   assert.deepEqual(await handLines({ store, locationId: "LOC", contactId: "c1", transcript: `[${at(300)}] US sms: hi`, minutes: 120 }), []);
 });
+
+// Investor-on-deal-1 #15: a buyer said yes and asked for access, nobody
+// answered for four days, and the house went to another buyer.
+test("a buyer who says they'll take it puts a call-now ping in Needs Matt, and the reply waits for him", async () => {
+  _resetJobs();
+  const store = buyerStore();
+  const { job } = await startReply({ client: buyerClient(), locationId: "LOC", saved: BUYER_SAVED, store, contactId: "c1", message: "I'll take 54th, what do you need from me?", channel: "sms", sendsEnabled: true,
+    deps: { draft: async () => ({ ...DRAFT, intent: "wants_to_buy", confidence: "high", reply: "Great, let me confirm it's still available and get back to you today.", propertyAddress: "2010 NE 54th St", counterAmount: 0 }) } });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const [ping] = (await store.listContactEvents("LOC", "c1")).filter((e) => e.type === "call_wanted");
+  assert.ok(ping, "Matt hears about it");
+  assert.equal(ping.data.wants, "buy");
+  assert.equal(ping.data.callNow, true);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.notEqual(d.status, "sent");
+  assert.equal(d.autoSendable, false);
+});
+
+test("a buyer who asks when they can see it, read as a question, still puts a call-now ping in", async () => {
+  _resetJobs();
+  const store = buyerStore();
+  await startReply({ client: buyerClient(), locationId: "LOC", saved: BUYER_SAVED, store, contactId: "c1", message: "When can I see 54th?", channel: "sms", sendsEnabled: true,
+    deps: { draft: async () => ({ ...DRAFT, intent: "question", confidence: "high", reply: "Which day works for you?", propertyAddress: "2010 NE 54th St", counterAmount: 0 }) } });
+  await settle();
+  const [ping] = (await store.listContactEvents("LOC", "c1")).filter((e) => e.type === "call_wanted");
+  assert.equal(ping?.data?.wants, "walkthrough");
+  assert.equal(ping?.data?.callNow, true);
+});

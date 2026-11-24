@@ -5990,13 +5990,13 @@ async function runReply(job, ctx) {
   // first name, the house and any time they named, never their words. One per
   // person a day for each time named; a redraft of the same text is the same.
   if (!isCall || job.call?.missed) {
-    const wanted = callWanted({ party, intent: draft.intent, message: theirLatestWords(a.transcript, job.originalMessage || job.message) });
+    const wanted = callWanted({ party, intent: draft.intent, message: theirLatestWords(a.transcript, job.originalMessage || job.message), walkthrough: draft.walkthrough || "" });
     if (wanted) {
       const day = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles" }).format(new Date(now));
       await recordEvent({ store, locationId, contactId: job.contactId, party, type: CALL_WANTED_EVENT, at: new Date(now).toISOString(),
         address: draft.propertyAddress || "", source: "conversation", ref: job.id,
         dedupeKey: `${CALL_WANTED_EVENT}:${job.contactId}:${day}:${String(wanted.when || "").toLowerCase()}`,
-        data: { intent: wanted.intent, wants: wanted.wants, ...(wanted.when ? { when: wanted.when } : {}), ...(job.call?.missed ? { voicemail: true } : {}) } }).catch(() => {});
+        data: { intent: wanted.intent, wants: wanted.wants, ...(wanted.when ? { when: wanted.when } : {}), ...(wanted.callNow ? { callNow: true } : {}), ...(job.call?.missed ? { voicemail: true } : {}) } }).catch(() => {});
     }
   }
 

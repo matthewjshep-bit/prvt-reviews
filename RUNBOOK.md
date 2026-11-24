@@ -10167,7 +10167,16 @@ only when his was the last text of ours (`handLines` reads every line of ours
 in the window; a sent draft, the offer text or a GHL template isn't his). The
 stand-aside for agents is unchanged.
 
-No switch: all of it only holds or attaches a link the reply already offered.
+**A buyer's yes is a call now.** A buyer who wants to buy it
+(`wants_to_buy`), says yes to the walkthrough (`walkthrough: coming`), or
+asks when or how they can see it, whatever the reply read it as, writes a
+`call_wanted` event with `callNow` (shared/call-words.js `callWanted`). The
+#needs-matt ping opens "Call now: Rory wants to buy *9 Larchmont Pl*" or
+"…wants to see…", with the day they named. A held `wants_to_buy` reply is a
+Call row on the Desk (`CALL_INTENTS`), like a walk ask. The reply itself
+still waits for you: `wants_to_buy` and `wants_walkthrough` stay `NEVER_AUTO`.
+
+No switch: all of it only holds, pings, or attaches a link the reply already offered.
 
 ### Rural: two acres or more (2026-10-08)
 

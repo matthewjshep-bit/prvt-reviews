@@ -35,7 +35,8 @@ export const DESK_SECTIONS = [
 const SECTION_RANK = Object.fromEntries(DESK_SECTIONS.map((s, i) => [s.key, i]));
 
 // A draft about one of these is a phone call, not a text to approve.
-export const CALL_INTENTS = new Set(["wants_call", "scheduling", "wants_walkthrough"]);
+// A buyer who wants to buy it is one too (the 2026-11-23 buyer audit, dispo-4).
+export const CALL_INTENTS = new Set(["wants_call", "scheduling", "wants_walkthrough", "wants_to_buy"]);
 
 // The lead of a person's row: the strongest reason, in this order. Call rows
 // first (the call list builds the call_* kinds), then the hand-offs and the
