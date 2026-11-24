@@ -559,7 +559,8 @@ reports (Flow, Line, Follow-up, Lessons) and the Companion window.
 - Retired: Autopilot → Overview (a summary of Reports → Follow-up) and
   Reports → Activity (counts Slack #daily already posts). Their links open
   Agent texts and Flow. Last night's audit (with Run now) and the coach's
-  proposals moved to More → Autopilot settings.
+  proposals moved to More → Autopilot settings. The #daily morning and
+  evening posts' "Open in app" opens Offers.
 - After this deploys, Matt can delete the Autopilot and Reports Custom Menu
   Links in GHL; keep Luxury's if he wants it in the GHL sidebar too.
 - Needs Matt on the rows: the Offers and Deals pages read

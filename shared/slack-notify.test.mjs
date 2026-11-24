@@ -366,3 +366,15 @@ test("someone who asks for a call is a Needs Matt ping of its own with their fir
   const leaky = textOf(renderEvent(r, { ...ev, data: { wants: "call", when: "at 3, 425-555-0187" } }, { firstName: "Bryn" }));
   assert.doesNotMatch(leaky, /555-0187/);
 });
+
+// Review 2026-11-23: Reports → Activity was retired, so the morning and
+// evening posts' "Open in app" quietly landed on Flow. They open Offers, the
+// page Matt works the day from.
+test("the morning and evening posts open Offers, not the retired Activity page", () => {
+  const ctx = { appUrl: "https://app.example.test", locationId: "loc1" };
+  for (const msg of [renderMorning({ offersSent: 1 }, ctx), renderEvening({ sections: [] }, {}, ctx)]) {
+    const t = textOf(msg);
+    assert.match(t, /<https:\/\/app\.example\.test\/\?view=history&location_id=loc1\|Open in app>/);
+    assert.doesNotMatch(t, /activity|\/reports/);
+  }
+});
