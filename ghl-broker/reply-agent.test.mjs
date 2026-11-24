@@ -10260,3 +10260,39 @@ test("the package link the app texted a buyer doesn't make the bot stand aside a
     assert.deepEqual(await handLines({ store: fakeStore([]), locationId: "LOC", contactId: "c1", transcript, minutes: 120 }), [], sent);
   }
 });
+
+// Matt, 2026-11-24: the cold ladder's last text says "do you ever work with
+// buyers who fix houses up? If not, happy to take you off my list." A plain
+// "no" to it is them taking that offer, and gets the same silence and tags as
+// STOP. The same "No" to any other text is a conversation for the model.
+const LAST_WORD_SENT = { ...openDraft(), id: "lw", status: "sent", sentAt: new Date(Date.now() - 86400000).toISOString(),
+  reply: "Hey Sam, sorry for all the texts. Do you ever work with buyers who fix houses up? If not, happy to take you off my list.",
+  sentText: "Hey Sam, sorry for all the texts. Do you ever work with buyers who fix houses up? If not, happy to take you off my list.",
+  outbound: { kind: "outreach_nudge", lastWord: true } };
+test("an agent who says no to 'should I take you off my list' is taken off, with no reply and no model call", async () => {
+  _resetJobs();
+  const { client, tags } = ghlStubFor(["agent"]);
+  const store = fakeStore([LAST_WORD_SENT]);
+  let called = false;
+  const { job } = await startReply({ client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", message: "Nope, thanks",
+    deps: { draft: async () => { called = true; return DRAFT; } } });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.equal(called, false);
+  assert.equal(job.intent, "opt_out");
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.reply, "");
+  assert.ok(tags.some(([m, t]) => m === "POST" && t.includes("dnc")));
+});
+
+test("an agent who says no to any other text of ours isn't taken off for it", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore([{ ...LAST_WORD_SENT, reply: "Does it need much work?", sentText: "Does it need much work?", outbound: { kind: "outreach_open" } }]);
+  let called = false;
+  const { job } = await startReply({ client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", message: "No",
+    deps: { draft: async () => { called = true; return { ...DRAFT, intent: "small_talk", reply: "" }; } } });
+  await settle();
+  assert.equal(called, true, "the model reads it");
+  assert.notEqual(job.intent, "opt_out");
+});

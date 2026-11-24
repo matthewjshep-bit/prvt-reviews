@@ -30,6 +30,7 @@ import { startAgentPulse, getAgentPulseJob, previewAgentPulse, startLeaveDrips, 
   planMattsFifteen, startMattsFifteen, getMattsFifteenJob, MATTS_FIFTEEN_CURSOR } from "../agent-pulse.js";
 import { ensureProfile, learnFacts, recordEvent, recordEvents } from "../contact-record.js";
 import { store } from "../store.js";
+import { LAST_WORD_CURSOR, queueLastWord, lastWordStatus } from "../last-word.js";
 import { mapPool } from "../map-pool.js";
 import { scrubMessage } from "../app-errors.js";
 import { scoreListing, medianPricePerSqft, distressSignals, meetsDistressRule, DISTRESS_RULES, OLD_HOUSE_YEAR, medianIndex, offMarketListings, OFF_MARKET_WITHIN_DAYS, recentListings, RECENT_LISTERS_DAYS } from "../outreach-score.js";
@@ -1609,6 +1610,37 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
         const z = found.get(streetKey(r.doc.hook.address));
         return { foundListing: Boolean(z), fields: z?.fields || [], hasName: Boolean(z?.name), sameName: Boolean(z && sameLastName(r.doc.name, z.name)), hasPhone: Boolean(z?.phone), hasEmail: Boolean(z?.email) };
       }) });
+    } catch (err) { fail(res, err); }
+  });
+
+  // The cold ladder's last text, once, to the agents whose ladder ran before
+  // it ended on it (last-word.js, Matt 2026-11-24). POST queues contact ids
+  // (dryRun reports how many are new); the tick sends `perDay` a workday.
+  router.get("/last-word", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const cursor = await store.getJobCursor?.(locationId, LAST_WORD_CURSOR).catch(() => null);
+      res.json({ ok: true, ...lastWordStatus(cursor?.doc || {}) });
+    } catch (err) { fail(res, err); }
+  });
+  router.post("/last-word", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const ids = Array.isArray(req.body?.contactIds) ? req.body.contactIds : [];
+      const cursor = await store.getJobCursor?.(locationId, LAST_WORD_CURSOR).catch(() => null);
+      const { doc, added } = queueLastWord(cursor?.doc || {}, ids, { perDay: req.body?.perDay, notBefore: req.body?.notBefore });
+      if (req.body?.dryRun !== false) return res.json({ ok: true, dryRun: true, wouldAdd: added, ...lastWordStatus(doc) });
+      await store.setJobCursor(locationId, LAST_WORD_CURSOR, { at: new Date().toISOString(), doc });
+      res.json({ ok: true, added, ...lastWordStatus(doc) });
+    } catch (err) { fail(res, err); }
+  });
+  router.post("/last-word/clear", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const cursor = await store.getJobCursor?.(locationId, LAST_WORD_CURSOR).catch(() => null);
+      const doc = { ...(cursor?.doc || {}), queue: [] };
+      await store.setJobCursor(locationId, LAST_WORD_CURSOR, { at: new Date().toISOString(), doc });
+      res.json({ ok: true, ...lastWordStatus(doc) });
     } catch (err) { fail(res, err); }
   });
 

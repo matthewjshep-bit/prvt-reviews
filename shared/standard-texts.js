@@ -398,8 +398,12 @@ export function standardText({ kind, outbound = {}, name = "", contactId = "", p
         const r = pickFilled(named, v + n - 1, values, prior);
         return r ? { text: r.text, set: "check_in", index: list.indexOf(named[r.index]), template: r.template } : null;
       };
-      if (Number(o.repeatMax) > 0 && n >= Number(o.repeatMax)) {
-        return done("cold_last", pickFilled(COLD_LAST_RUNG_TEXTS, v, values, prior)) || checkIn();
+      if (o.lastWord || (Number(o.repeatMax) > 0 && n >= Number(o.repeatMax))) {
+        // The last text (2026-11-24): with their first name, one of the
+        // four that use it; without, the one that doesn't. Never a generic
+        // check-in in its place: nothing rather than "any fixers?".
+        const named = COLD_LAST_RUNG_TEXTS.filter((t) => /\{first\}/.test(t) === Boolean(values.first));
+        return done("cold_last", pickFilled(named.length ? named : COLD_LAST_RUNG_TEXTS, v, values, prior));
       }
       return checkIn();
     }

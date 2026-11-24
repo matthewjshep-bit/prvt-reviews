@@ -443,6 +443,8 @@ export async function outreachCandidates({ store, locationId, config, now = Date
     if (!opened) continue;
     const after = (t) => list.some((e) => e.type === t && String(e.at) > String(opened.at));
     if (after("offer_sent") || after("realm_yes") || after("deal_promoted")) continue;
+    // They had the last text already (last-word.js, 2026-11-24): nothing more.
+    if (list.some((e) => e.type === "follow_up_sent" && e.data?.kind === "outreach_nudge" && e.data?.lastWord)) continue;
     const lastInboundAt = list.filter((e) => e.type === "text_summary" || e.type === "call_summary").at(-1)?.at || null;
     const lastTouchAt = list.filter((e) => e.type === "follow_up_sent" && e.data?.kind === "outreach_nudge").at(-1)?.at || null;
     const lastEmailAt = list.filter((e) => COLD_EMAIL_TYPES.includes(e.type)).at(-1)?.at || null;
@@ -603,6 +605,7 @@ export async function ghlCohortCandidates({ store, locationId, ladder, now = Dat
     const isNudge = (e) => e.type === "follow_up_sent" && e.data?.kind === "outreach_nudge";
     if (list.some((e) => OUR_LATER_TEXTS.has(e.type) && after(e) && !isNudge(e))) continue;
     const nudges = list.filter(isNudge);
+    if (nudges.some((e) => e.data?.lastWord)) continue;                     // they had the last text (last-word.js)
     out.push({
       kind: "outreach_nudge", party: "agent", contactId, subjectId: contactId,
       offerId: null, address: first.address || "", startedAt: first.at, county: "",
@@ -1064,7 +1067,11 @@ async function runSweep(job, ctx) {
     }
     // The offer nudge's weekly repeats run out (maxRepeats, 2026-10-22):
     // after that many with nothing back, the ladder is over like any other.
-    const capped = c.kind === "offer_nudge" && Number(c.ladder.maxRepeats) > 0
+    // So does the cold agent's (2026-11-24): until then maxRepeats only chose
+    // which rung said it was the last, and the ladder ran on to day 58 with
+    // "any houses around Kent that need real work?" (3% replies). Now the
+    // last rung is the "sorry for all the texts" one, and nothing follows it.
+    const capped = (c.kind === "offer_nudge" || c.kind === "outreach_nudge") && Number(c.ladder.maxRepeats) > 0
       && repeatsSent({ steps: c.ladder.steps, sentSteps: c.sentSteps }) >= Number(c.ladder.maxRepeats);
     // The second look has no ladder: its picker said it is due today
     // (shared/second-look.js), and the spacing below still holds it.
@@ -1221,6 +1228,8 @@ async function runSweep(job, ctx) {
                    ...(c.pastListing ? { pastListing: true } : {}),
                    // Check in less / more: which cold rung is the last one (reply-agent.js repeatOf).
                    ...(c.kind === "outreach_nudge" && pace !== 1 ? { pace } : {}),
+                   // The ladder's own cap marks its last rung (the "sorry for all the texts" one).
+                   ...(c.kind === "outreach_nudge" && Number(c.ladder.maxRepeats) > 0 ? { maxRepeats: Number(c.ladder.maxRepeats) } : {}),
                    ...(c.wavering ? { wavering: true } : {}),
                    ...(c.kind === SECOND_LOOK_KIND ? { theirs: c.theirs, source: c.source } : {}),
                    ...(aside ? { aside: { address: aside.address, quiet: Boolean(aside.quiet) } } : {}) },

@@ -51,7 +51,7 @@ test("a cold agent's day-58 text isn't their day-16 text", () => {
 test("the last rung says it is the last one", () => {
   const t = textFor(4);
   assert.equal(t.set, "cold_last");
-  assert.match(t.text, /last one from me|leave you be/i, t.text);
+  assert.match(t.text, /take you off my list/i, t.text);
   assert.ok(COLD_LAST_RUNG_TEXTS.map((x) => fillTemplate(x, { first: "Wendell", town: "Halden" })).includes(t.text));
   // A ladder with a cap of its own: its last repeat is the goodbye.
   assert.equal(textFor(2, { repeatMax: 2 }).set, "cold_last");
@@ -139,4 +139,38 @@ test("the first follow-up and every other kind read as before", () => {
   assert.match(v1.text, /4410 Quarry Rd/);
   // No first name: the greeting goes (the voice branch's fillTemplate), never "Hi, anything new?".
   assert.equal(fillTemplate("Hi {first}, anything new?", { first: "" }), "Anything new?");
+});
+
+
+// Matt, 2026-11-24: agents who never answered were getting "any houses around
+// Kent that need real work?" (3% replies) until the ladder ran out. The last
+// text now owns the volume and asks one yes/no, in words carriers let through.
+import { promisesToStop, noToTakingYouOff } from "./opt-out.js";
+test("the cold ladder's last text says sorry for the texts, asks one yes or no, and offers to stop", () => {
+  for (const tpl of COLD_LAST_RUNG_TEXTS) {
+    const text = fillTemplate(tpl, { first: "Wendell", town: "Halden" }) || tpl;
+    assert.match(text, /sorry|blowing up your phone/i, text);
+    assert.match(text, /take you off my list/i, text);
+    assert.equal((text.match(/\?/g) || []).length, 1, `one question: ${text}`);
+    assert.deepEqual(carrierFlags(text), [], `carrier-safe: ${text}`);
+    assert.ok(!/investor/i.test(text), text);
+    assert.ok(text.length <= 160, `${text.length} chars: ${text}`);
+    assert.ok(!/[—–!]/.test(text), `no dashes or exclamation marks: ${text}`);
+    // Sending it must not count as our promise to stop: that would opt them out the moment it went.
+    assert.equal(promisesToStop(text), false, text);
+  }
+});
+
+test("the last text goes with their first name when we have it, and without one when we don't", () => {
+  const named = textFor(1, { lastWord: true });
+  assert.equal(named.set, "cold_last");
+  assert.match(named.text, /Wendell/);
+  const nameless = textFor(1, { lastWord: true }, { name: "" });
+  assert.equal(nameless.set, "cold_last");
+  assert.match(nameless.text, /^Hey, sorry for all the texts/);
+});
+
+test("a plain no to the last text is an opt-out, and a yes or a conversation isn't", () => {
+  for (const no of ["No", "Nope", "no thanks", "Not really", "please do", "Take me off", "No, sorry", "I don't", "Pass, thanks"]) assert.equal(noToTakingYouOff(no), true, no);
+  for (const not of ["Yes", "Yes I do", "No but I have one coming next month", "No worries", "Not right now but maybe in spring", "Sometimes"]) assert.equal(noToTakingYouOff(not), false, not);
 });

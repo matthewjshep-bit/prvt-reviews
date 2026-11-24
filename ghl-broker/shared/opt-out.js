@@ -158,3 +158,14 @@ const PROMISE_TO_STOP_RX = new RegExp([
 export function promisesToStop(text = "") {
   return PROMISE_TO_STOP_RX.test(String(text || "").replace(/[‘’]/g, "'"));
 }
+
+// Our cold ladder's last text asks "do you work with buyers who fix houses
+// up? If not, happy to take you off my list" (shared/outreach-opener.js
+// COLD_LAST_RUNG_TEXTS, Matt 2026-11-24). A plain no to it, or "please do",
+// is them taking that offer: off the list, like STOP. Only a short answer
+// that is nothing but the no; "no, but I have one coming" is a conversation.
+const NO_TO_LAST_WORD_RX = /^\s*(?:no(?:pe|t really|t at (?:this|the) (?:time|moment)|t interested|t for me)?|nah|no thanks?|no thank you|no sir|no ma'?am|we (?:do not|don'?t)|i (?:do not|don'?t)(?: really)?|not (?:anymore|any more)|please do|go ahead|you can|sure,? (?:take me off|go ahead)|(?:yes,?\s*)?(?:please\s+)?(?:take|remove) me off(?: (?:your|the) list)?|pass)(?:[\s,.!]*(?:thanks?|thank you|thx|sorry|i'?m (?:good|all set)|all set|good luck|take care))*[\s.!]*$/i;
+export const LAST_WORD_TEXT_RX = /\btake you off my list\b/i;
+export function noToTakingYouOff(text = "") {
+  return NO_TO_LAST_WORD_RX.test(String(text || "").replace(/[\u2018\u2019]/g, "'"));
+}
