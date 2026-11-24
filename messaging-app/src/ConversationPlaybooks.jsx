@@ -905,6 +905,18 @@ export function DeliveryWatchCard({ config, patch }) {
   );
 }
 
+// The lane breaker (ghl-broker/lane-breaker.js, 2026-11-23). On by default:
+// it only ever stops sends. A stopped lane shows on the Offers page.
+export function LaneBreakerCard({ config, patch }) {
+  const b = config.laneBreaker || { enabled: true };
+  return (
+    <Section title="Lane breaker"
+      intro="Every 15 minutes it reads how each kind of machine text went: lot owner texts, agent first texts and nudges, agent and buyer check-ins, deal texts, gatekeeper texts. If 4 of the first 20 of a kind today come back blocked by the carrier (30007) or get a STOP, or 10% of the last 50 are blocked or 8% get a STOP within 3 days, that kind stops: its queued texts go back to drafts, you get one Slack line, and it stays stopped until you press Let it send again on the Offers page. It never sends anything. Answers to people's own texts are never held. About one GHL read per young send.">
+      <Toggle checked={b.enabled !== false} onChange={(v) => patch({ laneBreaker: { ...b, enabled: v } })}>Stop a lane whose texts get blocked or STOPped</Toggle>
+    </Section>
+  );
+}
+
 // The boot pass (conversationAi.nightlyAudit.bootPass, ghl-broker/
 // conversation-audit.js maybeRunBootPass, 2026-11-09). It rides on the
 // nightly audit's settings, so the rest of nightlyAudit is kept as it is.

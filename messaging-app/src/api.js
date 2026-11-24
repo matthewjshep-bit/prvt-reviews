@@ -907,6 +907,11 @@ export const runGatekeeperSweep = ({ dryRun = true } = {}) => post(`/api/gatekee
 
 /* ---------- the lot finder (luxury teardown lane: parcels → skip trace → owner texts) ---------- */
 export const getLotFinder = () => fetch(`${API_BASE}/api/lot-finder?${locq()}`).then(j);
+// The lane breaker (ghl-broker/lane-breaker.js): which machine lanes are
+// stopped because their texts were carrier-blocked or STOPped, and Matt's
+// one click to let one go again. Clearing schedules and sends nothing.
+export const getLaneBreaker = () => fetch(`${API_BASE}/api/lane-breaker?${locq()}`).then(j);
+export const clearLaneBreaker = (kind) => post(`/api/lane-breaker/clear`, { kind });
 export const getLotOwners = ({ pocketId = "", status = "", limit = 500 } = {}) =>
   fetch(`${API_BASE}/api/lot-finder/owners?${locq()}${pocketId ? `&pocketId=${encodeURIComponent(pocketId)}` : ""}${status ? `&status=${encodeURIComponent(status)}` : ""}&limit=${limit}`).then(j);
 export const setLotOwnerStatus = (ownerKey, status) => post(`/api/lot-finder/owners/${encodeURIComponent(ownerKey)}/status`, { status });
