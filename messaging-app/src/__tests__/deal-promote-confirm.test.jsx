@@ -40,7 +40,8 @@ test("without the promote's own list, the card shows the deal's promote warnings
 test("opening a deal from the list doesn't ask to confirm it", () => {
   const html = render(offer(), null);
   expect(html).not.toContain("Confirm the deal");
-  expect(html).toMatch(/aria-selected="true"[^>]*>Overview/);
+  // A deal still being shopped opens on its buyers.
+  expect(html).toMatch(/aria-selected="true"[^>]*>Buyers/);
 });
 
 test("outside the Offers app a promote still lands on the deal itself", () => {

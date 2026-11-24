@@ -17,7 +17,7 @@ import PostMortemModal from "./PostMortemView.jsx";
 import {
   addDealInvestor, dealDocUrl, deleteDealDoc, getOffer, ghlContactUrl, listDealDocs, listDeals,
   removeDeal, removeDealInvestor, setDealOutreachStopped, suggestInvestors, updateDeal, updateDealInvestor,
-  uploadDealDoc, zillowUrl, dealFeedbackUrl, getBuyerFunding, updateDealChecklist } from "./api.js";
+  uploadDealDoc, zillowUrl, dealFeedbackUrl, getBuyerFunding, updateDealChecklist, listDatarooms, getDataroom } from "./api.js";
 import AssignmentModal from "./AssignmentModal.jsx";
 import ContactLink from "./ContactLink.jsx";
 import DataroomModal from "./DataroomModal.jsx";
@@ -38,7 +38,7 @@ import { updateDealFeedback } from "./api.js";
 import { termsFrom, termsChanges, settleTerms, revertTerms, savedLine } from "./deal-autosave.js";
 import { resolveParties } from "@shared/deal-parties.js";
 import { buyerMoneyLine } from "@shared/buybox.js";
-import { dispoPulse, bestWords, moneyLine, inspectionCall } from "@shared/deal-pulse.js";
+import { dispoPulse, bestWords, moneyLine, inspectionCall, buyerFacts } from "@shared/deal-pulse.js";
 import {
   BTN, DEAL_STAGES, EmptyState, ErrorBar, KpiRow, STAGE, SkeletonRows, StagePill, TableCard,
   rowActivation,
@@ -625,7 +625,10 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
   const [tab, setTab] = useState(() => {
     // A deal promote just made opens on its terms, to be confirmed.
     if (confirmNew) return "paper";
-    try { const t = new URLSearchParams(window.location.search).get("tab"); return DEAL_TABS.some((x) => x.key === t) ? t : "overview"; } catch { return "overview"; }
+    // While the deal is being shopped it opens on its buyers; once a buyer is
+    // found, on the checklist (2026-11-23). A ?tab= link still wins.
+    const byStage = deal.stage === "under_contract" ? "buyers" : "overview";
+    try { const t = new URLSearchParams(window.location.search).get("tab"); return DEAL_TABS.some((x) => x.key === t) ? t : byStage; } catch { return byStage; }
   });
   const pickTab = (t) => {
     setTab(t);
@@ -751,7 +754,12 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
     commitTerms();
   };
   // Closing saves what's still being typed; the modal goes at once.
-  const close = () => { commitTerms(); onClose(); };
+  const close = () => {
+    commitTerms();
+    // The tab was this deal's; the next one opens on its own default.
+    try { const u = new URL(window.location.href); if (u.searchParams.has("tab")) { u.searchParams.delete("tab"); window.history.replaceState(null, "", u); } } catch { /* fine */ }
+    onClose();
+  };
 
   // Stop or resume outreach. Stopping pulls back what was already queued,
   // and resuming puts it back; the banner says how much either way, so
@@ -788,6 +796,25 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
     return () => { live = false; };
   }, [buyerKey]);
   const proofOnFile = checklist.items.some((it) => it.id === "assignee_funds" && it.done);
+  // Who opened their own package link (the dataroom's per-buyer invites),
+  // read once when the Buyers tab opens: the deal's room, then its invites.
+  const [packageRoom, setPackageRoom] = useState(null); // null | { invites: Map, opened, total } | { none: true }
+  useEffect(() => {
+    if (tab !== "buyers" || packageRoom) return undefined;
+    let live = true;
+    listDatarooms(offer.id)
+      .then(async (rooms) => {
+        const room = (rooms || [])[0];
+        if (!room) { if (live) setPackageRoom({ none: true }); return; }
+        const full = await getDataroom(room.id);
+        const invites = new Map();
+        for (const i of full?.dataroom?.invites || []) if (i?.contactId && i.status !== "revoked") invites.set(i.contactId, i);
+        const views = Number(full?.dataroom?.shareViews) || 0;
+        if (live) setPackageRoom({ invites, total: invites.size, opened: [...invites.values()].filter((i) => Number(i.viewCount) > 0).length, views });
+      })
+      .catch(() => { if (live) setPackageRoom({ none: true, failed: true }); });
+    return () => { live = false; };
+  }, [tab, offer.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function runSuggest() {
     setSuggest({ busy: true });
@@ -998,6 +1025,22 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
                   : `${paused.name || "A buyer"} is a soft commit, so no new blasts, second wave or nudges go to anyone new. Buyers already talking about it are still answered. Put them back to Evaluating and it picks up where it left off.`}
               </p>
             )}
+            {/* The buyer package and what buyers said, beside the buyers
+                (2026-11-23; these were on Terms & paperwork). */}
+            <div className="flex flex-wrap items-center gap-2">
+              <button type="button" onClick={() => onDataroom(offer)} className={BTN}
+                title="Build a secure investor package and text personal links to your buyers">
+                <Lock size={13} /> Investor dataroom
+              </button>
+              <a href={dealFeedbackUrl(offer.id)} target="_blank" rel="noreferrer" className={BTN}
+                title="What every buyer said about this one, in their words, as a page for the listing agent">
+                <MessageSquare size={13} /> Buyer feedback page
+              </a>
+              <span className="text-[11px] text-slate-500">
+                {!packageRoom ? "" : packageRoom.none ? (packageRoom.failed ? "Couldn't read the package." : "No buyer package yet.")
+                  : `Package: ${packageRoom.total} buyer link${packageRoom.total === 1 ? "" : "s"}, ${packageRoom.opened} opened${packageRoom.views ? ` · deal link viewed ${packageRoom.views}×` : ""}`}
+              </span>
+            </div>
             {deal.stage === "under_contract" && <WalkthroughCard key={offer.id} offer={offer} onUpdated={onUpdated} />}
             <div>
               <span className={labelCls}>Disposition investors</span>
@@ -1011,6 +1054,11 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
                       </span>
                       {i.contactId in funding && investorStatus(i.status) !== "passed" && (
                         <BuyerMoney fact={funding[i.contactId]} committed={investorStatus(i.status) === "committed"} proofOnFile={proofOnFile} />
+                      )}
+                      {buyerFacts(i, { rsvps: deal.showing?.rsvps || [], invite: packageRoom?.invites?.get(i.contactId) || null }).length > 0 && (
+                        <span className="block pl-3 text-[11px] leading-tight text-slate-500">
+                          {buyerFacts(i, { rsvps: deal.showing?.rsvps || [], invite: packageRoom?.invites?.get(i.contactId) || null }).join(" · ")}
+                        </span>
                       )}
                     </span>
                     <span className="flex shrink-0 items-center gap-1">
@@ -1035,6 +1083,10 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
                 ))}
               </div>
               <BuyerFeedback deal={deal} busy={busy} onFix={(body) => run(() => updateDealFeedback(offer.id, body))} />
+              <div className="mt-2">
+                <BuyerRead key={`read-${offer.id}`} deal={deal} busy={busy} labelCls={labelCls} inputCls={inputCls}
+                  onSave={(buyerRead) => run(() => updateDeal(offer.id, { buyerRead }))} />
+              </div>
               <div className="mt-2">
                 <InvestorPicker existingIds={investorIds} busy={busy}
                   onPick={(c) => run(() => addDealInvestor(offer.id, { contactId: c.id, name: c.name }))} />
@@ -1156,8 +1208,6 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
               </div>
             </div>
             {datesNote(deal) && <p className="text-[11px] leading-snug text-slate-600">{datesNote(deal)}</p>}
-            <BuyerRead key={`read-${offer.id}`} deal={deal} busy={busy} labelCls={labelCls} inputCls={inputCls}
-              onSave={(buyerRead) => run(() => updateDeal(offer.id, { buyerRead }))} />
             <div>
               <span className={labelCls}>Notes</span>
               <textarea rows={3} className={inputCls} value={terms.notes} placeholder="Deal notes…"
@@ -1201,20 +1251,12 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
                 title="Generate or update the assignment of contract for the committed buyer">
                 <FileText size={13} /> {offer.assignmentPdfUrl ? "Update assignment" : "Generate assignment"}
               </button>
-              <a href={dealFeedbackUrl(offer.id)} target="_blank" rel="noreferrer" className={BTN}
-                title="What every buyer said about this one, in their words, as a page for the listing agent">
-                <MessageSquare size={13} /> Buyer feedback
-              </a>
               <button type="button" onClick={() => setPostMortemOpen(true)} className={BTN}
                 title={deal.stage === "fell_through" ? "Why it died: the numbers against the buyer ceiling, what every buyer and the agent said, and what to do differently" : "The scorecard against the buyer ceiling, and the threads' reading"}>
                 <ClipboardCheck size={13} /> {deal.postMortem ? "Post-mortem" : "Write post-mortem"}
               </button>
-              <button type="button" onClick={() => onDataroom(offer)}
-                className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold hover:bg-slate-50"
-                title="Build a secure investor package and text personal links to your buyers">
-                <Lock size={13} /> Investor dataroom
-              </button>
             </div>
+            <p className="text-[11px] text-slate-500">The investor dataroom, the buyer feedback page and what buyers said it's worth are on the Buyers tab.</p>
 
             <button type="button" onClick={removeThisDeal} disabled={busy}
               className="flex items-center gap-1.5 text-xs font-medium text-slate-400 hover:text-red-600">

@@ -198,3 +198,33 @@ export function inspectionCall(deal = {}, { now = Date.now() } = {}) {
     lines,
   };
 }
+
+/* ---------- one buyer on the deal (D6) ---------- */
+
+const RSVP_WORDS = {
+  interested: "wants to walk it", coming: "coming to the walkthrough", cant_make_it: "can't make the walkthrough",
+  attended: "walked it", no_show: "didn't show for the walkthrough",
+};
+
+/**
+ * buyerFacts(inv, { rsvps, invite, now }) → ["on it 3d", "coming to the walkthrough", "agreed $415K", "opened the package 2×"]
+ *
+ * What the Buyers tab says under each buyer: how long since they moved on
+ * the deal, their walkthrough answer, a price they agreed, and whether they
+ * opened their own package link (the dataroom invite, when it was read).
+ */
+export function buyerFacts(inv = {}, { rsvps = [], invite = null, now = Date.now() } = {}) {
+  const out = [];
+  const moved = latest(inv.updatedAt, inv.addedAt);
+  const age = ageDays(moved, now);
+  if (age != null) out.push(age === 0 ? "moved today" : `last moved ${age}d ago`);
+  const r = (rsvps || []).find((x) => x?.contactId && x.contactId === inv.contactId);
+  if (r && RSVP_WORDS[r.status]) out.push(RSVP_WORDS[r.status]);
+  const agreed = round(inv.agreedPrice?.amount);
+  if (agreed > 0) out.push(`agreed ${shortMoney(agreed)}`);
+  if (invite) {
+    const n = Math.max(0, Math.round(Number(invite.viewCount) || 0));
+    out.push(n > 0 ? `opened the package ${n}×` : invite.sentAt ? "package not opened" : "package link not sent");
+  }
+  return out;
+}

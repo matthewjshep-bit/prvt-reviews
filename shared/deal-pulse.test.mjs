@@ -119,3 +119,12 @@ test("the inspection call stays away until the window, and once the inspection i
   assert.equal(lapsed.tone, "lapsed");
   assert.match(lapsed.headline, /^Inspection ended Nov 22, 1 day ago/);
 });
+
+test("each buyer on the Buyers tab says when they last moved, their walkthrough answer, a price and package opens", async () => {
+  const { buyerFacts } = await import("./deal-pulse.js");
+  const inv = { contactId: "a", name: "Oak", status: "evaluating", addedAt: daysAgo(4), updatedAt: daysAgo(2), agreedPrice: { amount: 415000 } };
+  assert.deepEqual(buyerFacts(inv, { rsvps: [{ contactId: "a", status: "coming" }], invite: { viewCount: 2 }, now: NOW }),
+    ["last moved 2d ago", "coming to the walkthrough", "agreed $415K", "opened the package 2×"]);
+  assert.deepEqual(buyerFacts({ contactId: "b" }, { invite: { viewCount: 0, sentAt: daysAgo(1) }, now: NOW }), ["package not opened"]);
+  assert.deepEqual(buyerFacts({ contactId: "b", addedAt: new Date(NOW).toISOString() }, { now: NOW }), ["moved today"]);
+});
