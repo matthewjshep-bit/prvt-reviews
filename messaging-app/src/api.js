@@ -360,8 +360,6 @@ export const listPipelines = () => fetch(`${API_BASE}/api/dashboard/ghl/pipeline
 export const runGhlMirror = () => post(`/api/dashboard/ghl/mirror/run`, {});
 // Slack (ghl-broker/slack-notify.js): a hello in every channel that's set.
 export const testSlack = () => post(`/api/dashboard/slack/test`, {});
-export const listCalendars = () =>
-  fetch(`${API_BASE}/api/offers/automations/conversation/calendars?${locq()}`).then(j);
 export const listWorkflows = () =>
   fetch(`${API_BASE}/api/offers/automations/conversation/workflows?${locq()}`).then(j);
 // { contactId }: one person's open drafts (the Offers work pane).
@@ -420,15 +418,6 @@ export const listOffers = ({ contactId = "", limit = 50, lean = false, activity 
   if (contactId) p.set("contact_id", contactId);
   return fetch(`${API_BASE}/api/offers?${p}`).then(j).then((r) => r.offers);
 };
-// Every agent's tier from the app's own record: { counts, rows, pulseOn }
-// (shared/tiers.js). Cached five minutes on the broker; fresh skips it.
-export const getAgentTiers = (fresh = false) =>
-  fetch(`${API_BASE}/api/dashboard/agents/tiers?${locq()}${fresh ? "&fresh=1" : ""}`).then(j);
-// The Tier 1 list: GHL's Tier 1 stage, each card screened — { rows, belongs,
-// counts, tier2, mirrorOwnsBoard } (ghl-broker/tier-one.js). Cached five
-// minutes on the broker; fresh skips it.
-export const getTierOne = (fresh = false) =>
-  fetch(`${API_BASE}/api/dashboard/tier1?${locq()}${fresh ? "&fresh=1" : ""}`).then(j);
 // GHL's four stages over the offers' three, and what would move if GHL
 // followed the offers. Read-only; cached five minutes on the broker.
 export const getGhlPipeline = (fresh = false) =>
@@ -443,12 +432,6 @@ export const setGhlCardStage = (contactId, to) => post("/api/dashboard/ghl/card"
 // The one-time move off GHL's old stages: a report, or { apply: true } to move
 // up to 300 cards a press.
 export const migratePipeline = (apply = false) => post("/api/dashboard/ghl/pipeline/migrate", { apply });
-// Pass: we passed on the house, its GHL card → Passed on Offer, tier-1 off.
-export const tierOnePass = (contactId, body = {}) => post(`/api/dashboard/tier1/${encodeURIComponent(contactId)}/pass`, body);
-// Kick out: it never belonged (gone, turnkey, no house) — card → Not a Good Deal.
-export const tierOneKick = (contactId, body = {}) => post(`/api/dashboard/tier1/${encodeURIComponent(contactId)}/kick`, body);
-// Add: the app reads them as Tier 1 and GHL doesn't — card → Tier 1.
-export const tierOneAdd = (contactId, body = {}) => post(`/api/dashboard/tier1/${encodeURIComponent(contactId)}/add`, body);
 // "Hold our number" on a counter: { amount, text, from } — the words at the
 // lowest number we've put to them on the house. Reads only; sends nothing.
 export const getHoldText = (id) =>
@@ -650,8 +633,6 @@ export const reissueDataroomInvite = (id, inviteId, opts = {}) =>
 // end ("YYYY-MM-DD") makes the window finish on a past day (the date picker).
 const tzq = () => `&tz_offset=${new Date().getTimezoneOffset()}`;
 const endq = (end) => (end ? `&end=${encodeURIComponent(end)}` : "");
-export const getDashboardSummary = (days = 30, end = "") =>
-  fetch(`${API_BASE}/api/dashboard/summary?${locq()}&days=${days}${tzq()}${endq(end)}`).then(j);
 // A link into the offers console. Relative on the single all-modes deploy;
 // on a dedicated-hostname dashboard build "/" would be the dashboard itself,
 // so VITE_OFFERS_ORIGIN points it at the right app.
@@ -688,30 +669,26 @@ export const getPricingScorecard = ({ fresh = false } = {}) =>
 // Which first text, follow-up and check-in wins (shared/outreach-scorecard.js): the night's kept card.
 export const getOutreachScorecard = () =>
   fetch(`${API_BASE}/api/dashboard/outreach-scorecard?${locq()}`).then(j);
-export const getDashboardPipeline = () =>
-  fetch(`${API_BASE}/api/dashboard/pipeline?${locq()}`).then(j);
 // The red line on Offers and Deals (2026-11-23): a rejected paid key, Apify
 // near its month's limit, a revenue job stopped. Two small cursors and the
 // settings row on the broker; words only.
 export const getMachineTrouble = () =>
   fetch(`${API_BASE}/api/dashboard/machine?${locq()}`).then(j);
 // The switchboard alone: { autopilot, conversationEnabled }. The Autopilot
-// tabs read only this; the whole of Today is GET /pipeline.
+// pages read only this, never the whole pipeline.
 export const getDashboardAutopilot = () =>
   fetch(`${API_BASE}/api/dashboard/autopilot?${locq()}`).then(j);
-// The day's loose ends: acceptances, close counters, owed promises, unanswered texts.
-export const getDashboardDigest = (hours = 24) =>
-  fetch(`${API_BASE}/api/dashboard/digest?${locq()}&hours=${hours}`).then(j);
 export const getDashboardAudit = () => fetch(`${API_BASE}/api/dashboard/audit?${locq()}`).then(j);
+// Who is on GHL's "Needs Matt" stage, from the runner's last read: one cursor
+// read, no GHL call — [{ contactId, kind, offerId, why, passAt }]. The Offers
+// and Deals pages put the reason on the row (needs-view.js).
+export const getNeedsMatt = () =>
+  fetch(`${API_BASE}/api/dashboard/needs-matt?${locq()}`).then(j).then((r) => r.needs || []);
 // Close an "Owed a number" row by hand. `reason` is { code, note } from
 // PROMISE_DISMISS_REASONS; the nightly coach reads it.
 export const dismissPromise = (contactId, address = "", reason = null) => post(`/api/dashboard/promises/dismiss`, { contactId, address, reason });
 // "What should the bot have done?" on any Today row (shared/row-feedback.js). The nightly coach reads it.
 export const sendRowFeedback = (body) => post(`/api/dashboard/feedback`, body);
-// Dismiss on any Today row: off the queue until it says something new
-// (shared/today-dismiss.js). restoreTodayRow is the Undo.
-export const dismissTodayRow = (row) => post(`/api/dashboard/rows/dismiss`, { rowId: row.id, kind: row.kind, severity: row.severity, title: row.title, detail: row.detail });
-export const restoreTodayRow = (rowId) => post(`/api/dashboard/rows/restore`, { rowId });
 // A question the bot couldn't answer, answered from Today: drafted to them in
 // our voice (waits in the outbox for Send) and kept as a standing answer.
 export const answerPartnerQuestion = ({ contactId, draftId = null, address = "", question = "", answer, saveAsFact = true }) =>
@@ -769,12 +746,6 @@ export const getDashboardFollowUpItems = ({ period = "week", bucket = "", group 
 };
 export const getDashboardFunnel = (days = 30, end = "") =>
   fetch(`${API_BASE}/api/dashboard/funnel?${locq()}&days=${days}${tzq()}${endq(end)}`).then(j);
-export const getDashboardTagCounts = (tags) =>
-  fetch(`${API_BASE}/api/dashboard/ghl/tags?${locq()}&tags=${encodeURIComponent((tags || []).join(","))}`).then(j);
-export const getDashboardMessages = (days = 30, end = "") =>
-  fetch(`${API_BASE}/api/dashboard/ghl/messages?${locq()}&days=${days}${tzq()}${endq(end)}`).then(j);
-export const getDashboardContacts = (days = 30, end = "") =>
-  fetch(`${API_BASE}/api/dashboard/ghl/contacts?${locq()}&days=${days}${tzq()}${endq(end)}`).then(j);
 export const sendOffer = (id, { message = "", dryRun = true, channels, docs, emailSubject } = {}) =>
   post(`/api/offers/${encodeURIComponent(id)}/send`, {
     message,

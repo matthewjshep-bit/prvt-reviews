@@ -1039,7 +1039,15 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
     try {
       const { locationId } = resolveLocation(req);
       const cursor = await store.getJobCursor?.(locationId, NEEDS_MATT_CURSOR).catch(() => null);
-      const needs = Object.entries(cursor?.doc?.needs || {}).map(([contactId, v]) => ({ contactId, kind: v.kind, rowKind: v.rowKind, at: v.at, landedAt: v.landedAt || null, placed: v.placed }));
+      const entries = Object.entries(cursor?.doc?.needs || {});
+      // The Offers and Deals pages read this once on load (2026-11-23): the
+      // why line and the pass time ride along, as /ghl/card gives them for one
+      // agent. The settings read only when a price card needs his days off.
+      const offDays = entries.some(([, v]) => v?.kind === "price")
+        ? normalizeConversationAi((await store.getOfferSettings(locationId).catch(() => null))?.conversationAi).autoSend?.offDays || []
+        : [];
+      const needs = entries.map(([contactId, v]) => ({ contactId, kind: v.kind, rowKind: v.rowKind, offerId: v.offerId || null, why: v.why || "", at: v.at,
+        landedAt: v.landedAt || null, passAt: Number.isFinite(Date.parse(v.landedAt || "")) ? needsMattPassAt(v, { offDays }) : null, placed: v.placed }));
       res.json({ ok: true, at: cursor?.at || null, readAt: cursor?.doc?.readAt || null, last: cursor?.doc?.last || null, needs });
     } catch (err) { fail(res, err); }
   });

@@ -25,12 +25,6 @@ test("closing a deal records who bought it and at what price: the form starts fr
   expect(outcomeDraft(deal({ investors: [{ contactId: "b-oak", name: "Oak Tran", status: "committed" }] })).price).toBe("");
 });
 
-test("closing a deal from a row says to record who bought it", async () => {
-  const { describeResult } = await import("../pipeline-ops.js");
-  expect(describeResult("mark_closed", { ok: true, askOutcome: true })).toBe("Done. Open the deal and record who bought it and for how much.");
-  expect(describeResult("mark_closed", { ok: true })).toBe("Done.");
-});
-
 test("a recorded sale reads as one line on the deal", () => {
   const d = deal({ stage: "closed", outcome: { buyerContactId: "b-oak", buyerName: "Oak Tran", price: 312000, fee: 12000, closedAt: "2026-11-05" } });
   expect(outcomeLine(d)).toBe("Sold to Oak Tran for $312,000 · our fee $12,000 · closed Nov 5");

@@ -747,7 +747,9 @@ export function renderMorning(c = {}, ctx = {}) {
       `${r.brokerage ? ` at ${esc(clip(scrubForSlack(r.brokerage), 40))}` : ""} (from ${esc(clip(scrubForSlack(r.agentFirst), 20) || "an agent")})`);
     lines.push(`:handshake: Referrals to reach: *${c.referrals.length}* — ${shown.join(", ")}${c.referrals.length > shown.length ? ", …" : ""}`);
   }
-  const link = slackLinks({ appUrl: ctx.appUrl, appLink: ctx.appLink, locationId: ctx.locationId, path: "/reports", view: "activity" });
+  // Offers, the page the day is worked from (Reports → Activity was retired
+  // 2026-11-23; its old link landed on Flow).
+  const link = slackLinks({ appUrl: ctx.appUrl, appLink: ctx.appLink, locationId: ctx.locationId, path: "/", view: "history" });
   const blocks = [{ type: "section", text: { type: "mrkdwn", text: lines.join("\n") } }];
   if (link) blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: link }] });
   return { text: `Yesterday: ${c.offersSent || 0} offers sent, ${c.tier1 || 0} new Tier 1, ${c.deals || 0} new deals`, blocks };
@@ -788,7 +790,9 @@ export function renderEvening(digest = {}, { jobs = [], errors = [], leaks = nul
   // Houses the 72-hour Needs Matt clock passed with no price today.
   const passed = passedUnpriced || [];
   if (passed.length) lines.push(`• Passed unpriced today: *${passed.length}* — ${passed.slice(0, 5).map((o) => esc(street(o.address) || "a house")).join(", ")}${passed.length > 5 ? ", …" : ""}`);
-  const link = slackLinks({ appUrl: ctx.appUrl, appLink: ctx.appLink, locationId: ctx.locationId, path: "/reports", view: "activity" });
+  // Offers, the page the day is worked from (Reports → Activity was retired
+  // 2026-11-23; its old link landed on Flow).
+  const link = slackLinks({ appUrl: ctx.appUrl, appLink: ctx.appLink, locationId: ctx.locationId, path: "/", view: "history" });
   const blocks = [{ type: "section", text: { type: "mrkdwn", text: lines.join("\n") } }];
   if (link) blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: link }] });
   const open = (digest.sections || []).reduce((a, s) => a + (s.items?.length || 0), 0);

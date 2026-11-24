@@ -1,37 +1,7 @@
 import { test, expect } from "vitest";
-import { orderRows, neighborId, nextAfterRemoval, rowTargets, teachRowId, railLabel, keyIntent, allInPct, allInTone, canDismissRow } from "../work-queue.js";
+import { rowTargets, teachRowId, keyIntent, allInPct, allInTone } from "../work-queue.js";
 
 const row = (id, kind, group, over = {}) => ({ id, kind, group, severity: "soon", title: id, ops: [], ...over });
-
-test("rows are worked your call first, then stuck, then the machine, kind by kind inside each", () => {
-  const rows = [
-    row("m1", "draft_scheduled", "machine"),
-    row("s1", "underwrite_held", "stuck"),
-    row("y2", "draft_waiting", "yours"),
-    row("y1", "promise_owed", "yours"),
-    row("a1", "audit_owed", "yours"),
-    row("old", "closing_soon", undefined),   // an older broker sent no group: it is yours
-  ];
-  expect(orderRows(rows).map((r) => r.id)).toEqual(["y1", "y2", "old", "a1", "s1", "m1"]);
-});
-
-test("next and previous stop at the ends", () => {
-  const list = [row("a", "promise_owed", "yours"), row("b", "promise_owed", "yours"), row("c", "gone_quiet", "stuck")];
-  expect(neighborId(list, "a", 1)).toBe("b");
-  expect(neighborId(list, "c", 1)).toBe(null);
-  expect(neighborId(list, "a", -1)).toBe(null);
-  expect(neighborId(list, "gone", 1)).toBe("a");
-});
-
-test("a resolved row hands over to the one that came after it, or before it at the end", () => {
-  const before = ["a", "b", "c", "d"].map((id) => row(id, "promise_owed", "yours"));
-  expect(nextAfterRemoval(before, before, "b")).toBe("b");
-  expect(nextAfterRemoval(before, before.filter((r) => r.id !== "b"), "b")).toBe("c");
-  expect(nextAfterRemoval(before, before.filter((r) => !["b", "c"].includes(r.id)), "b")).toBe("d");
-  expect(nextAfterRemoval(before, before.filter((r) => r.id !== "d"), "d")).toBe("c");
-  expect(nextAfterRemoval(before, [], "d")).toBe(null);
-  expect(nextAfterRemoval([], before, null)).toBe("a");
-});
 
 test("the composer is the row's own draft, else the person's newest open one", () => {
   const drafts = [
@@ -55,11 +25,6 @@ test("a price the machine agreed with a buyer opens the investor's thread, not a
 test("a draft row is taught under its draft; every other row under its own id", () => {
   expect(teachRowId(row("draft_waiting:o1", "draft_waiting", "yours", { draftId: "d9" }))).toBe("draft:d9");
   expect(teachRowId(row("promise_owed:c1:x", "promise_owed", "yours", { draftId: null }))).toBe("promise_owed:c1:x");
-});
-
-test("the rail names a row by its street, else the person", () => {
-  expect(railLabel({ address: "12 Elm St, Renton, WA", contactName: "Dana" })).toBe("12 Elm St");
-  expect(railLabel({ address: "", contactName: "Dana" })).toBe("Dana");
 });
 
 test("keys never fire while typing or with a modifier", () => {
@@ -87,12 +52,9 @@ test("a held-paper draft opens on the offer it would have sent", () => {
   expect(rowTargets({ id: "r", kind: "draft_waiting", group: "yours", contactId: "c1", draftId: "h1" }, drafts).offerId).toBe("aug");
 });
 
-test("D dismisses the row, and draft and promise rows keep the Dismiss they already have", () => {
+test("D reads as dismiss, never while typing", () => {
   expect(keyIntent({ key: "d", target: { tagName: "DIV" } })).toBe("dismiss");
   expect(keyIntent({ key: "d", target: { tagName: "TEXTAREA" } })).toBe(null);
-  expect(canDismissRow({ id: "closing_soon:o1", kind: "closing_soon", ops: [] })).toBe(true);
-  expect(canDismissRow({ id: "draft_waiting:d1", kind: "draft_waiting", ops: [] })).toBe(false);
-  expect(canDismissRow({ id: "promise:c1", kind: "promise_owed", ops: [{ key: "dismiss_promise" }] })).toBe(false);
 });
 
 /* ---------- a row with no offer on it still shows theirs (2026-09-29) ---------- */
@@ -135,23 +97,3 @@ test("while their offers load, the pane doesn't say there are none", () => {
   expect(html).not.toContain("No offer yet");
 });
 
-// Matt, 2026-10-13: Today is "Needs you" — no Machine. 2026-10-15: the day's
-// best calls are back under it, as "Today's calls".
-test("Today is Needs you, then Today's calls, worked in the broker's order", async () => {
-  const { DESK_GROUPS, rowFor, reasonsOf, groupOf } = await import("../work-queue.js");
-  expect(DESK_GROUPS.map((g) => [g.key, g.label])).toEqual([["decide", "Needs you"], ["call", "Today's calls"]]);
-  expect(DESK_GROUPS.map((g) => g.empty)).toEqual(["Nothing needs you right now.", "No calls today."]);
-  // Calls in GHL's Manual Actions (2026-10-15): Today's calls says where they went.
-  const { deskGroupsFor } = await import("../work-queue.js");
-  expect(deskGroupsFor({ ghlCalls: { on: true } }).map((g) => g.empty)).toEqual(["Nothing needs you right now.", "Today's calls are in GHL's Manual Actions."]);
-  expect(deskGroupsFor({})).toBe(DESK_GROUPS);
-  const rows = [{ id: "c1", section: "call" }, { id: "d1", section: "decide" }, { id: "x" }, { id: "d2", section: "decide" }];
-  expect(orderRows(rows, DESK_GROUPS).map((r) => r.id)).toEqual(["d1", "x", "d2", "c1"]);
-  expect(groupOf({ id: "x" }, DESK_GROUPS)).toBe("decide");
-  expect(groupOf({ group: "stuck" })).toBe("stuck");
-  expect(groupOf({})).toBe("yours");
-  const person = { id: "p", reasonIds: ["p", "q"], also: [{ id: "q" }], quiet: [{ id: "z" }] };
-  expect(rowFor([person], "q")).toBe(person);
-  expect(rowFor([person], "nope")).toBe(null);
-  expect(reasonsOf(person).map((r) => r.id)).toEqual(["p", "q", "z"]);
-});

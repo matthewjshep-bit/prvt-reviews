@@ -555,12 +555,59 @@ name, a phone or an address.
 **Its own page in GHL** (Matt, 2026-11-23: "keep track of Luxury separately"):
 add a Custom Menu Link to `https://<site>/luxury?location_id={{location.id}}`.
 It shows Lots (the finder), Offers and Deals narrowed to luxury lots
-(`isLuxuryLot`), and its New Offer starts on the lot analyzer. The Lots tab
-stays on Autopilot too. In GHL itself the tags segment the lane — `lot-owner`,
+(`isLuxuryLot`), and its New Offer starts on the lot analyzer. Since
+2026-11-23 Luxury is also a pill in the console's one header, and Lots lives
+only there (`/autopilot?view=lots` opens `/luxury?view=lots`). In GHL itself the tags segment the lane — `lot-owner`,
 `lot-pocket-*`, `builder`, `dispo-source-builder-exits` — for smart lists; a
 separate GHL pipeline waits until Matt creates one there, as with gatekeepers.
 
 ## Step 3 — messaging-app (frontend)
+
+### One header: Offers · Deals · Luxury, the rest under More (2026-11-23)
+
+Matt works the Offers and Deals pages; the rest runs in the background. The
+console is one shell (`messaging-app/src/app-nav.js`): three pills up top,
+Offers · Deals · Luxury, and one **More** menu holding the machine's pages
+(Agent texts, Investor texts, Gatekeepers, Autopilot settings, Settings), the
+reports (Flow, Line, Follow-up, Lessons) and the Companion window.
+
+- The path is the lane: `/` the agent book (luxury lots left out), `/luxury`
+  the teardown lane (Offers · Lots · Deals), `/deals` every kind of deal.
+  `?view=` is the page.
+- Old GHL menu links still land (`links.js movedTo`): `/autopilot?view=X`
+  and `/reports?view=X` open `/?view=X`; `/agents`, `/dispo` and
+  `/dashboard` as before.
+- Retired: Autopilot → Overview (a summary of Reports → Follow-up) and
+  Reports → Activity (counts Slack #daily already posts). Their links open
+  Agent texts and Flow. Last night's audit (with Run now) and the coach's
+  proposals moved to More → Autopilot settings. The #daily morning and
+  evening posts' "Open in app" opens Offers.
+- After this deploys, Matt can delete the Autopilot and Reports Custom Menu
+  Links in GHL; keep Luxury's if he wants it in the GHL sidebar too.
+- Needs Matt on the rows: the Offers and Deals pages read
+  `GET /api/dashboard/needs-matt` once on load (a cursor read, no GHL call)
+  and put the reason on the row it is about ("Needs you: price it · passes
+  Tue 9am", the runner's why line on hover). The pills show "Needs you · N"
+  when any of that page's rows are on the list; a click filters to them. It
+  is a filter over rows that already exist, not a queue, and never the
+  default tab (Today was retired 2026-10-20 for refilling).
+- The Offers table: an agent with one house is one row (no fold); a folded
+  agent shows "a send failed"; documents, AI enrichment and Delete sit
+  behind each row's ⋯; Edit opens the offer in a sheet over the table, and
+  the tab and search ride in the URL (`?filter=`, `?q=`; not `?tab=`, which
+  is the deal window's). Another lane starts without them; Back brings them
+  back. On a phone the table is a list of cards.
+- The companion window keeps its `/contact` address: the shell never
+  rewrites it (the extension finds the companion tab by that path).
+- It re-reads itself every three minutes while the tab shows (and on coming
+  back to the tab): only the light `GET /api/offers?lean=1`, never the
+  activity read, then What's next for at most five agents whose rows moved,
+  one at a time (`offers-refresh.js`, `light-poll.js`).
+- Under their counter in the offer pane: **Hold ours** puts the hold words
+  (`GET /api/offers/:id/hold`, never above what we sent) in the reply box;
+  **Meet…** opens our number's re-quote pre-filled halfway, never above
+  their counter or the house's walk-away, and nothing changes until Re-quote;
+  **Walk** marks we passed with a reason. None of them sends anything.
 
 Netlify auto-builds from `main` via the root `netlify.toml`. The API base
 defaults to the live broker; override with `VITE_API_BASE` in Netlify env if

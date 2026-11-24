@@ -368,6 +368,7 @@ test("someone who asks for a call is a Needs Matt ping of its own with their fir
 });
 
 
+
 // The luxury lane (2026-11-23): Matt prices every lot and calls every owner
 // who answers, but the reply only made a Desk row, and the Desk is gone. Now
 // it's a Needs Matt ping: first name, the street, "answered — call". Never
@@ -407,4 +408,17 @@ test("a buyer who wants to buy or see a house is a call-now ping", () => {
   assert.match(buy, /Call now: Rory wants to buy \*9 Larchmont Pl\*/);
   const walk = textOf(renderEvent(r, { ...ev, data: { intent: "wants_walkthrough", wants: "walkthrough", callNow: true, when: "Saturday" } }, { firstName: "Rory" }));
   assert.match(walk, /Call now: Rory wants to see \*9 Larchmont Pl\*\. They named Saturday\./);
+});
+
+
+// Review 2026-11-23: Reports → Activity was retired, so the morning and
+// evening posts' "Open in app" quietly landed on Flow. They open Offers, the
+// page Matt works the day from.
+test("the morning and evening posts open Offers, not the retired Activity page", () => {
+  const ctx = { appUrl: "https://app.example.test", locationId: "loc1" };
+  for (const msg of [renderMorning({ offersSent: 1 }, ctx), renderEvening({ sections: [] }, {}, ctx)]) {
+    const t = textOf(msg);
+    assert.match(t, /<https:\/\/app\.example\.test\/\?view=history&location_id=loc1\|Open in app>/);
+    assert.doesNotMatch(t, /activity|\/reports/);
+  }
 });

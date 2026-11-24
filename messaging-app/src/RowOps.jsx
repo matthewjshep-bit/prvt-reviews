@@ -1,30 +1,12 @@
-// RowOps.jsx — the buttons a Today row carries, and the answer box.
-//
-// The pipeline names each op by a key (shared/pipeline.js); pipeline-ops.js
-// turns keys into calls. These are the controls for them, moved here from
-// the old list unchanged so the work pane's header behaves exactly as the
-// rows did: the same confirms, the same one-tap "why" on a dismissed promise,
-// the same toast under the button.
+// RowOps.jsx — what is left of the Today row's controls (the Desk was
+// retired 2026-10-20; its op buttons went with it, 2026-11-23): the answer
+// box for a question the bot couldn't answer (ConversationPanel), and the
+// ids the Feedback control sends (PaneParts).
 
 import React, { useState } from "react";
-import { PROMISE_DISMISS_REASONS, PROMISE_DISMISS_LABEL, answerNamesMoney } from "@shared/promise-resolver.js";
-import { BTN, BTN_DANGER, BTN_PRIMARY } from "./ui.jsx";
+import { answerNamesMoney } from "@shared/promise-resolver.js";
+import { BTN_PRIMARY } from "./ui.jsx";
 import { answerPartnerQuestion, forgetStandingAnswer } from "./api.js";
-import { CONFIRM, describeResult, linkFor, runOp } from "./pipeline-ops.js";
-
-export const SEV = {
-  now: { dot: "bg-rose-500", label: "now", cls: "bg-rose-100 text-rose-700" },
-  soon: { dot: "bg-amber-400", label: "soon", cls: "bg-amber-100 text-amber-800" },
-  fyi: { dot: "bg-slate-300", label: "fyi", cls: "bg-slate-100 text-slate-600" },
-};
-
-// "1:05 PM" today, "Thu 9:00 AM" otherwise.
-export const whenLabel = (iso) => {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  return d.toDateString() === new Date().toDateString() ? time : `${d.toLocaleDateString([], { weekday: "short" })} ${time}`;
-};
 
 // What the Teach control needs to know about a row — ids only, plus the
 // title and detail as a fallback for rows with no draft behind them.
@@ -32,69 +14,6 @@ export const feedbackItemOf = (item) => ({
   contactId: item.contactId || null, draftId: item.draftId || null, offerId: item.offerId || null, jobId: item.jobId || null,
   auditKind: item.kind === "audit_owed" ? String(item.id || "").split(":")[1] || "" : "", address: item.address || "", title: item.title || "", detail: item.detail || "",
 });
-
-export function OpButton({ op, item, onDone }) {
-  const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState("");
-  const href = linkFor(op.key, item);
-  if (href) {
-    return <a href={href} target="_blank" rel="noreferrer" className={op.intent === "primary" ? BTN_PRIMARY : BTN}>{op.label}</a>;
-  }
-  const cls = op.intent === "danger" ? BTN_DANGER : op.intent === "primary" ? BTN_PRIMARY : BTN;
-  async function go() {
-    if (CONFIRM[op.key] && !window.confirm(CONFIRM[op.key](item))) return;
-    setBusy(true); setNote("");
-    try {
-      const r = await runOp(op.key, item);
-      setNote(describeResult(op.key, r));
-      onDone?.();
-    } catch (e) {
-      setNote(e.message || "That didn't work.");
-    } finally { setBusy(false); }
-  }
-  return (
-    <span className="inline-flex flex-col items-start gap-1">
-      <button type="button" className={cls} disabled={busy} onClick={go}>{busy ? "…" : op.label}</button>
-      {note && <span className="text-xs text-slate-500">{note}</span>}
-    </span>
-  );
-}
-
-// Dismissing an owed promise asks why in one tap, the way a dismissed draft
-// does: the nightly coach reads the answer. A second press skips the why.
-export function DismissPromise({ op, item, onDone }) {
-  const [askWhy, setAskWhy] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState("");
-  async function go(code = "") {
-    setBusy(true); setNote("");
-    try {
-      const r = await runOp(op.key, item, code ? { reason: { code } } : null);
-      setNote(describeResult(op.key, r));
-      onDone?.();
-    } catch (e) {
-      setNote(e.message || "That didn't work.");
-    } finally { setBusy(false); }
-  }
-  return (
-    <span className="inline-flex flex-col items-start gap-1">
-      <button type="button" className={BTN} disabled={busy} onClick={() => (askWhy ? go() : setAskWhy(true))}>
-        {busy ? "…" : askWhy ? "Just dismiss" : op.label}
-      </button>
-      {askWhy && (
-        <span className="flex max-w-sm flex-wrap gap-1" role="group" aria-label="Why dismiss it">
-          {PROMISE_DISMISS_REASONS.map((code) => (
-            <button key={code} type="button" disabled={busy} onClick={() => go(code)}
-              className="rounded-full border border-slate-300 px-2 py-0.5 text-xs text-slate-600 hover:bg-slate-50">
-              {PROMISE_DISMISS_LABEL[code]}
-            </button>
-          ))}
-        </span>
-      )}
-      {note && <span className="text-xs text-slate-500">{note}</span>}
-    </span>
-  );
-}
 
 // A question the bot couldn't answer. What is typed here goes to them in the
 // bot's voice (as a draft, so Send is still yours) and is kept so the bot
@@ -148,67 +67,4 @@ export function AnswerBox({ item, onDone, textareaId }) {
       </div>
     </div>
   );
-}
-
-// Ops the pane carries out itself rather than as a button: the draft is
-// already open in the conversation, so "show the draft" has nowhere to go.
-const PANE_HANDLES = new Set(["show_draft", "answer"]);
-
-/**
- * paneOps(item, { hasDraft, hasRecord }) → the row's ops the pane shows, in
- * its order. open_outbox is the draft when the conversation has it, the
- * contact's record when it doesn't. With hasRecord the name already opens
- * the contact, so open_contact isn't a second way in.
- */
-export function paneOps(item, { hasDraft = false, hasRecord = false } = {}) {
-  return (item?.ops || []).filter((op) => !PANE_HANDLES.has(op.key) && !(op.key === "open_outbox" && hasDraft) && !(op.key === "open_contact" && hasRecord));
-}
-
-/**
- * splitOps(ops) → { lead, dismiss, rest }
- * The one op that gets a button (the row's primary, else its first), a
- * promise's own Dismiss (it stands in for the pane's, and asks why), and the
- * rest, which go in the pane's ⋯ (Matt, 2026-10-18: too many buttons).
- */
-export function splitOps(ops = []) {
-  const dismiss = ops.find((op) => op.key === "dismiss_promise") || null;
-  const left = ops.filter((op) => op !== dismiss);
-  const i = Math.max(0, left.findIndex((op) => op.intent === "primary"));
-  return { lead: left[i] || null, dismiss, rest: left.filter((_, j) => j !== i) };
-}
-
-/** <OpControl op item onDone onOpenContact /> — one op as its button. */
-export function OpControl({ op, item, onDone, onOpenContact }) {
-  if (op.key === "open_contact" || op.key === "open_outbox") {
-    return <button type="button" className={op.intent === "primary" ? BTN_PRIMARY : BTN} onClick={onOpenContact}>{op.label}</button>;
-  }
-  if (op.key === "dismiss_promise") return <DismissPromise op={op} item={item} onDone={onDone} />;
-  return <OpButton op={op} item={item} onDone={onDone} />;
-}
-
-/**
- * opMenuItem(op, item, { onDone, onOpenContact, onNote }) → a Menu item that
- * does what the op's button does: the same confirm, link and call. A
- * dismissed promise from the menu skips the "why" (the button's second press).
- *   onNote(text)  what came of it, for the pane to say
- */
-export function opMenuItem(op, item, { onDone, onOpenContact, onNote } = {}) {
-  const base = { key: `op:${item.id}:${op.key}`, label: op.label, danger: op.intent === "danger" };
-  if (op.key === "open_contact" || op.key === "open_outbox") return { ...base, disabled: !onOpenContact, onSelect: () => onOpenContact?.() };
-  const href = linkFor(op.key, item);
-  if (href) return { ...base, onSelect: () => window.open(href, "_blank", "noreferrer") };
-  return {
-    ...base,
-    onSelect: async () => {
-      if (CONFIRM[op.key] && !window.confirm(CONFIRM[op.key](item))) return;
-      onNote?.("…");
-      try {
-        const r = await runOp(op.key, item);
-        onNote?.(describeResult(op.key, r));
-        onDone?.();
-      } catch (e) {
-        onNote?.(e.message || "That didn't work.");
-      }
-    },
-  };
 }

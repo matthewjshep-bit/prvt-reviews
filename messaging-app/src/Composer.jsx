@@ -18,7 +18,7 @@ import { isWordFeedback } from "@shared/row-feedback.js";
 import { applyDraftAction, dismissReplyDraft, holdReplyDraft, sendReplyDraft } from "./api.js";
 import { actionLabel, ago, countdown, money } from "./ConversationOutbox.jsx";
 import { BTN, BTN_PRIMARY, Pill } from "./ui.jsx";
-import { COMPOSE_EVENT } from "./work-queue.js";
+import { COMPOSE_EVENT, takeCompose } from "./work-queue.js";
 
 /**
  * draftReason(fb) → { code, note } | null — the draft's own why, from the
@@ -47,10 +47,10 @@ export function DraftComposer({ draft: d, sendsEnabled, serverOffsetMs = 0, onDo
     return () => clearInterval(t);
   }, [scheduled]);
 
-  // The Desk's counter answers write here (COMPOSE_EVENT): the words replace
-  // the draft's, and wait for Send like any edit.
+  // Hold under a counter (OfferPanel CounterAnswers) writes here
+  // (COMPOSE_EVENT): the words replace the draft's, and wait for Send like any edit.
   useEffect(() => {
-    const onCompose = (e) => { if (e?.detail?.text) { setText(String(e.detail.text)); setError(""); if (textareaId) document.getElementById(textareaId)?.focus(); } };
+    const onCompose = (e) => { const t = takeCompose(e); if (t) { setText(t); setError(""); if (textareaId) document.getElementById(textareaId)?.focus(); } };
     window.addEventListener(COMPOSE_EVENT, onCompose);
     return () => window.removeEventListener(COMPOSE_EVENT, onCompose);
   }, [textareaId]);

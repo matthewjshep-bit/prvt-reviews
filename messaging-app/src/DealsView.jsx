@@ -29,6 +29,7 @@ import ContactSearch from "./ContactSearch.jsx";
 import DealTimeline from "./DealTimeline.jsx";
 import DealParties from "./DealParties.jsx";
 import DealAccess from "./DealAccess.jsx";
+import { attachNeeds, needsCounts } from "./needs-view.js";
 import DealKind from "./DealKind.jsx";
 import { assetLabel, normalizeAsset, isLuxuryLot } from "@shared/asset-type.js";
 import { resolveChecklist, dueWords } from "@shared/deal-checklist.js";
@@ -41,7 +42,7 @@ import { resolveParties } from "@shared/deal-parties.js";
 import { buyerMoneyLine } from "@shared/buybox.js";
 import { dispoPulse, bestWords, moneyLine, inspectionCall, buyerFacts } from "@shared/deal-pulse.js";
 import {
-  BTN, DEAL_STAGES, EmptyState, ErrorBar, KpiRow, STAGE, SkeletonRows, StagePill, TableCard,
+  BTN, DEAL_STAGES, EmptyState, ErrorBar, KpiRow, NeedsPill, STAGE, SkeletonRows, StagePill, TableCard,
   rowActivation,
 } from "./ui.jsx";
 
@@ -1308,8 +1309,12 @@ export function dealsBook(deals = [], { only = null, showTerminal = false, sfrOn
 // `focus`: { id, fresh, warnings } — open this deal on mount; `fresh` (promote
 // just made it) opens it to confirm its terms. The standalone page reads the
 // same from ?deal_id= and ?confirm=1.
-export default function DealsView({ settings, onEdit, only = null, focus = null, onFocused = null }) {
+// `needs`: GHL's Needs Matt list (OfferApp; needs-view.js): a deal it names
+// carries the reason, `onNeedsCount` hears how many, and `focusNeeds` asks
+// once for just those deals (the Deals pill's "Needs you").
+export default function DealsView({ settings, onEdit, only = null, focus = null, onFocused = null, needs = [], onNeedsCount = null, focusNeeds = false, onNeedsFocused = null }) {
   const [deals, setDeals] = useState(null);
+  const [needsOnly, setNeedsOnly] = useState(false);
   const [error, setError] = useState("");
   const [selectedId, setSelectedId] = useState(() => {
     if (focus?.id) return focus.id;
@@ -1335,6 +1340,13 @@ export default function DealsView({ settings, onEdit, only = null, focus = null,
   useEffect(() => {
     listDeals().then(setDeals).catch((e) => setError(e.message));
   }, []);
+  useEffect(() => {
+    if (!focusNeeds) return;
+    setNeedsOnly(true);
+    onNeedsFocused?.();
+  }, [focusNeeds]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const needDeals = deals ? needsCounts(attachNeeds(typeof only === "function" ? deals.filter(only) : deals, needs)).deals : null;
+  useEffect(() => { if (needDeals != null) onNeedsCount?.(needDeals); }, [needDeals]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // A route answers with the offer as stored; the list's own count of buyers
   // reached (deal.sends) rides along until the next load.
@@ -1358,7 +1370,8 @@ export default function DealsView({ settings, onEdit, only = null, focus = null,
   if (error) return <ErrorBar>{error}</ErrorBar>;
   if (!deals) return <SkeletonRows cols={8} rows={5} />;
 
-  const { book, active, closed, fell, potentialFees, shown } = dealsBook(deals, { only, showTerminal, sfrOnly });
+  const { book, active, closed, fell, potentialFees, shown: inLane } = dealsBook(deals, { only, showTerminal, sfrOnly });
+  const shown = attachNeeds(inLane, needs).filter((o) => !needsOnly || o.needsMatt);
   const selected = selectedId ? deals.find((o) => o.id === selectedId) : null;
 
   const kpis = [
@@ -1411,6 +1424,7 @@ export default function DealsView({ settings, onEdit, only = null, focus = null,
                       <td className="max-w-[24rem] truncate px-4 py-2.5 font-medium" title={o.address || undefined}>
                         {o.address || "—"}
                         <KindBadge asset={o.asset} />
+                        {o.needsMatt && <span className="ml-1.5 align-middle"><NeedsPill need={o.needsMatt} /></span>}
                       </td>
                       <td className="whitespace-nowrap px-4 py-2.5">
                         {o.contactId ? (
@@ -1465,6 +1479,12 @@ export default function DealsView({ settings, onEdit, only = null, focus = null,
               </tbody>
             </table>
           </TableCard>
+          {(needsOnly || needDeals > 0) && (
+            <button type="button" onClick={() => setNeedsOnly((v) => !v)} aria-pressed={needsOnly}
+              className="mr-4 mt-2 text-xs font-medium text-rose-700 underline decoration-rose-300 underline-offset-2 hover:text-rose-900">
+              {needsOnly ? "Show every deal" : `Only the ones on GHL's Needs Matt stage (${needDeals})`}
+            </button>
+          )}
           {(closed.length > 0 || fell.length > 0) && (
             <button type="button" onClick={() => setShowTerminal((v) => !v)}
               className="mt-2 text-xs font-medium text-slate-500 underline decoration-slate-300 underline-offset-2 hover:text-slate-900">

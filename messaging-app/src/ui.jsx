@@ -24,6 +24,7 @@ import {
   WE_PASS_REASONS, wePassedKey, wePassReasonOf,
 } from "@shared/offer-status.js";
 import { EVENT_LABEL } from "@shared/contact-record.js";
+import { needLabel, needTitle, passWhen } from "./needs-view.js";
 
 /* ---------- button class strings ---------- */
 // Hoisted rather than repeated inline, the same way SendModal.jsx does it.
@@ -361,6 +362,55 @@ export function StatusDots({ offers }) {
   );
 }
 
+// Why this agent is on GHL's Needs Matt stage, on the row it is about
+// (needs-view.js): the kind, and when the bot passes an unpriced house. The
+// runner's whole why line is the hover.
+export function NeedsPill({ need, now = Date.now() }) {
+  if (!need) return null;
+  const pass = need.passAt ? passWhen(need.passAt, now) : "";
+  return (
+    <span className="shrink-0 whitespace-nowrap rounded-full bg-rose-100 px-2 py-0.5 text-[11px] font-semibold text-rose-800" title={needTitle(need, now)}>
+      Needs you: {needLabel(need).toLowerCase()}{pass ? ` · passes ${pass}` : ""}
+    </span>
+  );
+}
+
+/**
+ * <NeedsChip count page onClick /> — "Needs you · 3" beside the Offers or
+ * Deals pill: who on GHL's Needs Matt stage has a row on that page. A click
+ * opens the page filtered to them. Nothing when nobody does.
+ */
+export function NeedsChip({ count, page, onClick }) {
+  if (!(count > 0)) return null;
+  return (
+    <button type="button" onClick={onClick}
+      title={`${count} on GHL's Needs Matt stage with a row on ${page}: show just them`}
+      aria-label={`Needs you: ${count} on ${page}`}
+      className="-ml-1 whitespace-nowrap rounded-full bg-rose-100 px-2 py-0.5 text-[11px] font-semibold text-rose-800 hover:bg-rose-200">
+      <span className="hidden sm:inline">Needs you · </span>{count}
+    </button>
+  );
+}
+
+/**
+ * useMediaQuery(query) → whether the window matches it now, kept current.
+ * False where there is no window (the server-rendered tests).
+ */
+export function useMediaQuery(query) {
+  const read = () => { try { return typeof window !== "undefined" && Boolean(window.matchMedia?.(query).matches); } catch { return false; } };
+  const [on, setOn] = useState(read);
+  useEffect(() => {
+    let mq;
+    try { mq = window.matchMedia?.(query); } catch { return undefined; }
+    if (!mq) return undefined;
+    const fn = () => setOn(mq.matches);
+    fn();
+    mq.addEventListener?.("change", fn);
+    return () => mq.removeEventListener?.("change", fn);
+  }, [query]);
+  return on;
+}
+
 /* ---------- time ---------- */
 
 // "3h ago". Lived in ConversationOutbox.jsx, which meant other views imported
@@ -428,7 +478,7 @@ export function Menu({ trigger, items, align = "right", label = "Options" }) {
     const r = wrapRef.current?.getBoundingClientRect();
     if (!r) return;
     const W = 176; // min-w-[11rem]
-    const H = Math.min(items.length * 32 + 8, 320);
+    const H = Math.min(items.length * 32 + 8, 420);
     // Flip up when there isn't room below, and never run off the right edge.
     const below = window.innerHeight - r.bottom;
     setPos({
@@ -469,7 +519,7 @@ export function Menu({ trigger, items, align = "right", label = "Options" }) {
   const step = (from, dir) => {
     for (let n = 1; n <= items.length; n++) {
       const i = (from + dir * n + items.length * n) % items.length;
-      if (!items[i]?.divider) return i;
+      if (!items[i]?.divider && !items[i]?.heading) return i;
     }
     return from;
   };
@@ -482,15 +532,17 @@ export function Menu({ trigger, items, align = "right", label = "Options" }) {
   return (
     <span ref={wrapRef} className="inline-block" onKeyDown={onKeyDown}>
       <button type="button" aria-haspopup="menu" aria-expanded={open} aria-controls={menuId} aria-label={label}
-        onClick={(e) => { e.stopPropagation(); setActive(items[0]?.divider ? step(0, 1) : 0); setOpen((v) => !v); }}>
+        onClick={(e) => { e.stopPropagation(); setActive(items[0]?.divider || items[0]?.heading ? step(0, 1) : 0); setOpen((v) => !v); }}>
         {trigger}
       </button>
       {open && pos && createPortal(
         <div ref={panelRef} id={menuId} role="menu" style={{ top: pos.top, left: pos.left }}
           onClick={(e) => e.stopPropagation()}
-          className="fixed z-50 min-w-[11rem] rounded-xl border border-slate-200 bg-white py-1 shadow-lg">
+          className="fixed z-50 max-h-[80vh] min-w-[11rem] overflow-y-auto rounded-xl border border-slate-200 bg-white py-1 shadow-lg">
           {items.map((it, i) => (it.divider
             ? <div key={it.key ?? `divider-${i}`} role="separator" className="my-1 border-t border-slate-100" />
+            : it.heading
+            ? <div key={it.key ?? `heading-${i}`} role="presentation" className={`px-3 pb-0.5 text-[11px] font-semibold uppercase tracking-wide text-slate-400 ${i ? "mt-1 border-t border-slate-100 pt-2" : "pt-1"}`}>{it.heading}</div>
             : <button key={it.key ?? i} type="button" role="menuitem" disabled={it.disabled} title={it.title}
               ref={(el) => { itemRefs.current[i] = el; }}
               onClick={(e) => { e.stopPropagation(); setOpen(false); it.onSelect?.(); }}

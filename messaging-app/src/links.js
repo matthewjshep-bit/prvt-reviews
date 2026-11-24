@@ -1,7 +1,8 @@
-// links.js — links between the sibling apps (/dashboard, /autopilot,
-// /reports, ...). Each is its own GHL menu link, so a cross-app link is a
-// full page load: carry the location scope, drop view-local params (?stage=,
-// ?contact=) that mean nothing on the other page.
+// links.js — links between pages that open on their own (the companion at
+// /contact, an old GHL menu link). Since 2026-11-23 the console is one shell
+// (app-nav.js): Offers, Deals and Luxury up top, the rest under More, so most
+// moves are in-page. A link to another page is a full load: carry the
+// location scope, drop view-local params (?stage=, ?contact=).
 
 export function appHref(path, view) {
   try {
@@ -15,17 +16,23 @@ export function appHref(path, view) {
   }
 }
 
-// Pages that moved (2026-10-20: Agent Outreach and Dispositions became tabs
-// of Autopilot, and Today is gone; 2026-09-13: Overview split into Today,
-// Autopilot, Reports). The GHL menu links and bookmarks still say /agents,
-// /dispo and /dashboard; they land where that page lives now. Other params
-// (location_id, key, contact) ride along.
+// Pages that moved (2026-11-23: Autopilot and Reports went under More in the
+// one shell, Lots under Luxury; 2026-10-20: Agent Outreach and Dispositions
+// became Autopilot tabs, and Today is gone; 2026-09-13: Overview split into
+// Today, Autopilot, Reports). The GHL menu links and bookmarks still say
+// /autopilot, /reports, /agents, /dispo and /dashboard; they land where that
+// page lives now. Other params (location_id, key, contact) ride along, and
+// the shell (app-nav.js resolveView) opens a retired tab's successor.
+const underMore = (fallback) => (view) => (view === "lots" ? ["/luxury", "lots"] : ["/", view || fallback]);
 const MOVED_PAGES = [
-  [/^\/agents(\/|$)/, () => ["/autopilot", "agents"]],
-  [/^\/dispo(\/|$)/, () => ["/autopilot", "investors"]],
+  [/^\/autopilot(\/|$)/, underMore("agents")],
+  [/^\/reports(\/|$)/, underMore("flow")],
+  [/^\/agents(\/|$)/, () => ["/", "agents"]],
+  [/^\/dispo(\/|$)/, () => ["/", "investors"]],
   // Today (the Desk and Tier 1) is gone (Matt, 2026-10-20): the machine works
   // it, Tier 1 is GHL's pipeline. Anything else under /dashboard opens Offers.
-  [/^\/dashboard(\/|$)/, (view) => ({ flow: ["/reports", "flow"], dashboard: ["/reports", "activity"], conversation: ["/autopilot", "advanced"] })[view] || ["/", "history"]],
+  // Its Activity charts went with Reports → Activity (2026-11-23): Flow.
+  [/^\/dashboard(\/|$)/, (view) => ({ flow: ["/", "flow"], dashboard: ["/", "flow"], conversation: ["/", "advanced"] })[view] || ["/", "history"]],
 ];
 
 /** movedTo(pathname, search) → the URL that page lives at now, or null. */
