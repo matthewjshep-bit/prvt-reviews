@@ -33,6 +33,7 @@ import { pingReasons } from "./shared/hand-off.js";
 import { pingClaimKey } from "./shared/ghl-pings.js";
 import { buildDigest } from "./shared/digest.js";
 import { lineJobs, errorsByArea, passedUnpriced } from "./shared/line.js";
+import { waitsOnRetry } from "./shared/underwrite-retry.js";
 import { errorIsStopper, jobIsStopper, stopperText, keyTroubles, KEY_HEALTH_CURSOR, MACHINE_TROUBLE_CURSOR } from "./shared/machine-health.js";
 import { jobSwitches } from "./job-switches.js";
 import { readYesterdaySpend } from "./ai-spend.js";
@@ -742,6 +743,8 @@ export async function passesTodayFor({ store = defaultStore, locationId, saved =
     if ((offer.sends || []).length || offer.floatSentAt) continue;
     const engine = await read(() => engineNumberFor({ store, locationId, offer }));
     if (engineKeeps(engine)) continue;
+    // Its underwrite died on a provider's error and waits for its retry (2026-11-23).
+    if (waitsOnRetry(offer)) continue;
     still.push({ offer, engine });
   }
   if (!still.length) return null;

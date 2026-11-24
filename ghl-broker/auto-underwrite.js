@@ -3033,7 +3033,10 @@ async function saveDraft(job, ctx, { extraction, held, partial, cleared = false 
   const prior = await draftToWriteOver(job, ctx, record.address);
   if (prior) {
     const doc = { ...prior, ...record, id: prior.id, createdAt: prior.createdAt,
-      ...(prior.offMarket?.by === "you" ? { offMarket: prior.offMarket } : {}) };
+      ...(prior.offMarket?.by === "you" ? { offMarket: prior.offMarket } : {}),
+      // The timer's one retry of a run that died (today-timers.js, 2026-11-23)
+      // stays on the row its retry wrote over: once per row, ever.
+      ...(prior.autoUnderwrite?.retriedAt ? { autoUnderwrite: { ...record.autoUnderwrite, retriedAt: prior.autoUnderwrite.retriedAt } } : {}) };
     await store.updateOffer(doc.id, doc);
     return doc;
   }

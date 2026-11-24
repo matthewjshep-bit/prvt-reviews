@@ -43,6 +43,7 @@ import { syncAgentCard } from "./tier-check.js";
 import { fieldId } from "./ghl-pings.js";
 import { normalizeGhlStages, stageKeys } from "./shared/ghl-stages.js";
 import { needsMattByContact, needsMattFromCursor, needsMattPassDue, botTakesHouse, engineKeeps, NEEDS_MATT_CURSOR, NEEDS_MATT_EVENT } from "./shared/needs-matt.js";
+import { waitsOnRetry, stoppedEarlyOn } from "./shared/underwrite-retry.js";
 import { engineNumberFor } from "./price-v2.js";
 import { effectiveStatus } from "./shared/offer-status.js";
 import { reopensOnTheirNumbers } from "./shared/held-underwrites.js";
@@ -95,7 +96,10 @@ async function patchCursor(store, locationId, patch) {
 // `engine`: the offer engine's number on a price card ({ grade, open, walkAway }), which keeps the
 // clock off it (2026-11-10).
 const keep = (v, placed = false, landedAt = null) => ({ kind: v.kind, rowKind: v.rowKind || "", why: v.why || "", at: v.at || null, key: v.key, offerId: v.offerId || null, placed, landedAt,
-  ...(v.engine ? { engine: v.engine } : {}) });
+  ...(v.engine ? { engine: v.engine } : {}),
+  // The underwrite died on a provider's error (shared/underwrite-retry.js):
+  // off the pass clock until its retry, and counted from the retry after.
+  ...(v.waitsRetry ? { waitsRetry: true } : {}), ...(v.retriedAt ? { retriedAt: v.retriedAt } : {}) });
 
 // The row kinds that can land as a price card, read for the engine's number.
 const PRICE_ROW_KINDS = new Set(["price_it", "number_owed", "promise_owed", "draft_waiting"]);
@@ -173,6 +177,16 @@ export async function runNeedsMatt({ store = defaultStore, locationId, client, s
   out.unknown = [...unknown].map((id) => ({ contactId: id }));
   // The pass clock starts when the thing first landed, kept across reads.
   for (const [id, v] of needs) v.landedAt = prev.get(id)?.key === v.key && prev.get(id)?.landedAt ? prev.get(id).landedAt : iso(now);
+  // A house whose underwrite died on a provider's error waits for its retry
+  // (2026-11-23 audit, AH-2): the key was dead, not the house.
+  for (const v of needs.values()) {
+    delete v.waitsRetry; delete v.retriedAt;
+    if (v.kind !== "price" || !v.offerId) continue;
+    const o = await offerOf(v.offerId);
+    if (!o || o.locationId !== locationId) continue;
+    if (waitsOnRetry(o)) v.waitsRetry = true;
+    else if (stoppedEarlyOn(o) && o.autoUnderwrite?.retriedAt) v.retriedAt = o.autoUnderwrite.retriedAt;
+  }
   out.needs = needs.size;
   for (const v of needs.values()) out.byKind[v.kind] = (out.byKind[v.kind] || 0) + 1;
 
@@ -253,6 +267,8 @@ async function passUnpriced({ store, locationId, client, contactId, offerId, rea
   // The clock never passes a house the engine priced at grade A or B (2026-11-10), even one it
   // priced since the read. A grade-C number doesn't keep it.
   if (reason === "quiet" && engineKeeps(await engineNumberFor({ store, locationId, offer: full }))) return false;
+  // Nor one whose underwrite died on a provider's error and hasn't had its retry (2026-11-23).
+  if (reason === "quiet" && waitsOnRetry(full)) return false;
   const ts = iso(now);
   const street = String(full.address || "").split(",")[0].trim() || "the house";
   const note = `We passed on ${street}: ${why.note}. The bot's pass note tells the agent.`;
