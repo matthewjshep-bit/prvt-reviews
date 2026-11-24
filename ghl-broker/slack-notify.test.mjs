@@ -786,3 +786,94 @@ test("an agent who asks for a call is one ping in Needs Matt, with their first n
   await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(3) });
   assert.equal(s.of("chat.postMessage").length, 1, "told once");
 });
+
+/* ---------- the jobs that bring in business (2026-11-23 audit, AH-5) ---------- */
+
+// Tuesday 2026-11-17 in Pacific time.
+const TUE = (hh, mm = 0) => Date.parse(`2026-11-17T${String(hh + 8).padStart(2, "0")}:${String(mm).padStart(2, "0")}:00Z`);
+const SWEEP_ON = { ...ON, rentcastApiKey: "rc-test", outreachAutopilot: { enabled: true, hour: 9 } };
+
+test("a switched-on outreach sweep that hasn't run by 1pm is reported late", async () => {
+  const LOC = "loc-outreach-missed";
+  const s = slack();
+  // Monday's run finished; on Tuesday the tick missed the 9am start.
+  const monday = new Date(TUE(9) - 86400000).toISOString();
+  await store.setJobCursor(LOC, "outreach", { at: monday, doc: { lastDaily: monday, tries: 1, last: { status: "done", finishedAt: monday } } });
+  await runSlackPings({ store, locationId: LOC, saved: SWEEP_ON, deps: noPipeline, now: TUE(12, 30) });
+  assert.equal(machinePosts(s).length, 0, "before 1pm it may still run");
+  await runSlackPings({ store, locationId: LOC, saved: ON, deps: noPipeline, now: TUE(13, 15) });
+  assert.equal(machinePosts(s).length, 0, "switched off, never");
+  await runSlackPings({ store, locationId: LOC, saved: SWEEP_ON, deps: noPipeline, now: TUE(13, 15) });
+  assert.equal(machinePosts(s).length, 1);
+  assert.match(said(machinePosts(s)[0]), /Agent sweep: no finished run by 1pm today.*the day's run never started/);
+  await runSlackPings({ store, locationId: LOC, saved: SWEEP_ON, deps: noPipeline, now: TUE(14) });
+  assert.equal(machinePosts(s).length, 1, "once a day");
+});
+
+test("an outreach sweep that finished its run today is never reported as missed", async () => {
+  const LOC = "loc-outreach-ran";
+  const s = slack();
+  const ran = new Date(TUE(9, 30)).toISOString();
+  await store.setJobCursor(LOC, "outreach", { at: new Date(TUE(9)).toISOString(), doc: { lastDaily: new Date(TUE(9)).toISOString(), tries: 1, last: { status: "done", finishedAt: ran } } });
+  await runSlackPings({ store, locationId: LOC, saved: SWEEP_ON, deps: noPipeline, now: TUE(13, 15) });
+  assert.equal(machinePosts(s).length, 0);
+});
+
+test("a lot finder run that fails is told in #machine", async () => {
+  const LOC = "loc-lot-fail";
+  const s = slack();
+  const { startLotFinder } = await import("./lot-finder.js");
+  const LOTS = { ...ON, lotFinder: { enabled: true, pockets: [{ id: "p1", name: "Test pocket", lat: 47.6, lng: -122.2 }] } };
+  // The owners' read throws, as a provider refusing the key would.
+  const failing = Object.create(store);
+  failing.listLotOwners = async () => { throw new Error("property search: HTTP 401 invalid api key"); };
+  const job = startLotFinder({ locationId: LOC, saved: LOTS, store: failing, now: TUE(10), trigger: "daily" });
+  await job.done;
+  assert.equal(job.status, "error");
+  const errs = await store.listAppErrorsSince(LOC, new Date(TUE(10) - 3600000).toISOString(), { limit: 10 });
+  assert.ok(errs.some((e) => e.area === "lot-finder"), "kept as an error, not only on the cursor");
+  await runSlackPings({ store, locationId: LOC, saved: LOTS, deps: noPipeline, now: TUE(10, 5) });
+  const posts = machinePosts(s).map(said);
+  assert.ok(posts.some((t) => /Lot finder\* failed its last run/.test(t)), posts.join("\n"));
+  assert.ok(posts.every((t) => /<@U012MATT34>/.test(t)), "a revenue lane on a rejected key: @Matt");
+});
+
+/* ---------- failures that stop the business @Matt (2026-11-23 audit, AH-6) ---------- */
+
+test("a rejected key in the underwriter is told to Matt by name every day it lasts, never with a contact", async () => {
+  const LOC = "loc-stopper-err";
+  const s = slack();
+  const DAY = 86400000;
+  await recordError(store, { locationId: LOC, area: "underwrite", err: new Error("Zillow comps lookup failed (Apify 401)"), context: { contactId: "c-77" }, now: TUE(9) });
+  await runSlackPings({ store, locationId: LOC, saved: ON, deps: noPipeline, now: TUE(9, 5) });
+  assert.equal(machinePosts(s).length, 1);
+  assert.match(said(machinePosts(s)[0]), /<@U012MATT34> New error in \*underwrite\*/);
+  await recordError(store, { locationId: LOC, area: "underwrite", err: new Error("Zillow comps lookup failed (Apify 401)"), now: TUE(11) });
+  await runSlackPings({ store, locationId: LOC, saved: ON, deps: noPipeline, now: TUE(11, 5) });
+  assert.equal(machinePosts(s).length, 1, "once a day");
+  await recordError(store, { locationId: LOC, area: "underwrite", err: new Error("Zillow comps lookup failed (Apify 401)"), now: TUE(9) + DAY });
+  await runSlackPings({ store, locationId: LOC, saved: ON, deps: noPipeline, now: TUE(9, 5) + DAY });
+  assert.equal(machinePosts(s).length, 2, "the next day it's said again");
+  assert.match(said(machinePosts(s)[1]), /<@U012MATT34> Still failing in \*underwrite\*/);
+  assert.doesNotMatch(machinePosts(s).map(said).join("\n"), /c-77/);
+  // The strip's list (routes/dashboard.js /machine) carries it too.
+  const trouble = await store.getJobCursor(LOC, "machineTrouble");
+  assert.equal(trouble.doc.stoppers.length, 1);
+  assert.match(trouble.doc.stoppers[0].text, /Errors in underwrite: Zillow comps lookup failed \(Apify 401\)/);
+});
+
+test("a switched-on revenue job that failed twice today @mentions Matt; a switched-off one doesn't", async () => {
+  const LOC = "loc-stopper-job";
+  const s = slack();
+  const at = new Date(TUE(10)).toISOString();
+  await store.setJobCursor(LOC, "followUp", { at, doc: { lastDaily: at, tries: 2, failed: true, error: "GHL timed out", last: { finishedAt: at, status: "error", error: "GHL timed out" } } });
+  await runSlackPings({ store, locationId: LOC, saved: ON, deps: noPipeline, now: TUE(10, 5) });
+  assert.equal(machinePosts(s).length, 1);
+  assert.doesNotMatch(said(machinePosts(s)[0]), /<@U012MATT34>/, "the follow-up sweep is off: told, not a stopper");
+  const LIVE = { ...ON, aiApiKey: "sk-test", conversationAi: { enabled: true }, outreachAutopilot: { introEmail: { enabled: true } } };
+  const LOC2 = "loc-stopper-job-on";
+  await store.setJobCursor(LOC2, "followUp", { at, doc: { lastDaily: at, tries: 2, failed: true, error: "GHL timed out", last: { finishedAt: at, status: "error", error: "GHL timed out" } } });
+  await runSlackPings({ store, locationId: LOC2, saved: LIVE, deps: noPipeline, now: TUE(10, 5) });
+  assert.equal(machinePosts(s).length, 2);
+  assert.match(said(machinePosts(s)[1]), /<@U012MATT34> \*Follow-up sweep\* failed its last run \(try 2\)/);
+});

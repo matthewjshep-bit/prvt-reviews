@@ -545,27 +545,48 @@ export const slackClaimKey = (kind, id) => `${kind}:${id}`;
 
 /* ---------- the machine and the day ---------- */
 
-/** renderError(e) → a new kind of app error, or one back after quiet days (reopenedAt), once each. */
-export function renderError(e = {}) {
-  const head = `:red_circle: ${e.reopenedAt ? "Error back in" : "New error in"} *${esc(e.area || "the app")}*${Number(e.count) > 1 ? ` (×${e.count})` : ""}`;
+// @Matt on a failure that stops the business (shared/machine-health.js,
+// 2026-11-23 audit AH-6): `ctx.mention` and his Slack id.
+const mentionOf = (ctx = {}) => (ctx.mention && ctx.mattUserId ? `<@${ctx.mattUserId}> ` : "");
+
+/**
+ * renderError(e, ctx) → a new kind of app error, or one back after quiet days
+ * (reopenedAt), once each; or, with ctx.stillFailing, a business-stopping one
+ * still happening today.
+ */
+export function renderError(e = {}, ctx = {}) {
+  const what = ctx.stillFailing ? "Still failing in" : e.reopenedAt ? "Error back in" : "New error in";
+  const head = `:red_circle: ${mentionOf(ctx)}${what} *${esc(e.area || "the app")}*${Number(e.count) > 1 ? ` (×${e.count})` : ""}`;
   const text = `${head}\n_${esc(clip(scrubForSlack(e.message), 200))}_`;
   return { text: clip(head.replace(/\*/g, ""), 150), blocks: [{ type: "section", text: { type: "mrkdwn", text } }] };
 }
 
-/** renderJobFailed(job) → a scheduled job whose last run failed (shared/line.js lineJobs row). */
-export function renderJobFailed(j = {}) {
-  const head = `:warning: *${esc(j.label || j.name)}* failed its last run${Number(j.tries) > 1 ? ` (try ${j.tries})` : ""}`;
+/** renderJobFailed(job, ctx) → a scheduled job whose last run failed (shared/line.js lineJobs row). */
+export function renderJobFailed(j = {}, ctx = {}) {
+  const head = `:warning: ${mentionOf(ctx)}*${esc(j.label || j.name)}* failed its last run${Number(j.tries) > 1 ? ` (try ${j.tries})` : ""}`;
   const text = j.error ? `${head}\n_${esc(clip(scrubForSlack(j.error), 200))}_` : head;
   return { text: clip(head.replace(/\*/g, ""), 150), blocks: [{ type: "section", text: { type: "mrkdwn", text } }] };
 }
 
 const EVERY_LABEL = { tick: "every 15 minutes", day: "once a day", workday: "every workday" };
 
-/** renderJobLate(job) → a switched-on job that has stopped running (shared/line.js lineJobs row, late). */
-export function renderJobLate(j = {}) {
+/** renderJobLate(job, ctx) → a switched-on job that has stopped running (shared/line.js lineJobs row, late). */
+export function renderJobLate(j = {}, ctx = {}) {
   const ago = j.hoursAgo != null ? ` in ${j.hoursAgo}h` : "";
-  const head = `:hourglass_flowing_sand: *${esc(j.label || j.name)}* hasn't run${ago}${EVERY_LABEL[j.every] ? ` (it runs ${EVERY_LABEL[j.every]})` : ""}`;
+  const every = j.everyMs ? `every ${Math.round(j.everyMs / 3600000)} hours` : EVERY_LABEL[j.every];
+  const head = `:hourglass_flowing_sand: ${mentionOf(ctx)}*${esc(j.label || j.name)}* hasn't run${ago}${every ? ` (it runs ${every})` : ""}`;
   return { text: clip(head.replace(/\*/g, ""), 150), blocks: [{ type: "section", text: { type: "mrkdwn", text: head } }] };
+}
+
+/**
+ * renderKeyTrouble(t, ctx) → a paid key its provider rejects, or Apify's
+ * month near its limit (shared/machine-health.js keyTroubles), @Matt: told
+ * the first day and every day it lasts.
+ */
+export function renderKeyTrouble(t = {}, ctx = {}) {
+  const icon = t.kind === "usage" ? ":chart_with_upwards_trend:" : ":key:";
+  const text = `${icon} ${ctx.mattUserId ? `<@${ctx.mattUserId}> ` : ""}${esc(clip(String(t.text || ""), 300))}`;
+  return { text: clip(String(t.text || ""), 150), blocks: [{ type: "section", text: { type: "mrkdwn", text } }] };
 }
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;

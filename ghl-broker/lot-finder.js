@@ -22,6 +22,7 @@
 // counts and keys, never a name, a phone or an address.
 
 import { store as defaultStore } from "./store.js";
+import { recordError, scrubMessage } from "./app-errors.js";
 import { recordEvent, recordEvents, ensureProfile } from "./contact-record.js";
 import { getContact, findDuplicateContact, createContact, addContactTags, removeContactTags, smsUnsubscribed } from "./ghl.js";
 import { resolveBuilderContact } from "./builder-contacts.js";
@@ -469,7 +470,10 @@ export function startLotFinder({ client, locationId, saved, store = defaultStore
       await stamp({ run: null, last: summary() });
     })
     .catch(async (e) => {
-      job.status = "error"; job.error = String(e?.message || e).slice(0, 300); job.finishedAt = iso(Date.now());
+      job.status = "error"; job.error = scrubMessage(e).slice(0, 300) || "the run failed"; job.finishedAt = iso(Date.now());
+      // Kept, so #machine and Reports → Line say so (2026-11-23 audit, AH-5):
+      // the cursor alone was read by nobody.
+      await recordError(store, { locationId, area: "lot-finder", err: e, context: { jobId: job.id, trigger, stage: "run" } });
       await stamp({ run: null, last: summary(), ...(trigger === "daily" ? { failed: true, error: job.error } : {}) });
     });
   return job;

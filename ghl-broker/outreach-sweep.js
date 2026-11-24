@@ -1252,6 +1252,43 @@ export function emptyDayFor(job = {}, saved = {}, now = Date.now()) {
   return { day: pacificDay(now), at: iso(now), ...counts, reason, text };
 }
 
+// The hour (Pacific) by which a workday's sweep should have finished a run.
+export const MISSED_BY_HOUR = 13;
+
+/**
+ * missedDayFor(cursor, saved, now) → { day, at, missed: true, reason, text } | null
+ *
+ * 2026-11-23 audit (AH-5): emptyDayFor only speaks for a run that finished,
+ * so a day with no run at all (the tick missed the start hour, a cursor
+ * stuck on a run nobody is doing) said nothing. A workday the sweep is
+ * switched on for (the toggle and a RentCast key, as the gate reads them),
+ * at 1pm Pacific or two hours past its start hour if that's later, with no
+ * run that finished "done" today and none going: a line for #machine.
+ * Counts and reason words only.
+ */
+export function missedDayFor(cursor = null, saved = {}, now = Date.now()) {
+  const oa = normalizeOutreachAutopilot(saved?.outreachAutopilot);
+  if (!oa.enabled || !String(saved?.rentcastApiKey || "").trim()) return null;
+  if (!isWorkday(now, WORK_TZ, oa.days)) return null;
+  const by = Math.max(MISSED_BY_HOUR, oa.hour + 2);
+  if (workHour(now) < by) return null;
+  const doc = cursor?.doc || {};
+  const today = pacificDay(now);
+  const onDay = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) && pacificDay(t) === today; };
+  const last = doc.last && typeof doc.last === "object" ? doc.last : {};
+  if (last.status === "done" && onDay(last.finishedAt)) return null;
+  // A run that is going and has shown a sign of life lately: not missed yet.
+  const beat = Date.parse(doc.run?.beatAt || doc.run?.startedAt || "");
+  if (Number.isFinite(beat) && now - beat <= STALE_RUN_MS) return null;
+  const claimed = onDay(doc.lastDaily);
+  const reason = !claimed ? "the day's run never started"
+    : doc.run ? "today's run stopped answering and never finished"
+      : last.status === "error" || doc.failed ? "today's run failed and no retry finished it"
+        : "today's run never finished";
+  const text = `Agent sweep: no finished run by ${by > 12 ? by - 12 : by}${by >= 12 ? "pm" : "am"} today, so no new agents were opened. Biggest reason: ${reason}.`;
+  return { day: today, at: iso(now), missed: true, reason, text };
+}
+
 // The one thing that most kept the day short, in a few words.
 function emptyDayReason(job = {}, counts = {}) {
   if (job.standDown === "budget") return "the RentCast budget is spent until the plan renews";
