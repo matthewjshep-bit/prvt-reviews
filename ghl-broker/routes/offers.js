@@ -64,7 +64,7 @@ import { settlePromise, notePromiseInHandText } from "../promise-sweep.js";
 const PROMISE_SETTLING_STATUSES = new Set(["sent", "countered", "no_response", "passed", "we_passed", "unavailable"]);
 import express from "express";
 import crypto from "node:crypto";
-import { store } from "../store.js";
+import { store, offerWriteGeneration } from "../store.js";
 import { calculateOffers, effectiveSettings, fmtMoney, netComparison } from "../shared/offer-calc.js";
 import { offerMath, mathSentence } from "../shared/offer-breakdown.js";
 import {
@@ -77,7 +77,7 @@ import { currentOffers, houseRowFor, paperCheck, annotateCurrent, groupHouses, r
 import { paperAfterSilenceDue, paperAfterAnswerDue, paperWent, floatSentIndex, PAPER_FLOAT_MAX_DAYS, sendsItselfOnClear, isRoughNumber } from "../shared/paper-follows.js";
 import { noFitLine, stanceWaitingFor } from "../shared/number-stance.js";
 import { planRequote } from "../shared/requote.js";
-import { LAST_ACTIVITY_TYPES, lastActivityFromEvents, mergeDraftActivity, mergeGhlActivity } from "../shared/last-activity.js";
+import { attachOfferListColumns, createOffersListCache } from "../offers-list.js";
 import { buildFeedbackPackage, renderFeedbackHtml } from "../shared/deal-feedback.js";
 import { startFeedbackScan, getScanJob, publicScanJob } from "../feedback-scan.js";
 import {
@@ -85,7 +85,6 @@ import {
   agentCandidates, investorCandidates,
 } from "../follow-up-sweep.js";
 import { runCounterHolds } from "../counter-hold.js";
-import { attachNextFollowUps, attachNextFollowUpsFor } from "../next-follow-up.js";
 import { readSpend } from "../ai-spend.js";
 import { scrubMessage } from "../app-errors.js";
 import { dueStep } from "../shared/follow-up.js";
@@ -438,6 +437,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export default function createOffersRouter({ resolveLocation, uploadDir, publicBaseUrl, dataroomBaseUrl = publicBaseUrl }) {
   const router = express.Router();
+  // GET /?activity=1&next=1, the Offers page's load: a minute per location,
+  // until any offer is written (ghl-broker/offers-list.js).
+  const offersListCache = createOffersListCache({ generation: offerWriteGeneration });
   const fail = (res, err) => {
     const code = err.http || err.status || 500;
     // The log line is scrubbed: an error's text (GHL's carries the lookup it
@@ -2897,47 +2899,33 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // replaced it when it isn't (shared/current-offer.js). Annotated over
       // the page as read — a house split across a page boundary is rare, and
       // the rows it sees are still told the truth about each other.
-      const offers = annotateCurrent(await store.listOffers(locationId, { contactId, limit, lean }));
-      // How warm each agent is, opt-in because only the history table wants
-      // it. Two indexed reads for the whole location, folded into one Map by
-      // contact — never a lookup per row. Attached HERE rather than in the
-      // lean projection because it is derived per request, not a field on the
-      // stored document (toListOffer would strip it anyway). Both reads fall
-      // back to empty: a column that can't load must not take the table down.
       const wantActivity = req.query.activity === "1" || req.query.activity === "true";
       const wantNext = req.query.next === "1" || req.query.next === "true";
-      // One person's next follow-up (the work pane) reads that person only.
-      const nextForOne = wantNext && Boolean(contactId) && !wantActivity;
-      // Both columns read the reply drafts; one read serves both.
-      const drafts = wantActivity || (wantNext && !nextForOne)
-        ? await store.listReplyDrafts(locationId, { limit: wantNext ? 4000 : 2000 }).catch(() => [])
-        : null;
-      if (wantActivity) {
-        const rows = await store.lastContactActivity(locationId, { types: LAST_ACTIVITY_TYPES }).catch(() => []);
-        const seen = mergeDraftActivity(lastActivityFromEvents(rows), drafts);
-        // Threads the app never recorded (GHL inbox, workflows, before the
-        // contact record) come from GHL's own last-message date.
-        const ghl = await ghlLastMessages(client, locationId).catch(() => new Map());
-        mergeGhlActivity(seen, ghl, [...new Set(offers.map((o) => o?.contactId).filter(Boolean))]);
-        for (const o of offers) if (o?.contactId) o.lastActivity = seen.get(o.contactId) || null;
-        // When our number was floated by text (the Offers "Not sent" tab says
-        // "Floated 5d ago"): a sent realm_check draft, not a field on the offer.
-        const floats = floatSentIndex(drafts);
-        for (const o of offers) if (o?.id) o.floatedAt = floats.get(o.id) || null;
-      }
-      // When each offer is next followed up, and with what
-      // (shared/next-follow-up.js). Opt-in, like activity.
-      if (wantNext) {
-        const saved = (await store.getOfferSettings(locationId).catch(() => null)) || {};
-        await (nextForOne
-          ? attachNextFollowUpsFor({ store, locationId, saved, contactId, offers })
-          : attachNextFollowUps({ store, locationId, saved, offers, drafts })).catch((e) => {
-          console.error(`offers: next follow-up failed loc=${locationId}:`, e?.message);
-        });
-      }
-      // The activity flag is what lets that column tell "we didn't ask" (—)
-      // apart from "we asked and they've never spoken" (never).
-      res.json({ offers, ...(wantActivity ? { activity: true } : {}), ...(wantNext ? { next: true } : {}) });
+      const read = async () => {
+        const offers = annotateCurrent(await store.listOffers(locationId, { contactId, limit, lean }));
+        // How warm each agent is, and when each is next followed up: opt-in,
+        // because only the history table wants them. One location-wide read
+        // of each kind, folded by contact — never a lookup per row. Attached
+        // HERE rather than in the lean projection because they are derived
+        // per request, not fields on the stored document (toListOffer would
+        // strip them anyway). Reads that fail leave a column saying less,
+        // never the table down (ghl-broker/offers-list.js).
+        if (wantActivity || wantNext) {
+          await attachOfferListColumns({
+            store, locationId, offers, activity: wantActivity, next: wantNext, contactId,
+            ghlLastMessages: () => ghlLastMessages(client, locationId),
+          });
+        }
+        // The activity flag is what lets that column tell "we didn't ask" (—)
+        // apart from "we asked and they've never spoken" (never).
+        return { offers, ...(wantActivity ? { activity: true } : {}), ...(wantNext ? { next: true } : {}) };
+      };
+      // The Offers page's own load (the whole book, both columns) is kept a
+      // minute per location, and dropped the moment any offer is written:
+      // a reload doesn't repeat the location-wide reads on the broker that
+      // also takes GHL's webhooks.
+      const whole = wantActivity && wantNext && !contactId;
+      res.json(whole ? await offersListCache.remember(`${locationId}|${limit}|${lean ? 1 : 0}`, read) : await read());
     } catch (err) { fail(res, err); }
   });
 

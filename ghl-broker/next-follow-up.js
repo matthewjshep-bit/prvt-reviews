@@ -46,7 +46,10 @@ const groupBy = (rows, cap = Infinity) => {
 export async function attachNextFollowUps({ store, locationId, saved = {}, offers = [], drafts = null, now = Date.now() }) {
   const since = new Date(now - NEXT_WINDOW_DAYS * DAY_MS).toISOString();
   const [draftRows, windowed, botEvents] = await Promise.all([
-    drafts || store.listReplyDrafts(locationId, { since, limit: 4000 }).catch(() => []),
+    // The fields the column reads, not whole drafts (store.js draftActivityRow).
+    drafts || (typeof store.listReplyDraftActivity === "function"
+      ? store.listReplyDraftActivity(locationId, { since, limit: 4000 })
+      : store.listReplyDrafts(locationId, { since, limit: 4000 })).catch(() => []),
     typeof store.listContactEventsSince === "function"
       ? store.listContactEventsSince(locationId, since, { types: NEXT_EVENT_TYPES, limit: 20000 }).catch(() => [])
       : [],

@@ -2653,6 +2653,28 @@ who, reason, overdue}` to each row. It is opt-in, like `activity=1`. It costs
 two location-wide reads (reply drafts and the clocks' events), done in
 `ghl-broker/next-follow-up.js`.
 
+**Opening the Offers page is a light read (2026-11-23).** The page's load,
+`GET /api/offers?lean=1&limit=2000&activity=1&next=1`, used to read the
+location's 4,000 newest reply drafts whole (~10KB each, mostly prompt
+context) on every load, on the one broker that also takes GHL's webhooks.
+`ghl-broker/offers-list.js` now does the work:
+- **Trimmed drafts.** It reads `store.listReplyDraftActivity` (both
+  backends; `draftActivityRow` / `draftActivityQuery` in `store.js`): only
+  the fields the two columns read, which are id, contact, status, the four
+  times (`createdAt`, `updatedAt`, `sendAt`, `sentAt`), `autoSent`, `intent`,
+  `answeredBy`, the inbound text (threadHealth reads its words), and
+  `outbound.kind`/`offerId`. The window is the column's own
+  `NEXT_WINDOW_DAYS` (130). `attachNextFollowUps` reads the same way when no
+  drafts are handed in, which also lightens Line.
+- **A minute per location.** The whole response for that load (both columns,
+  no `contact_id`) is kept 60s. Any offer write (`createOffer`, `updateOffer`
+  or `deleteOffer`, counted in `store.js` `offerWriteGeneration`) drops it at
+  once. Two loads at the same moment share one read. A new draft or event
+  isn't an offer write, so a queued text can take up to a minute to show.
+- `offers-list.test.mjs` pins that the trimmed read gives the same Next
+  follow-up, Last activity and Floated stamps as the whole one. Dropping any
+  field the columns read fails it.
+
 **On the Offers tab:**
 - A sortable "Next follow-up" column. The group header shows the agent's
   soonest follow-up, or their gap.
