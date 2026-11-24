@@ -298,3 +298,30 @@ test("a lot owner's first text the carrier blocked goes once more in another cle
   const again = await queueLotOwnerRetry({ store, locationId: "L12", saved, draft: first, now: T0 + 9000000, sendsEnabled: true });
   assert.match(again.skipped, /already retried once/);
 });
+
+// The Luxury page's "Owners who answered" strip (2026-11-24): a homeowner
+// who answered and has no luxury offer from Matt yet, newest first. A held
+// draft with no number on it is not an offer; a priced or passed one is.
+test("an owner who answered and has no lot offer yet is on the Luxury page's list, newest first", async () => {
+  const { ownersWhoAnswered } = await import("./lot-finder.js");
+  const L = "L13";
+  const replied = (contactId, minutes, address) => recordEvent({ store, locationId: L, contactId, party: "owner", type: "lot_owner_replied",
+    at: new Date(T0 - minutes * 60000).toISOString(), address, source: "conversation", ref: `ra-${contactId}-${minutes}`, dedupeKey: `lot_owner_replied:ra-${contactId}-${minutes}` });
+  await store.upsertContactProfile(L, "c-a", { party: "owner", name: "Pat Example" });
+  await store.upsertContactProfile(L, "c-b", { party: "owner", name: "Sam Sample" });
+  await replied("c-a", 300, "9 Lakeview Ln");
+  await replied("c-a", 30, "9 Lakeview Ln");
+  await replied("c-b", 60, "4 Ridge Rd");
+  await replied("c-c", 90, "11 Lakeview Ln");   // priced by Matt
+  await replied("c-d", 120, "2 Summit Dr");     // a draft the machine held, no number
+  await replied("c-old", 60 * 24 * 90, "8 Old Rd");
+  await store.createOffer({ locationId: L, contactId: "c-c", address: "11 Lakeview Ln, Clyde Hill, WA 98004", status: "sent", cashAmount: 2100000, asset: { type: "sfr", lane: "luxury", by: "you" } });
+  await store.createOffer({ locationId: L, contactId: "c-d", address: "2 Summit Dr, Clyde Hill, WA 98004", status: "draft", cashAmount: 0, asset: { type: "sfr", lane: "luxury", by: "underwrite" } });
+  const rows = await ownersWhoAnswered({ store, locationId: L, now: T0 });
+  assert.deepEqual(rows.map((r) => [r.contactId, r.street, r.name, r.replies]), [
+    ["c-a", "9 Lakeview Ln", "Pat Example", 2],
+    ["c-b", "4 Ridge Rd", "Sam Sample", 1],
+    ["c-d", "2 Summit Dr", "", 1],
+  ]);
+  assert.equal(rows[0].at, new Date(T0 - 30 * 60000).toISOString(), "their newest answer");
+});

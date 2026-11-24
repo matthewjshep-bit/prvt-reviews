@@ -40,7 +40,7 @@ import { citySlug } from "./shared/dispo-regions.js";
 import {
   normalizeLotFinder, pocketReady, propertySearchBody, ownerFromProperty, pickToTrace, traceLookupBody, phonesFromTrace, reachable,
   lotOwnerText, nextOwnerStep, lotOwnerTags, LOT_OWNER_EVENTS, LOT_OWNER_PARTY, SEQUENCE_EVENT_TYPES,
-  suggestPocket, builderFromNewBuild, builderTags, TEARDOWN_YEAR_MAX,
+  suggestPocket, builderFromNewBuild, builderTags, TEARDOWN_YEAR_MAX, repliesByOwner, hasLotOffer,
 } from "./shared/lot-finder.js";
 
 export const CURSOR_NAME = "lotFinder";
@@ -179,6 +179,30 @@ export async function traceOwner({ row, apiKey, fetchFn = fetch }) {
  * deps: { fetch, getContact, findDuplicateContact, createContact, addContactTags } — the
  * two APIs and GHL, injectable for tests.
  */
+/**
+ * ownersWhoAnswered({ store, locationId, now, days, limit }) → [{ contactId, name, street, at, replies }]
+ *
+ * The Luxury page's "Owners who answered": every homeowner the lot finder
+ * texted who answered in the last `days`, with no luxury-lot offer from Matt
+ * yet (shared/lot-finder.js hasLotOffer), newest answer first. One event read
+ * for the window, then one offer read and one profile read per person shown.
+ */
+export async function ownersWhoAnswered({ store = defaultStore, locationId, now = Date.now(), days = 60, limit = 50 } = {}) {
+  const since = iso(now - days * 86400000);
+  const events = (await store.listContactEventsSince(locationId, since, { types: [LOT_OWNER_EVENTS.replied], limit: 5000 }).catch(() => [])) || [];
+  const out = [];
+  for (const r of repliesByOwner(events)) {
+    if (out.length >= limit) break;
+    const [offers, profile] = await Promise.all([
+      store.listOffers(locationId, { contactId: r.contactId, limit: 10, lean: true }).catch(() => []),
+      store.getContactProfile?.(locationId, r.contactId).catch(() => null),
+    ]);
+    if (hasLotOffer(offers)) continue;
+    out.push({ ...r, name: String(profile?.name || "").trim() });
+  }
+  return out;
+}
+
 export async function runLotFinder({ client, locationId, saved = {}, store = defaultStore, sendsEnabled = false, deps = {}, now = Date.now(), dryRun = null, rescan = false }) {
   const f = normalizeLotFinder(saved?.lotFinder);
   dryRun = dryRun ?? f.dryRun;

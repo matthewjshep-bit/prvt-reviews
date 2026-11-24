@@ -3,6 +3,7 @@
 //
 //   GET  /api/lot-finder                 settings, counts per pocket, switches, last run
 //   GET  /api/lot-finder/owners          { pocketId?, status?, limit? } → owner rows
+//   GET  /api/lot-finder/answered        → owners who answered with no lot offer yet (the Luxury page)
 //   POST /api/lot-finder/owners/:key/status   { status: skipped | do_not_contact | new }
 //   POST /api/lot-finder/suggest         { address, radiusMiles? } → the pocket's numbers off Zillow
 //   POST /api/lot-finder/run             { dryRun, wait } → run the day now
@@ -15,7 +16,7 @@ import express from "express";
 import { store } from "../store.js";
 import { geocodeAddress } from "../geocode.js";
 import { normalizeLotFinder, normalizePocket, OWNER_STATUSES } from "../shared/lot-finder.js";
-import { startLotFinder, getLotFinderJob, scanPocketZillow, CURSOR_NAME, OWNER_SMS_ENABLED, traceKeyOf, propertyKeyOf } from "../lot-finder.js";
+import { startLotFinder, getLotFinderJob, scanPocketZillow, CURSOR_NAME, OWNER_SMS_ENABLED, traceKeyOf, propertyKeyOf, ownersWhoAnswered } from "../lot-finder.js";
 
 const fail = (res, err) => res.status(err?.http || 500).json({ error: err?.message || String(err) });
 const OUTREACH_IMPORTS_ENABLED = () => process.env.OUTREACH_IMPORTS_ENABLED === "true";
@@ -66,6 +67,14 @@ export default function createLotFinderRouter({ resolveLocation, getSettings = (
       const status = OWNER_STATUSES.includes(String(req.query.status || "")) ? String(req.query.status) : null;
       const limit = Math.min(2000, Math.max(1, Number(req.query.limit) || 500));
       res.json({ owners: await store.listLotOwners(locationId, { pocketId, status, limit }) });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Cheap: one event read for the window, then an offer and a profile read per owner shown.
+  router.get("/answered", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      res.json({ owners: await ownersWhoAnswered({ store, locationId }) });
     } catch (err) { fail(res, err); }
   });
 

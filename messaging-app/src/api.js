@@ -909,6 +909,8 @@ export const runGatekeeperSweep = ({ dryRun = true } = {}) => post(`/api/gatekee
 export const getLotFinder = () => fetch(`${API_BASE}/api/lot-finder?${locq()}`).then(j);
 export const getLotOwners = ({ pocketId = "", status = "", limit = 500 } = {}) =>
   fetch(`${API_BASE}/api/lot-finder/owners?${locq()}${pocketId ? `&pocketId=${encodeURIComponent(pocketId)}` : ""}${status ? `&status=${encodeURIComponent(status)}` : ""}&limit=${limit}`).then(j);
+// Homeowners who answered a lot text and have no lot offer from Matt yet (the Luxury page's strip).
+export const getAnsweredLotOwners = () => fetch(`${API_BASE}/api/lot-finder/answered?${locq()}`).then(j);
 export const setLotOwnerStatus = (ownerKey, status) => post(`/api/lot-finder/owners/${encodeURIComponent(ownerKey)}/status`, { status });
 export const suggestLotPocket = (address, radiusMiles) => post(`/api/lot-finder/suggest`, { address, radiusMiles });
 export const runLotFinder = ({ dryRun = true } = {}) => post(`/api/lot-finder/run`, { dryRun, wait: true });
