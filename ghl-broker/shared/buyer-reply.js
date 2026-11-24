@@ -267,3 +267,39 @@ const HAND_LINK_RX = /https?:\/\/|www\.|\b(?:photos?|pics?|pictures?|package|vid
 
 /** handSentLink(text) → true when a text of Matt's carried a link or photos. */
 export const handSentLink = (text = "") => HAND_LINK_RX.test(String(text || ""));
+
+/* ---------- a partner they want deals sent to ---------- */
+
+// The 2026-11-23 buyer audit (dispo-13): a buyer gave their partner's email
+// in August and the partner still had no deals in November; the bot said
+// "these go out by text". Matt adds them; nothing texts or adds a stranger.
+const PARTNER_REL = String.raw`(?:business\s+partner|investor\s+partner|partners?|wife|husband|spouse|acquisitions?\s+(?:manager|guy|person|lead|director|team|specialist)|dispo(?:sitions?)?\s+(?:manager|guy|person|lead)|associate|colleague|assistant|teammate|son|daughter|brother|sister)`;
+const REL_RX = new RegExp(String.raw`\b(?:my|our)\s+(${PARTNER_REL})\b`, "i");
+const NAME_AFTER_RX = /^\s*,?\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b/;
+const NOT_A_NAME = new Set("Thanks Thank Please He She They Also And But We I Too Is Was Will Would Can Could On In At If So".split(" "));
+// They want deals to reach that person.
+const SEND_THEM_RX = /\b(?:send|sending|add|include|cc|copy|loop\s+in|forward|text|email|e-mail|reach\s+out\s+to|contact|put\s+(?:him|her|them)\s+on|on\s+(?:the|your)\s+list)\b/i;
+const EMAIL_IN_RX = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
+const PHONE_IN_RX = /\(?\b\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/;
+
+/**
+ * buyerReferral(text) → { name, relation, email, phone } | null
+ *
+ * A buyer naming someone on their side who should get our deals: "send it
+ * to my partner Jo too", "add my acquisitions manager". Checking with a
+ * partner ("I'll run it by my partner") is not one.
+ */
+export function buyerReferral(text = "") {
+  for (const s of sentences(text)) {
+    const m = REL_RX.exec(s);
+    if (!m) continue;
+    const email = (s.match(EMAIL_IN_RX) || [])[0] || "";
+    const phone = (s.match(PHONE_IN_RX) || [])[0] || "";
+    if (!SEND_THEM_RX.test(s) && !email && !phone) continue;
+    if (/\b(?:run\s+it\s+by|check\s+with|talk\s+(?:it\s+over\s+)?with|ask)\s+(?:my|our)\b/i.test(s) && !email && !phone) continue;
+    const after = NAME_AFTER_RX.exec(s.slice(m.index + m[0].length));
+    const name = after && !NOT_A_NAME.has(after[1].split(" ")[0]) ? after[1] : "";
+    return { name, relation: m[1].toLowerCase().replace(/\s+/g, " "), email, phone };
+  }
+  return null;
+}

@@ -10176,6 +10176,14 @@ asks when or how they can see it, whatever the reply read it as, writes a
 Call row on the Desk (`CALL_INTENTS`), like a walk ask. The reply itself
 still waits for you: `wants_to_buy` and `wants_walkthrough` stay `NEVER_AUTO`.
 
+**A partner they name.** "Send these to my partner Jo too, jo@…" or "add
+my acquisitions manager" (`buyerReferral`) writes a `referral_mentioned`
+event (party investor, `data.buyer`, the name, relation and the email or
+phone they gave, never their words). The Desk shows "Add to the buyer list:
+Jo (Rory's partner)" with the address. The bot never creates the contact or
+texts them, and a reply that promises to is held. Their address is never
+saved as the buyer's own (`emailOwner` reads it as someone else's).
+
 No switch: all of it only holds, pings, or attaches a link the reply already offered.
 
 ### Rural: two acres or more (2026-10-08)

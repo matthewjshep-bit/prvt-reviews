@@ -9922,3 +9922,20 @@ test("a buyer who asks when they can see it, read as a question, still puts a ca
   assert.equal(ping?.data?.wants, "walkthrough");
   assert.equal(ping?.data?.callNow, true);
 });
+
+// The 2026-11-23 buyer audit (dispo-13): "got the email, but these go out by
+// text", and the partner never got a deal.
+test("a buyer who names a partner to get deals puts a row in for Matt to add them, and nothing contacts the partner", async () => {
+  _resetJobs();
+  const store = buyerStore();
+  const client = buyerClient();
+  const { job } = await startReply({ client, locationId: "LOC", saved: BUYER_SAVED, store, contactId: "c1", message: "Send these to my partner Jo too, jo@example.com", channel: "sms", sendsEnabled: true,
+    deps: { draft: async () => ({ ...DRAFT, intent: "looking_for_deals", confidence: "high", needsHuman: true, humanReason: "they want their partner added", reply: "Will do, thanks.", propertyAddress: "", counterAmount: 0 }) } });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const [ev] = (await store.listContactEvents("LOC", "c1")).filter((e) => e.type === "referral_mentioned");
+  assert.ok(ev, "Matt gets the row");
+  assert.equal(ev.party, "investor");
+  assert.deepEqual([ev.data.name, ev.data.relation, ev.data.email, ev.data.buyer], ["Jo", "partner", "jo@example.com", true]);
+  assert.equal(ev.data.phrase, undefined, "never their words");
+});

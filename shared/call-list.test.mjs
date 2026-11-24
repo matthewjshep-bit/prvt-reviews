@@ -637,3 +637,18 @@ test("with buyer calls off nothing is queued for buyers", async () => {
   assert.ok(!rows.some((r) => r.contactId === "b1"));
   assert.equal(ghlCallRows(rows.map((r) => ({ ...r, also: [] })), { mode: "morning" }).filter((x) => x.contactId === "b1").length, 0);
 });
+
+// The 2026-11-23 buyer audit (dispo-13): a buyer gave their partner's email
+// in August to get deals too, and the partner still had none in November.
+// The bot never adds a contact; the row asks Matt to.
+test("a buyer who names a partner to get deals raises a row for Matt to add them, and texts nobody", () => {
+  const ev = { type: "referral_mentioned", party: "investor", contactId: "c10", at: ago(1), source: "conversation",
+    data: { name: "Jo", brokerage: "", relation: "partner", phone: "", email: "jo@example.com", buyer: true } };
+  const r = callList({ events: [ev], drafts: [{ id: "d", contactId: "c10", contactName: "Rory Buyer", inbound: "x", createdAt: ago(1) }], now: NOW }).find((x) => x.kind === "referral");
+  assert.ok(r);
+  assert.equal(r.section, "decide");
+  assert.equal(r.title, "Add to the buyer list: Jo (Rory's partner)");
+  assert.match(r.detail, /jo@example\.com/);
+  assert.match(r.detail, /The bot never adds or texts them/);
+  assert.deepEqual(r.ops, []);
+});

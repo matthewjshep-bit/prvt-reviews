@@ -62,7 +62,7 @@ import { OUTREACH_NUDGE_WINDOW_DAYS } from "./shared/follow-up.js";
 // shared/voice.js's reader returns { text, at, channel } for the voice check; this file's own
 // ourLastTexts (below, the cold ladder's) returns plain text, so the voice one goes by voicePrior.
 import { voiceFlags, hardVoiceKeys, voiceLine, ourLastTexts as voicePrior, VOICE_LINE_RX, EVENT_KINDS as TIME_SET_KINDS } from "./shared/voice.js";
-import { buyerReplyFlags, dealRowFor, offersPackage, SITUATION_FLAG_RX, BUYER_HUMAN_ACTIVE_MIN, BUYER_HAND_LINK_MIN, handSentLink } from "./shared/buyer-reply.js";
+import { buyerReplyFlags, dealRowFor, offersPackage, SITUATION_FLAG_RX, BUYER_HUMAN_ACTIVE_MIN, BUYER_HAND_LINK_MIN, handSentLink, buyerReferral } from "./shared/buyer-reply.js";
 import { BOOKING_RETIRED, CALL_ASK_RETIRED, callWordsFlags, CALL_WORDS_FLAG_RX, callWanted, CALL_WANTED_EVENT } from "./shared/call-words.js";
 import { checkInPack, routeCheckIn, routesCheckIn, normalizeCheckInRoute, asksIfBot, onlyAsksIfBot, botAskFlags, BOT_ASK_REASON, goesBySaid, goesByOf,
   strictNoHouse, checkInFlags, namesBookHouse, namesAHouse, composeRoute, composes, checkInStamp, openingIndex, nothingToSay, normalizeCheckInComposer, spentHookKeys } from "./shared/check-in.js";
@@ -5997,6 +5997,21 @@ async function runReply(job, ctx) {
         address: draft.propertyAddress || "", source: "conversation", ref: job.id,
         dedupeKey: `${CALL_WANTED_EVENT}:${job.contactId}:${day}:${String(wanted.when || "").toLowerCase()}`,
         data: { intent: wanted.intent, wants: wanted.wants, ...(wanted.when ? { when: wanted.when } : {}), ...(wanted.callNow ? { callNow: true } : {}), ...(job.call?.missed ? { voicemail: true } : {}) } }).catch(() => {});
+    }
+  }
+
+  // A buyer naming a partner who should get our deals (the 2026-11-23 buyer
+  // audit, dispo-13): a row for Matt to add them (shared/call-list.js). The
+  // bot never creates the contact or texts them; the reply can't promise to
+  // (shared/buyer-reply.js holds one that does). The event carries their
+  // name, relation and the email or phone they gave, never the words.
+  if (party === "investor" && !isCall) {
+    const named = buyerReferral(job.originalMessage || job.message);
+    if (named) {
+      await recordEvent({ store, locationId, contactId: job.contactId, party, type: "referral_mentioned", at: new Date(now).toISOString(),
+        address: "", source: "conversation", ref: job.id,
+        dedupeKey: `referral_mentioned:${job.contactId}:${referralKey(named)}`,
+        data: { ...named, buyer: true, agentFirst: String(a.contactName || "").trim().split(/\s+/)[0].slice(0, 30) } }).catch(() => {});
     }
   }
 

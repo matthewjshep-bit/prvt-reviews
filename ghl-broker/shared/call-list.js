@@ -721,6 +721,24 @@ export function callList({
     const agent = nameOf(c, offersBy, draftsBy);
     const agentFirst = agent ? first(agent) : "the agent";
     const brokerage = String(d.brokerage || "").trim();
+    // A buyer's partner who should get our deals (the 2026-11-23 buyer
+    // audit, dispo-13): Matt adds them to the buyer list; nothing else does.
+    if (d.buyer === true || e.party === "investor") {
+      const reach = [d.email, d.phone].map((x) => String(x || "").trim()).filter(Boolean).join(", ");
+      out.push({
+        id: `referral:${c}:${String(d.name || d.relation || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40)}`,
+        kind: "referral", section: "decide", group: "yours", severity: "now",
+        contactId: c, contactName: agent, offerId: null, address: "", draftId: null, score: 0, since: e.at,
+        title: `Add to the buyer list: ${(() => {
+          const whose = `${agent ? agentFirst : "a buyer"}'s ${String(d.relation || "partner")}`;
+          return String(d.name || "").trim() ? `${String(d.name).trim()} (${whose})` : whose;
+        })()}`,
+        detail: `${reach ? `${reach}. ` : ""}They want our deals to reach them too. Add them yourself${agent ? `, tagged as ${agentFirst}'s` : ""}. The bot never adds or texts them.`,
+        referral: { name: String(d.name || ""), brokerage: "", relation: String(d.relation || ""), phone: String(d.phone || ""), email: String(d.email || "") },
+        ops: [],
+      });
+      continue;
+    }
     out.push({
       id: `referral:${c}:${String(d.name || d.relation || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40)}`,
       kind: "referral", section: "decide", group: "yours", severity: "now",

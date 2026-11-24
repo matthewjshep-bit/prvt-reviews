@@ -6,6 +6,7 @@ import {
   offersPackage, undeliverablePromise, statusLine, repeatsStatus, saysTextOnly, factsAsked, factOnFile, walkAsk,
   buyerReplyFlags, dealRowFor, SITUATION_FLAG_RX,
 } from "./buyer-reply.js";
+import * as BR from "./buyer-reply.js";
 
 const NOW = Date.parse("2026-11-20T18:00:00Z");
 const DEAL = {
@@ -101,4 +102,12 @@ test("the deal a reply is about is the house it names, else the only one they're
   assert.equal(dealRowFor({ linked: [DEAL, other] }, "88 Sample St").address, other.address);
   assert.equal(dealRowFor({ linked: [DEAL, other] }, ""), null);
   assert.equal(dealRowFor({ linked: [DEAL] }, "").address, DEAL.address);
+});
+
+test("a buyer who names a partner or their acquisitions person to get deals is read, with their email", () => {
+  const { buyerReferral } = BR;
+  assert.deepEqual(buyerReferral("Send it to my partner Jo too, jo@example.com"), { name: "Jo", relation: "partner", email: "jo@example.com", phone: "" });
+  assert.equal(buyerReferral("Can you add my acquisitions manager to the list? 555-555-0101").relation, "acquisitions manager");
+  assert.equal(buyerReferral("My wife and I are looking at it this weekend"), null, "no ask to send them anything");
+  assert.equal(buyerReferral("I'll run it by my partner"), null, "checking with a partner is not adding one");
 });
