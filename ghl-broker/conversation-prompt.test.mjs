@@ -929,3 +929,18 @@ test("a builder in front of a lot is told it's a lot: envelope, zoning, what it 
   assert.match(sys, /VERIFY THEY BUILD/);
   assert.doesNotMatch(buildSystemPrompt({ config: null, party: "investor", channel: "sms" }), /THIS DEAL IS A LOT/);
 });
+
+// What went wrong (the 2026-11-23 buyer audit): the bot told a buyer who
+// gave an email that "these go out by text", answered a plain question
+// about the house with the package link, promised "pulling the package
+// together now" and "I'll check with the park", and told a buyer asking
+// when they could see it that it would line it up with the agent.
+test("a buyer gets the answer to their question first, the link with the reply, and no promise of anything else", () => {
+  const sys = buildSystemPrompt({ config: null, party: "investor", channel: "sms" });
+  assert.match(sys, /ANSWER WHAT THEY ASKED FIRST/);
+  assert.match(sys, /THE PACKAGE: the link goes with your reply/);
+  assert.match(sys, /never say deals only go out by text/);
+  assert.match(sys, /a person adds them/);
+  const agent = buildSystemPrompt({ config: null, party: "agent", channel: "sms" });
+  assert.doesNotMatch(agent, /ANSWER WHAT THEY ASKED FIRST/, "agents ask about their own listings");
+});

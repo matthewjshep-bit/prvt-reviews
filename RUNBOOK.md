@@ -10118,6 +10118,57 @@ A sweep of the six live deals that day found 12 replies like that.
 - **Never moved:** a committed or soft-committed buyer.
 - Being on a deal as evaluating does not quiet the bot. Only a committed buyer holds it (`WORKING_INVESTOR_STATUSES`).
 
+### Buyers get answers, not promises (2026-11-23)
+
+**Why.** The 2026-11-23 buyer audit: every walkthrough and assignment came
+from fast, concrete follow-through, and the bot lost buyers on promises and
+wrong answers. "Pulling the package together now" went 23 hours before the
+link did, on a deal that had a package. "Still waiting on the park" went three
+times in two days. A buyer asking a plain question got the package link. A
+buyer who gave an email was told "these go out by text". "Pulling those
+photos together now" went 55 minutes after Matt sent the photo link himself.
+
+**The reply's checks** (`shared/buyer-reply.js`, read in `evaluateReplyGates`
+for investor replies). Each one only holds:
+
+| Check | Holds a reply when |
+| --- | --- |
+| A promise the app can't keep | it promises a comp breakdown, a bid or an estimate, an answer from the agent, the seller, a park or anyone else, a "let me find out", or to text or add their partner |
+| The package with none built | it offers the photos, the package, the comps or the scope on a deal with no active dataroom |
+| The package Matt just sent | it offers them again within two hours of photos or a link Matt sent by hand |
+| A second "still waiting" | it says we're still waiting on something and a text of ours said one in the last 14 days |
+| "Deals go out by text" | it says deals only go by text, or not by email (deals by email has been live since 2026-10-15) |
+| A question the record can't answer | they asked the address, beds and baths, the size, the lot, the year, the basement, the alley, parking, sewer, zoning or whether it's vacant, and the deal row doesn't have it |
+| A walk ask with nothing on file | they asked when or how they can see it, and the deal has no upcoming window and no access method |
+
+The last two aren't rewritten (`SITUATION_FLAG_RX`): no rewrite fixes what
+isn't on file, so no second model call is paid for.
+
+**The link goes with the reply.** A reply that offers the package on a deal
+that has a room gets `send_dataroom_invite` beside it: by itself when the
+reply sends itself and they're already on the deal, otherwise as an ask for
+your Send. Never when Matt sent photos or a link in the last two hours, and
+never a second link on the deal inside a day.
+
+**What the bot is shown.** Each deal line now carries its size ("size: 3bd
+2ba 1,440 sqft, built 1952, 5,000 sqft lot") from the underwrite's subject
+record. The investor prompt says: answer what they asked first, in the deal's
+own lines, and set needsHuman when the lines don't say; the link goes with
+the reply, so never "pulling it together"; never promise anything else for
+later; deals go by text and email; a partner they name is added by a person.
+The no-window and no-access lines now say to set needsHuman instead of "I'll
+line it up with the agent". Note: a figure the record has but the deal book
+doesn't (1,440 sqft) still trips the invented-number check and waits for you;
+that check wasn't loosened.
+
+**Matt in a buyer thread.** The bot stands aside for an hour
+(`BUYER_HUMAN_ACTIVE_MIN`) after any text or call of Matt's to a buyer, not
+only when his was the last text of ours (`handLines` reads every line of ours
+in the window; a sent draft, the offer text or a GHL template isn't his). The
+stand-aside for agents is unchanged.
+
+No switch: all of it only holds or attaches a link the reply already offered.
+
 ### Rural: two acres or more (2026-10-08)
 
 Matt: "filter out rural properties when we reach out to agents, these are harder to comp and thus investors won't want them. We need to do under 2 acres of land, and make sure we're telling agents that if the property is rural we can't do it and mark as we passed."
