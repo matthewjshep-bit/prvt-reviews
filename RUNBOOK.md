@@ -6327,6 +6327,15 @@ reply-agent.js (`WALK_AWAY_GAP`, `listPriceFloor`):
   `unsentCounter`, nothing is marked countered, and after the usual day's
   wait the card is a Needs Matt price: "They named 755K on <street>, over our
   300K that never went out: float ours or pass".
+- **Only on a final no (2026-11-23 audit, neg-3).** A plain number between
+  10% and 25% over the most we'd pay ("seller says 420k is where they'd like
+  to be") no longer draws the goodbye: it stays a counter (`draft.notFinal`),
+  so the counter hold texts our number back once, or it waits for you. The
+  goodbye needs their final word (`floorFirmness` "firm", or `saysFinal`:
+  lowest, bottom line, final number, best they can do, won't budge, not
+  coming down), a number past `WALK_AWAY_GAP` or the list price (Matt's
+  09-16 rule above), or a counter after we already came back. Neither
+  `COUNTER_MARGIN` nor `counterHold` changed.
 - **A figure that isn't theirs (2026-11-09 audit).** `notTheirNumber`
   (shared/flip-read.js) marks a figure after "last/other/another offer",
   "offers in the 400s", "owe(s)", "payoff", "appraised", "assessed", "tax
