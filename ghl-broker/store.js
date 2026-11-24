@@ -39,6 +39,42 @@ export function draftLedgerRow(d = {}) {
   };
 }
 
+// listReplyDraftActivity, both backends: the Offers table's read (GET
+// /api/offers?activity=1&next=1, ghl-broker/offers-list.js). Exactly the
+// fields its consumers touch — mergeDraftActivity and floatSentIndex
+// (shared/last-activity.js, shared/paper-follows.js), and nextFollowUp's
+// threadTimes, nudgeTimes and threadHealth (shared/follow-up.js,
+// shared/thread-health.js). `inbound` stays whole: threadHealth reads its
+// words (pending/sold, annoyed), and it is a text, not the ~10KB of prompt
+// context a whole draft carries. Every value comes off the doc, as the whole
+// draft would give it. Change draftActivityQuery and this together.
+export const DRAFT_ACTIVITY_FIELDS = ["id", "locationId", "contactId", "status", "createdAt", "updatedAt", "sendAt", "sentAt", "autoSent", "intent", "answeredBy", "inbound"];
+export const DRAFT_ACTIVITY_OUTBOUND = ["kind", "offerId"];
+export function draftActivityRow(d = {}) {
+  const keep = (o, keys) => Object.fromEntries(keys.filter((k) => o?.[k] !== undefined && o[k] !== null).map((k) => [k, o[k]]));
+  return {
+    ...keep(d, DRAFT_ACTIVITY_FIELDS),
+    ...(d.outbound && typeof d.outbound === "object" && !Array.isArray(d.outbound) ? { outbound: keep(d.outbound, DRAFT_ACTIVITY_OUTBOUND) } : {}),
+  };
+}
+export function draftActivityQuery({ locationId, since = null, limit = 4000 }) {
+  const params = [locationId];
+  let where = "";
+  if (since) { params.push(since); where += ` and created_at >= $${params.length}`; }
+  params.push(Math.max(1, Math.round(Number(limit) || 0)));
+  const field = (k) => `'${k}', doc->'${k}'`;
+  const out = (k) => `'${k}', doc #> '{outbound,${k}}'`;
+  return {
+    text: `select jsonb_strip_nulls(jsonb_build_object(
+         ${DRAFT_ACTIVITY_FIELDS.map(field).join(", ")},
+         'outbound', case when jsonb_typeof(doc->'outbound') = 'object' then jsonb_build_object(${DRAFT_ACTIVITY_OUTBOUND.map(out).join(", ")}) end
+       )) as doc
+       from reply_drafts where location_id = $1${where}
+       order by created_at desc limit $${params.length}`,
+    params,
+  };
+}
+
 // listSentDraftsBetween, both backends: the delivery check's read
 // (delivery-watch.js). Sent drafts with a GHL message id, sent in
 // [fromIso, toIso), not yet given a delivery verdict, oldest first. sentAt is
@@ -706,6 +742,13 @@ const pgStore = {
        order by created_at desc limit $${params.length}`,
       params
     );
+    return rows.map((r) => r.doc);
+  },
+  // The Offers table's draft read, trimmed in SQL (draftActivityRow is the
+  // file backend's twin). Newest first, by creation.
+  async listReplyDraftActivity(locationId, { since = null, limit = 4000 } = {}) {
+    const { text, params } = draftActivityQuery({ locationId, since, limit });
+    const { rows } = await query(text, params);
     return rows.map((r) => r.doc);
   },
   // The delivery check's read (sentDraftsBetweenQuery).
@@ -2257,6 +2300,15 @@ const fileStore = (() => {
         .slice(0, limit)
         .map(draftLedgerRow);
     },
+    async listReplyDraftActivity(locationId, { since = null, limit = 4000 } = {}) {
+      ensure();
+      return Object.values(data.replyDrafts)
+        .filter((d) => d.locationId === locationId)
+        .filter((d) => !since || (d.createdAt || "") >= since)
+        .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
+        .slice(0, Math.max(1, Math.round(Number(limit) || 0)))
+        .map(draftActivityRow);
+    },
     async listSentDraftsBetween(locationId, fromIso, toIso, { limit = 100 } = {}) {
       ensure();
       return Object.values(data.replyDrafts)
@@ -3211,5 +3263,23 @@ const fileStore = (() => {
  * Chosen backend
  * ============================================================= */
 
-export const store = dbEnabled ? pgStore : fileStore;
+// Every write to an offer row, in either backend, moves this number on. A
+// cache of something read off the offers (the Offers table's whole response,
+// ghl-broker/offers-list.js) is good only while it hasn't moved. Counted
+// after the write settles, so a read that began before it is already stale.
+export const OFFER_WRITE_METHODS = ["createOffer", "updateOffer", "deleteOffer"];
+let offerWrites = 0;
+export const offerWriteGeneration = () => offerWrites;
+function countOfferWrites(backend) {
+  for (const name of OFFER_WRITE_METHODS) {
+    const write = backend[name];
+    if (typeof write !== "function") continue;
+    backend[name] = async function countedOfferWrite(...args) {
+      try { return await write.apply(this, args); } finally { offerWrites++; }
+    };
+  }
+  return backend;
+}
+
+export const store = countOfferWrites(dbEnabled ? pgStore : fileStore);
 export { dbEnabled };
