@@ -44,13 +44,14 @@ import OfferDetailModal from "./OfferDetailModal.jsx";
 import UnderwriteStrip from "./UnderwriteStrip.jsx";
 import OfferRail from "./OfferRail.jsx";
 import OfferPane from "./OfferPane.jsx";
-import { railStep, readOfferParam, splitKey, writeOfferParam } from "./offers-split.js";
+import { railStep, readOfferParam, readTableParams, splitKey, writeOfferParam, writeTableParams } from "./offers-split.js";
+import OfferEditorSheet from "./OfferEditorSheet.jsx";
 import { runPaneKey } from "./PaneParts.jsx";
 import { offerKey, siblingsKey } from "./OfferPanel.jsx";
 import { forget, forgetPrefix } from "./work-data.js";
 import { onOfferChanged } from "./offer-sync.js";
 import NextFollowUp, { groupNext, nextSortKey } from "./NextFollowUp.jsx";
-import { TABS, SUBS, OTHER, viewFor, defaultTab, tabOf, notSentAge, waitingSince } from "./offer-tabs.js";
+import { TABS, SUBS, OTHER, ALL_VIEWS, viewFor, defaultTab, tabOf, notSentAge, waitingSince } from "./offer-tabs.js";
 import PipelineStrip from "./PipelineStrip.jsx";
 import { attachNeeds, needsCounts } from "./needs-view.js";
 import {
@@ -147,7 +148,11 @@ function byHouse(list) {
 // `needs`: GHL's Needs Matt list (OfferApp reads it once; needs-view.js) —
 // each matched row carries its reason, `onNeedsCount` hears how many agents
 // on it have a row here, and `focusNeeds` asks once for the Needs you filter.
-export default function OffersHistory({ onEdit, onNew = null, onDeal, settings: appSettings = null, only = null,
+// The table's slice survives a reload or Back (?tab=, ?q=; offers-split.js).
+const VIEW_KEYS = new Set(ALL_VIEWS.map((v) => v.key));
+const urlSlice = () => (typeof window !== "undefined" ? readTableParams(window.location.search, VIEW_KEYS) : { tab: null, q: "" });
+
+export default function OffersHistory({ onNew = null, onDeal, settings: appSettings = null, only = null,
   needs = [], onNeedsCount = null, focusNeeds = false, onNeedsFocused = null }) {
   const [offers, setOffers] = useState(null);
   // The split: the offer open beside the rail, and the rail's rows — the
@@ -170,10 +175,15 @@ export default function OffersHistory({ onEdit, onNew = null, onDeal, settings: 
   const [enriching, setEnriching] = useState(null); // { contactId, contactName } in EnrichModal
   const [offerPaging, setOfferPaging] = useState(null); // offer open in OfferPageModal
   const [settings, setSettings] = useState(null); // fetched lazily for contract prefills
-  const [q, setQ] = useState("");
+  const [q, setQ] = useState(() => urlSlice().q);
   // null until you pick one: the page opens on Hot, or Draft when nothing
-  // is hot (defaultTab), decided once the book is here.
-  const [filter, setFilter] = useState(null);
+  // is hot (defaultTab), decided once the book is here. A tab in the URL
+  // (?tab=) wins: a reload or Back keeps the slice Matt was on.
+  const [filter, setFilter] = useState(() => urlSlice().tab);
+  // The full offer, opened over the table rather than in place of it
+  // (2026-11-23 audit, edit-leaves-the-table): the tab, search, sort and
+  // unfolded agents stay as they were. Same sheet as the split's Edit offer.
+  const [sheet, setSheet] = useState(null); // { offer } | null
   const [sort, toggleSort] = useSort({ key: "date", dir: "desc" }); // newest first, as the API returns them
   const [queueIds, setQueueIds] = useState(null); // the rows the popout's arrows walk, frozen at open
   const [expanded, setExpanded] = useState(() => new Set()); // group keys open
@@ -213,6 +223,8 @@ export default function OffersHistory({ onEdit, onNew = null, onDeal, settings: 
     ? needsCounts(attachNeeds(annotateCurrent(typeof only === "function" ? offers.filter(only) : offers), needs))
     : { offers: 0, deals: 0 }), [offers, needs, only]);
   useEffect(() => { onNeedsCount?.(needCounts); }, [needCounts.offers, needCounts.deals]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => { writeTableParams({ tab: filter, q }); }, [filter, q]);
 
   // The selection describes the CURRENT view — narrowing it must never leave
   // hidden rows in the batch, or "mark 12 passed" quietly touches rows you
@@ -337,7 +349,7 @@ export default function OffersHistory({ onEdit, onNew = null, onDeal, settings: 
     setOpening(null);
   }
   const openDetail = (o) => openWith(o, setSelected);
-  const openEdit = (o) => openWith(o, (full) => onEdit?.(full));
+  const openEdit = (o) => openWith(o, (full) => setSheet({ offer: full }));
 
   async function remove(o) {
     const msg = o.deal
@@ -593,7 +605,7 @@ export default function OffersHistory({ onEdit, onNew = null, onDeal, settings: 
   splitNav.current = openOffer ? {
     go: (dir) => goTo(neighbor(dir)),
     close: closeSplit,
-    blocked: Boolean(selected || sending || psaing || contracting || assigning || netSheeting || enriching || offerPaging),
+    blocked: Boolean(selected || sending || psaing || contracting || assigning || netSheeting || enriching || offerPaging || sheet),
   } : null;
   // Arrowing to another agent's offer opens their group underneath, so closing
   // the popout leaves you looking at the row you stopped on.
@@ -621,7 +633,7 @@ export default function OffersHistory({ onEdit, onNew = null, onDeal, settings: 
             queueLabel={activeFilter.key === "all" ? "" : activeFilter.label}
             onSelect={stepTo}
             onClose={closeDetail}
-            onEdit={(o) => { closeDetail(); onEdit?.(o); }}
+            onEdit={(o) => { closeDetail(); setSheet({ offer: o }); }}
             onSend={(o) => setSending(o)}
             onPsa={openPsa}
             onContract={openContract}
@@ -647,6 +659,16 @@ export default function OffersHistory({ onEdit, onNew = null, onDeal, settings: 
         onClose={() => setAssigning(null)} onGenerated={patchOffer} />}
       {netSheeting && <NetSheetModal offer={netSheeting} settings={settings}
         onClose={() => setNetSheeting(null)} onGenerated={patchOffer} />}
+      {sheet && (
+        <OfferEditorSheet offer={sheet.offer} settings={appSettings || settings} contactId={sheet.offer?.contactId || null}
+          // Each save lands in the agent's rows as it's typed (offer-sync.js
+          // announces it; the listener above re-reads them), so closing only
+          // has to put the table back.
+          onClose={() => setSheet(null)}
+          onSaved={() => {}}
+          onOpenOffer={(o) => setSheet({ offer: o })}
+          onDeal={() => { setSheet(null); onDeal?.(); }} />
+      )}
     </>
   );
 

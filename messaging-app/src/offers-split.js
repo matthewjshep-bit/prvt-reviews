@@ -61,3 +61,31 @@ export const writeOfferParam = (id) => {
     window.history.replaceState(window.history.state, "", `${window.location.pathname}?${p}`);
   } catch { /* the GHL iframe can refuse history calls */ }
 };
+
+/**
+ * The table's slice, kept in the URL (2026-11-23 audit, edit-leaves-the-
+ * table): `?tab=` the filter, `?q=` the search. A reload, or Back from a
+ * page under More, lands on the same slice. An unknown tab reads as none
+ * (the page's own default).
+ *
+ * readTableParams(search, validTabs) → { tab, q }
+ * tableParamsSearch(search, { tab, q }) → the search string with them set
+ */
+export function readTableParams(search = "", validTabs = null) {
+  let p;
+  try { p = new URLSearchParams(search); } catch { return { tab: null, q: "" }; }
+  const tab = p.get("tab") || null;
+  return { tab: tab && (!validTabs || validTabs.has(tab)) ? tab : null, q: (p.get("q") || "").slice(0, 200) };
+}
+export function tableParamsSearch(search = "", { tab = null, q = "" } = {}) {
+  const p = new URLSearchParams(search);
+  if (tab) p.set("tab", tab); else p.delete("tab");
+  if (q && q.trim()) p.set("q", q); else p.delete("q");
+  return `?${p}`;
+}
+export const writeTableParams = (state) => {
+  try {
+    const next = tableParamsSearch(window.location.search, state);
+    if (next !== `?${new URLSearchParams(window.location.search)}`) window.history.replaceState(window.history.state, "", `${window.location.pathname}${next}`);
+  } catch { /* the GHL iframe can refuse history calls */ }
+};

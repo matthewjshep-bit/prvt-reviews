@@ -79,3 +79,15 @@ test("the offer pane has the person, the house, Send and the way back to the tab
   expect(html).not.toContain('aria-label="Bot:');
   expect(html).toContain("The bot has nothing drafted");   // the reply box, as on Today
 });
+
+// 2026-11-23 audit: an edit unmounted the table, and the tab and search
+// started over when Matt came back.
+test("a reload keeps the tab and the search Matt was on", async () => {
+  const { readTableParams, tableParamsSearch } = await import("../offers-split.js");
+  const tabs = new Set(["draft", "sent", "needs"]);
+  const s = tableParamsSearch("?location_id=L1&view=history", { tab: "sent", q: "elm" });
+  expect(s).toBe("?location_id=L1&view=history&tab=sent&q=elm");
+  expect(readTableParams(s, tabs)).toEqual({ tab: "sent", q: "elm" });
+  expect(readTableParams("?tab=bogus", tabs)).toEqual({ tab: null, q: "" });
+  expect(tableParamsSearch(s, { tab: null, q: "" })).toBe("?location_id=L1&view=history");
+});

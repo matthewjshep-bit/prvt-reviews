@@ -351,7 +351,7 @@ export default function OfferApp() {
           />
         )}
         {view === "history" && (
-          <OffersHistory key={lane} onEdit={editOffer}
+          <OffersHistory key={lane}
             onNew={(contactId) => { setEditing(null); setInitialContactId(contactId); setFormNonce((n) => n + 1); go({ view: "new" }); }}
             onDeal={() => go({ view: "deals" })} settings={settings} only={only}
             needs={lane === "agents" ? needs : []}
