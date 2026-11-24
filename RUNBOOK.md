@@ -405,7 +405,19 @@ big and old enough (`pocketFor` in `shared/lot-finder.js`; `luxuryLaneFor` in
   never passed, never a read asked of the agent;
 - any save of an offer on such a house (the editor, a re-quote) stamps
   `asset.lane = "luxury"` whoever made it, so the Luxury page's Offers and
-  Deals list every one and the lot analyzer opens it.
+  Deals list every one and the lot analyzer opens it. The editor reads the
+  lane off the row whoever stamped it (a held draft is stamped by
+  `underwrite`), so a held lot opens in the lot analyzer, not on comps; comps
+  only once the lane is turned off on it (2026-11-24). A held lot's draft also
+  saves `model: "lot"`, the luxury pick and a lot deal with the lot's size,
+  year built and house size (`lotDealFromSubject`); comps and the number stay
+  Matt's.
+- **Prefill, for Matt only** (2026-11-24): the lot analyzer opens with the
+  lot's own facts, and offers the sold teardowns the pocket's weekly scan read
+  (kept on the `lotFinderPulls` cursor as `teardowns[pocketId]`, served by
+  `GET /api/lot-finder/teardowns?lat&lng` for the pocket around the house) as
+  **suggestions with Add**: none is counted until he adds it, and none of it
+  reaches the bot or a text.
 
 ## The lot finder — parcels → skip trace → owner texts, and the builders who buy there (2026-11-23)
 

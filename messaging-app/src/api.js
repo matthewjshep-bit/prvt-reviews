@@ -907,6 +907,8 @@ export const runGatekeeperSweep = ({ dryRun = true } = {}) => post(`/api/gatekee
 
 /* ---------- the lot finder (luxury teardown lane: parcels → skip trace → owner texts) ---------- */
 export const getLotFinder = () => fetch(`${API_BASE}/api/lot-finder?${locq()}`).then(j);
+// The pocket around a house and the sold teardowns its scan read: comps for Matt to add in the lot analyzer.
+export const getLotTeardowns = (lat, lng) => fetch(`${API_BASE}/api/lot-finder/teardowns?${locq()}&lat=${encodeURIComponent(lat)}&lng=${encodeURIComponent(lng)}`).then(j);
 // The run's state and last result only (light), polled while a run goes.
 export const getLotFinderJob = () => fetch(`${API_BASE}/api/lot-finder/job?${locq()}`).then(j);
 export const getLotOwners = ({ pocketId = "", status = "", limit = 500 } = {}) =>

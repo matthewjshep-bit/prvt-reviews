@@ -348,3 +348,28 @@ test("the lot finder's light reads answer without listing every owner", async ()
   assert.ok(Array.isArray(answered.owners), JSON.stringify(answered));
   assert.deepEqual(answered.owners.map((o) => [o.contactId, o.street]), [["c-z", "3 Cedar Ct"]]);
 });
+
+// The weekly scan's sold teardowns were computed and thrown away (2026-11-24
+// audit). They're kept per pocket, apart from the scan time, so the lot
+// analyzer can offer them to Matt as comps to add; nothing prices with them.
+test("the weekly scan keeps the pocket's sold teardowns, and the analyzer can ask for the ones around a house", async () => {
+  const g = ghl();
+  const teardowns = [
+    { address: "20 Summit Dr, Clyde Hill, WA 98004", price: 2100000, saleDate: "2026-03-10", lotSqft: 33000, sqft: 2100, yearBuilt: 1966 },
+    { address: "22 Summit Dr, Clyde Hill, WA 98004", price: 2350000, saleDate: "2026-08-02", lotSqft: 36000, sqft: 2600, yearBuilt: 1959 },
+  ];
+  const saved = { ...ON({ traceDailyCap: 0, dailyNew: 0 }), apifyToken: "apify" };
+  await runLotFinder({ client: {}, locationId: "L15", saved, store, deps: { fetch: fetchStub(PHONES), scanPocketZillow: async () => ({ suggest: {}, teardowns, newBuilds: [] }), resolveBuilderContact: async () => null, ...g.deps }, now: T0 });
+  const cur = (await store.getJobCursor("L15", `${CURSOR_NAME}Pulls`)).doc;
+  assert.equal(typeof cur.scans["clyde-hill"], "string", "the scan time stays a timestamp");
+  assert.equal(cur.teardowns["clyde-hill"].rows.length, 2);
+  const { default: createLotFinderRouter } = await import("./routes/lot-finder.js");
+  const router = createLotFinderRouter({ resolveLocation: () => ({ locationId: "L15" }), getSettings: async () => saved });
+  const layer = router.stack.find((l) => l.route?.path === "/teardowns" && l.route.methods.get);
+  const ask = async (query) => { let body = null; await layer.route.stack[0].handle({ query, body: {} }, { status() { return this; }, json(b) { body = b; return this; } }, () => {}); return body; };
+  const near = await ask({ lat: "47.635", lng: "-122.212" });
+  assert.equal(near.pocket.id, "clyde-hill");
+  assert.deepEqual(near.comps.map((c) => [c.label, c.price]), [["22 Summit Dr", 2350000], ["20 Summit Dr", 2100000]]);
+  const far = await ask({ lat: "47.1", lng: "-122.9" });
+  assert.deepEqual([far.pocket, far.comps], [null, []], "a house outside every pocket gets none");
+});

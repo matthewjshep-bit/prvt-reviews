@@ -240,6 +240,9 @@ export async function runLotFinder({ client, locationId, saved = {}, store = def
   // the parcels). Dry: nothing bought.
   const apifyToken = String(saved?.apifyToken || "").trim();
   const scans = { ...(cur.scans || {}) };
+  // The sold teardowns each scan reads, kept for the lot analyzer's suggested
+  // comps (routes/lot-finder.js GET /teardowns). `scans` stays the scan time.
+  const teardowns = { ...(cur.teardowns || {}) };
   for (const p of f.pockets) {
     const line = out.pockets.find((x) => x.id === p.id);
     if (!p.enabled || !p.lat || !p.lng || dryRun) continue;
@@ -251,6 +254,8 @@ export async function runLotFinder({ client, locationId, saved = {}, store = def
       const up = await store.upsertLotBuilders(locationId, rows);
       line.builders = rows.length; line.buildersCreated = up.created;
       scans[p.id] = iso(now);
+      teardowns[p.id] = { at: iso(now), rows: (scan.teardowns || []).slice(0, 60)
+        .map((t) => ({ address: t.address, price: t.price, saleDate: t.saleDate, lotSqft: t.lotSqft || 0, sqft: t.sqft || 0, yearBuilt: t.yearBuilt || 0 })) };
     } catch (e) { line.builders = `scan failed: ${String(e?.message || e).slice(0, 120)}`; }
   }
 
@@ -304,9 +309,9 @@ export async function runLotFinder({ client, locationId, saved = {}, store = def
         if (e?.credits) { out.traced.stopped = "out of credits"; break; }
       }
     }
-    await store.setJobCursor?.(locationId, `${CURSOR_NAME}Pulls`, { at: iso(now), doc: { ...cur, pulls, scans, traces: { day, n } } }).catch(() => {});
+    await store.setJobCursor?.(locationId, `${CURSOR_NAME}Pulls`, { at: iso(now), doc: { ...cur, pulls, scans, teardowns, traces: { day, n } } }).catch(() => {});
   }
-  if (!dryRun && out.traced.looked === 0) await store.setJobCursor?.(locationId, `${CURSOR_NAME}Pulls`, { at: iso(now), doc: { ...cur, pulls, scans } }).catch(() => {});
+  if (!dryRun && out.traced.looked === 0) await store.setJobCursor?.(locationId, `${CURSOR_NAME}Pulls`, { at: iso(now), doc: { ...cur, pulls, scans, teardowns } }).catch(() => {});
 
   // 3. Into GHL, the day's reachable owners. Dry unless both gates are open.
   const config = conversationConfig(saved);

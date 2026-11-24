@@ -16,13 +16,52 @@ const money = (v) => (Number.isFinite(v) ? fmtMoney(Math.round(v)) : "—");
 const CELL_INPUT = "w-full min-w-0 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm focus:border-blue-500 focus:outline-none";
 const LABEL = "mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500";
 
+const sameComp = (a, b) => String(a.label || "").trim().toLowerCase() === String(b.label || "").trim().toLowerCase() && Number(a.price) === Number(b.price);
+
+/**
+ * SuggestedTeardowns — what the pocket scan found nearby, each with Add. Not
+ * in the price until added: the comps table above is the only thing counted.
+ */
+export function SuggestedTeardowns({ suggestions, comps = [], onAdd }) {
+  const left = (suggestions?.comps || []).filter((s) => !comps.some((c) => sameComp(c, s)));
+  if (!left.length) return null;
+  const when = suggestions.scannedAt ? new Date(suggestions.scannedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "";
+  return (
+    <div className="mt-4 rounded-lg border border-dashed border-blue-200 bg-blue-50/40 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs font-semibold text-slate-700">
+          Suggested: sold teardowns the {suggestions.pocket?.name || "pocket"} scan found{when ? ` (${when})` : ""}
+          <span className="block font-normal text-slate-500">Not in the price until you add them. Check each one is a lot like this.</span>
+        </p>
+        <button type="button" onClick={() => onAdd(left)} className="flex items-center gap-1 rounded-md border border-blue-300 bg-white px-2 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-50">
+          <Plus className="h-3 w-3" /> Add all {left.length}
+        </button>
+      </div>
+      <ul className="mt-2 divide-y divide-blue-100 text-sm">
+        {left.map((c, i) => (
+          <li key={`${c.label}-${i}`} className="flex items-center gap-3 py-1">
+            <span className="min-w-0 flex-1 truncate text-slate-700">{c.label}{c.soldAt ? <span className="text-slate-400"> · sold {c.soldAt}</span> : null}</span>
+            <span className="tabular-nums text-slate-700">{money(c.price)}</span>
+            <span className="w-24 text-right tabular-nums text-slate-500">{c.lotSqft ? `${c.lotSqft.toLocaleString("en-US")} sqft` : "—"}</span>
+            <span className="w-12 text-right tabular-nums text-slate-500">{c.yearBuilt || "—"}</span>
+            <button type="button" onClick={() => onAdd([c])} className="text-xs font-semibold text-blue-700 hover:text-blue-900" aria-label={`Add ${c.label}`}>Add</button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 /**
  * LotUnderwriter — steps 3–5 of the offer editor for a luxury lot.
  *   deal / setDeal   the lot deal (shared/lot-underwrite.js)
  *   run              underwriteLot(deal with the form's asking price)
  *   asking, priceOverride, setPriceOverride, fmtTyped — as the land analyzer takes them
+ *   suggestions      { pocket, scannedAt, comps } — the sold teardowns the lot
+ *                    finder's pocket scan read (GET /api/lot-finder/teardowns).
+ *                    Offered to add; none counts until it's added.
  */
-export default function LotUnderwriter({ deal, setDeal, run, asking, priceOverride, setPriceOverride, fmtTyped }) {
+export default function LotUnderwriter({ deal, setDeal, run, asking, priceOverride, setPriceOverride, fmtTyped, suggestions = null }) {
   const patch = (p) => setDeal({ ...deal, ...p, kind: "lot" });
   const comps = deal.comps || [];
   const screens = deal.screens || {};
@@ -108,6 +147,7 @@ export default function LotUnderwriter({ deal, setDeal, run, asking, priceOverri
             </button>
           </div>
         )}
+        <SuggestedTeardowns suggestions={suggestions} comps={comps} onAdd={(add) => patch({ comps: [...comps.filter((c) => c.label || c.price), ...add].slice(0, 30) })} />
         {deal.name && /example figures/i.test(deal.name) && (
           <p className="mt-2 text-[11px] font-medium text-amber-700">{deal.name} — replace these with the real numbers before you send anything.</p>
         )}

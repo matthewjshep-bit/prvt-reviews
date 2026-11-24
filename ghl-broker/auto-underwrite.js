@@ -39,7 +39,7 @@ import { recordError } from "./app-errors.js";
 import { fetchZillowPhotos, fetchListingPhotos, fetchZillowFacts, MAX_FACT_LOOKUPS, scanRehabFromPhotos, anthropicErrorToHttp } from "./rehab-scan.js";
 import { kindHold, ruralHold } from "./shared/asset-type.js";
 import { normalizeLotFinder, pocketFor, lotHold, LOT_OWNER_TAG_PATTERNS } from "./shared/lot-finder.js";
-import { blankLotDeal, normalizeLotDeal } from "./shared/lot-underwrite.js";
+import { lotDealFromSubject } from "./shared/lot-underwrite.js";
 import { matchTagPatterns } from "./conversation-party.js";
 import { deriveArv, timeTrend, SIZE_TOLERANCE_PCT } from "./shared/arv.js";
 import { scoreComp, similarity, inPool, compareByMatch, milesBetween, markRenovatedByPrice, PRICE_PROXY_MIN_POOL } from "./shared/comp-match.js";
@@ -3074,14 +3074,7 @@ async function draftToWriteOver(job, { locationId, store }, address) {
 // pick, and a lot deal with this lot's own facts in it. No comps and no number:
 // those are Matt's (luxury-lane rules).
 function lotSnapshot({ extraction, subject, subjectSqft }) {
-  const deal = normalizeLotDeal({
-    ...blankLotDeal(),
-    name: String(extraction?.address || "").split(",")[0].trim(),
-    askingPrice: Number(extraction?.askingPrice) || 0,
-    lotSqft: Number(subject?.lotSqft) || 0,
-    yearBuilt: Number(subject?.yearBuilt) || 0,
-    houseSqft: Number(subject?.sqft) || Number(subjectSqft) || 0,
-  });
+  const deal = lotDealFromSubject(subject, { name: String(extraction?.address || "").split(",")[0].trim(), askingPrice: extraction?.askingPrice, sqft: subjectSqft });
   return { model: "lot", assetPick: { type: "sfr", land: "", lane: "luxury" }, underwrite: { model: "lot", deal } };
 }
 

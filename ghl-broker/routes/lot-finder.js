@@ -6,6 +6,7 @@
 //   GET  /api/lot-finder/answered        → owners who answered with no lot offer yet (the Luxury page)
 //   POST /api/lot-finder/owners/:key/status   { status: skipped | do_not_contact | new }
 //   POST /api/lot-finder/suggest         { address, radiusMiles? } → the pocket's numbers off Zillow
+//   GET  /api/lot-finder/teardowns       { lat, lng } → the pocket around a house and its sold teardowns (comps to add)
 //   GET  /api/lot-finder/job             → { job, last }: the light read the tab polls during a run
 //   POST /api/lot-finder/run             { dryRun, wait } → run the day now (the tab sends
 //                                        wait:false and polls GET /job until last.id is this job's)
@@ -17,7 +18,8 @@
 import express from "express";
 import { store } from "../store.js";
 import { geocodeAddress } from "../geocode.js";
-import { normalizeLotFinder, normalizePocket, OWNER_STATUSES } from "../shared/lot-finder.js";
+import { normalizeLotFinder, normalizePocket, OWNER_STATUSES, milesApart } from "../shared/lot-finder.js";
+import { teardownSuggestions } from "../shared/lot-underwrite.js";
 import { startLotFinder, getLotFinderJob, scanPocketZillow, CURSOR_NAME, OWNER_SMS_ENABLED, traceKeyOf, propertyKeyOf, ownersWhoAnswered } from "../lot-finder.js";
 
 const fail = (res, err) => res.status(err?.http || 500).json({ error: err?.message || String(err) });
@@ -71,6 +73,24 @@ export default function createLotFinderRouter({ resolveLocation, getSettings = (
       const job = getLotFinderJob(locationId);
       res.json({ last: cursor?.doc?.last || null,
         job: job ? { id: job.id, status: job.status, trigger: job.trigger, startedAt: job.startedAt, finishedAt: job.finishedAt, error: job.error } : null });
+    } catch (err) { fail(res, err); }
+  });
+
+  // The pocket around a house and the sold teardowns its last scan read, as
+  // comps for Matt to add in the lot analyzer. Suggestions only: nothing is
+  // priced with them, and none of it reaches the bot.
+  router.get("/teardowns", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const lat = Number(req.query.lat), lng = Number(req.query.lng);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng) || (!lat && !lng)) return res.json({ pocket: null, comps: [] });
+      const saved = (await getSettings(locationId)) || {};
+      const pockets = normalizeLotFinder(saved.lotFinder).pockets.filter((p) => p.lat && p.lng && milesApart({ lat, lng }, p) <= p.radiusMiles);
+      const p = pockets.sort((a, b) => milesApart({ lat, lng }, a) - milesApart({ lat, lng }, b))[0];
+      if (!p) return res.json({ pocket: null, comps: [] });
+      const cur = await store.getJobCursor(locationId, `${CURSOR_NAME}Pulls`).catch(() => null);
+      const kept = cur?.doc?.teardowns?.[p.id] || null;
+      res.json({ pocket: { id: p.id, name: p.name }, scannedAt: kept?.at || null, comps: teardownSuggestions(kept?.rows || []) });
     } catch (err) { fail(res, err); }
   });
 
