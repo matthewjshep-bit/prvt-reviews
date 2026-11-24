@@ -17,7 +17,7 @@ import PostMortemModal from "./PostMortemView.jsx";
 import {
   addDealInvestor, dealDocUrl, deleteDealDoc, getOffer, ghlContactUrl, listDealDocs, listDeals,
   removeDeal, removeDealInvestor, setDealOutreachStopped, suggestInvestors, updateDeal, updateDealInvestor,
-  uploadDealDoc, zillowUrl, dealFeedbackUrl, getBuyerFunding } from "./api.js";
+  uploadDealDoc, zillowUrl, dealFeedbackUrl, getBuyerFunding, updateDealChecklist } from "./api.js";
 import AssignmentModal from "./AssignmentModal.jsx";
 import ContactLink from "./ContactLink.jsx";
 import DataroomModal from "./DataroomModal.jsx";
@@ -37,6 +37,7 @@ import { PASS_REASONS, PASS_REASON_LABEL } from "@shared/conversation-ai.js";
 import { updateDealFeedback } from "./api.js";
 import { resolveParties } from "@shared/deal-parties.js";
 import { buyerMoneyLine } from "@shared/buybox.js";
+import { dispoPulse, bestWords, moneyLine, inspectionCall } from "@shared/deal-pulse.js";
 import {
   BTN, DEAL_STAGES, EmptyState, ErrorBar, KpiRow, STAGE, SkeletonRows, StagePill, TableCard,
   rowActivation,
@@ -45,7 +46,7 @@ import {
 // Stage vocabulary and the pill live in ui.jsx so History can render a stage
 // without importing from a sibling view. Re-exported here for the modules that
 // already reach for them through DealsView.
-export { DEAL_STAGES, STAGE, StagePill, DealModal, InvestorSummary };
+export { DEAL_STAGES, STAGE, StagePill, DealModal, InvestorSummary, DispoCell, MoneyCell, InspectionCallStrip };
 const TERMINAL = new Set(["closed", "fell_through"]);
 
 const STATUS_DOT = {
@@ -194,6 +195,90 @@ function InvestorSummary({ deal }) {
       <span className={`h-1.5 w-1.5 rounded-full ${committed ? STATUS_DOT.committed : soft ? STATUS_DOT.soft_commit : STATUS_DOT.evaluating}`} />
       {committed ? "buyer committed" : soft ? "soft commit — outreach paused" : `${live} of ${inv.length} live`}
     </span>
+  );
+}
+
+// How the dispo is going, on the list (2026-11-23): buyers it went to, who is
+// on it, interested, passed and walking it, the best number a buyer put on
+// it, and how long since a buyer moved. Only what the row already carries,
+// plus the broker's count of buyers it actually reached (deal.sends); never a
+// feedback rebuild from the list.
+function DispoCell({ deal, now = Date.now() }) {
+  const p = dispoPulse(deal, { now });
+  const over = TERMINAL.has(deal.stage);
+  // The pill only when it says something the counts don't: stopped by you, or
+  // a buyer committed or soft-committed (that is why nothing new goes out).
+  const pill = dealOutreachStopped(deal) || p.committed || p.softCommit;
+  const sentTitle = p.sent == null
+    ? "How many buyers it went to isn't known right now"
+    : `${p.sent} buyer${p.sent === 1 ? "" : "s"} got this deal, by the app or by hand${p.sentAt ? ` (last ${shortDate(p.sentAt)})` : ""}. A blast you stopped doesn't count.`;
+  return (
+    <div className="min-w-0 space-y-0.5">
+      {pill ? <div><InvestorSummary deal={deal} /></div> : null}
+      <div className="text-xs tabular-nums text-slate-700" title={sentTitle}>
+        {p.parts.map((part, i) => (
+          <React.Fragment key={part}>
+            {i > 0 && <span className="text-slate-300"> · </span>}
+            {part.startsWith("best ") && p.best
+              ? <span className="font-semibold text-emerald-800" title={bestWords(p.best)}>{part}</span>
+              : <span>{part}</span>}
+          </React.Fragment>
+        ))}
+      </div>
+      {!over && (
+        <div className={`text-[11px] ${p.stalled ? "font-medium text-amber-800" : "text-slate-500"}`}
+          title="A buyer added to the deal, a buyer's standing changed, or a walkthrough answer">
+          {p.lastBuyerDays == null ? "no buyer on it yet" : `last buyer move ${p.lastBuyerDays === 0 ? "today" : `${p.lastBuyerDays}d ago`}`}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Contract → what the buyer pays · our fee, in one cell, measured against the
+// buyer ceiling recorded at promote: amber over it, green with room.
+function MoneyCell({ deal }) {
+  const m = moneyLine(deal);
+  if (!m) return <span className="text-slate-400">—</span>;
+  const overCls = m.over > 0 ? "text-amber-800" : m.over === 0 ? "text-emerald-800" : "text-slate-800";
+  return (
+    <div className="min-w-0 tabular-nums" title={m.ceiling ? `Buyer ceiling at contract: ${fmtMoney(m.ceiling)}` : "No buyer ceiling recorded at contract"}>
+      <div className={`text-sm font-semibold ${overCls}`}>{m.line}</div>
+      {m.over > 0 && <div className="text-[11px] text-amber-800">{fmtMoney(m.over)} over the buyer ceiling</div>}
+      {m.over === 0 && <div className="text-[11px] text-emerald-800">at or under the buyer ceiling</div>}
+    </div>
+  );
+}
+
+// The go / re-trade / cancel call before the inspection ends (2026-11-23,
+// display only): the date, and what buyers have said so far. Its buttons only
+// move you to where each answer is made; nothing here sends anything.
+function InspectionCallStrip({ deal, compact = false, onFeedback, onDates, onFellThrough, onGo, busy = false, now = Date.now() }) {
+  const c = inspectionCall(deal, { now });
+  if (!c) return null;
+  if (compact) {
+    return (
+      <span title={[c.headline, ...c.lines].join("\n")}
+        className={`mt-0.5 inline-block rounded-full px-1.5 py-0.5 text-[11px] font-semibold ${c.tone === "soon" ? "bg-amber-100 text-amber-900" : "bg-rose-100 text-rose-800"}`}>
+        go / re-trade / cancel
+      </span>
+    );
+  }
+  const tone = c.tone === "soon" ? "border-amber-300 bg-amber-50 text-amber-950" : "border-rose-300 bg-rose-50 text-rose-950";
+  const btn = "rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold hover:bg-white/70 disabled:opacity-60";
+  return (
+    <div role="status" className={`mb-4 rounded-lg border px-3 py-2 ${tone}`}>
+      <div className="text-sm font-semibold">{c.headline}</div>
+      <ul className="mt-1 space-y-0.5 text-xs">
+        {c.lines.map((l) => <li key={l}>{l}</li>)}
+      </ul>
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {onGo && <button type="button" className={btn} disabled={busy} onClick={onGo} title="Tick the inspection item: we're going ahead">Go: inspection done</button>}
+        {onFeedback && <a className={btn} href={onFeedback} target="_blank" rel="noreferrer" title="What every buyer said, as a page for the listing agent: the re-trade case">Buyer feedback page</a>}
+        {onDates && <button type="button" className={btn} onClick={onDates} title="Extended? Change the inspection date on Terms & paperwork">Change the date</button>}
+        {onFellThrough && <button type="button" className={btn} disabled={busy} onClick={onFellThrough}>Cancel: fell through</button>}
+      </div>
+    </div>
   );
 }
 
@@ -701,6 +786,11 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
         {!stopped && resumedNote && (
           <p role="status" className="mb-4 rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-900">{resumedNote}</p>
         )}
+        <InspectionCallStrip deal={deal} busy={busy}
+          onFeedback={dealFeedbackUrl(offer.id)}
+          onDates={() => pickTab("paper")}
+          onFellThrough={() => setStage("fell_through")}
+          onGo={() => run(() => updateDealChecklist(offer.id, { id: "inspection", done: true }))} />
 
         {/* Stage */}
         <div className="mb-4">
@@ -1069,6 +1159,27 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
   );
 }
 
+const isSfr = (o) => normalizeAsset(o.asset)?.type === "sfr";
+const withSends = (updated, old) =>
+  (updated?.deal && !updated.deal.sends && old?.deal?.sends ? { ...updated, deal: { ...updated.deal, sends: old.deal.sends } } : updated);
+
+/**
+ * dealsBook(deals, { only, showTerminal, sfrOnly }) → { book, active, closed, fell, potentialFees, shown }
+ *
+ * The lane (`only`) narrows the book once, before anything is counted, so the
+ * tiles on Luxury → Deals count luxury deals and the Offers page's count flip
+ * deals (2026-11-23; they used to count every deal whatever the lane).
+ */
+export function dealsBook(deals = [], { only = null, showTerminal = false, sfrOnly = false } = {}) {
+  const book = typeof only === "function" ? deals.filter(only) : deals;
+  const active = book.filter((o) => !TERMINAL.has(o.deal.stage));
+  const closed = book.filter((o) => o.deal.stage === "closed");
+  const fell = book.filter((o) => o.deal.stage === "fell_through");
+  const potentialFees = active.reduce((s, o) => s + (Number(o.deal.assignmentFee) || 0), 0);
+  const shown = (showTerminal ? book : active).filter((o) => !sfrOnly || isSfr(o));
+  return { book, active, closed, fell, potentialFees, shown };
+}
+
 // `only`: a predicate that narrows the deals to one lane (the Luxury page).
 export default function DealsView({ settings, onEdit, only = null }) {
   const [deals, setDeals] = useState(null);
@@ -1088,8 +1199,10 @@ export default function DealsView({ settings, onEdit, only = null }) {
     listDeals().then(setDeals).catch((e) => setError(e.message));
   }, []);
 
+  // A route answers with the offer as stored; the list's own count of buyers
+  // reached (deal.sends) rides along until the next load.
   const patchDeal = (updated) => {
-    setDeals((list) => (list || []).map((o) => (o.id === updated.id ? updated : o)));
+    setDeals((list) => (list || []).map((o) => (o.id === updated.id ? withSends(updated, o) : o)));
     setAssigning((o) => (o && o.id === updated.id ? updated : o));
   };
   const dropDeal = (id) => {
@@ -1106,14 +1219,9 @@ export default function DealsView({ settings, onEdit, only = null }) {
   };
 
   if (error) return <ErrorBar>{error}</ErrorBar>;
-  if (!deals) return <SkeletonRows cols={9} rows={5} />;
+  if (!deals) return <SkeletonRows cols={8} rows={5} />;
 
-  const active = deals.filter((o) => !TERMINAL.has(o.deal.stage));
-  const closed = deals.filter((o) => o.deal.stage === "closed");
-  const fell = deals.filter((o) => o.deal.stage === "fell_through");
-  const potentialFees = active.reduce((s, o) => s + (Number(o.deal.assignmentFee) || 0), 0);
-  const isSfr = (o) => normalizeAsset(o.asset)?.type === "sfr";
-  const shown = (showTerminal ? deals : active).filter((o) => (typeof only !== "function" || only(o)) && (!sfrOnly || isSfr(o)));
+  const { book, active, closed, fell, potentialFees, shown } = dealsBook(deals, { only, showTerminal, sfrOnly });
   const selected = selectedId ? deals.find((o) => o.id === selectedId) : null;
 
   const kpis = [
@@ -1143,10 +1251,8 @@ export default function DealsView({ settings, onEdit, only = null }) {
                   <th className="px-4 py-2.5">Property</th>
                   <th className="px-4 py-2.5">Agent</th>
                   <th className="px-4 py-2.5">Stage</th>
-                  <th className="px-4 py-2.5">Disposition</th>
-                  <th className="px-4 py-2.5 text-right">Contract</th>
-                  <th className="px-4 py-2.5 text-right">Fee</th>
-                  <th className="px-4 py-2.5 text-right">Assignment</th>
+                  <th className="px-4 py-2.5">Buyers</th>
+                  <th className="px-4 py-2.5" title="Contract price → what the buyer pays · our fee">Contract → buyer · fee</th>
                   <th className="px-4 py-2.5">Inspection</th>
                   <th className="px-4 py-2.5">Closing</th>
                   <th className="px-4 py-2.5">Next</th>
@@ -1158,7 +1264,6 @@ export default function DealsView({ settings, onEdit, only = null }) {
                   const d = o.deal;
                   const closing = dateInfo(d.closingDate);
                   const inspection = dateInfo(d.inspectionDate);
-                  const assignment = assignmentTotal(d.contractPrice, d.assignmentFee);
                   const cl = TERMINAL.has(d.stage) ? null : resolveChecklist(d);
                   const clDone = cl ? cl.items.filter((i) => i.done).length : 0;
                   return (
@@ -1177,16 +1282,8 @@ export default function DealsView({ settings, onEdit, only = null }) {
                         ) : (o.contactName || "—")}
                       </td>
                       <td className="whitespace-nowrap px-4 py-2.5"><StagePill stage={d.stage} /></td>
-                      <td className="whitespace-nowrap px-4 py-2.5"><InvestorSummary deal={d} /></td>
-                      <td className="whitespace-nowrap px-4 py-2.5 text-right font-semibold tabular-nums">
-                        {d.contractPrice ? fmtMoney(d.contractPrice) : "—"}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-2.5 text-right font-semibold tabular-nums text-emerald-700">
-                        {d.assignmentFee ? fmtMoney(d.assignmentFee) : "—"}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-2.5 text-right font-semibold tabular-nums">
-                        {assignment ? fmtMoney(assignment) : "—"}
-                      </td>
+                      <td className="min-w-[14rem] max-w-[22rem] px-4 py-2.5"><DispoCell deal={d} /></td>
+                      <td className="whitespace-nowrap px-4 py-2.5"><MoneyCell deal={d} /></td>
                       <td className="whitespace-nowrap px-4 py-2.5">
                         {inspection ? (
                           <span className={inspection.days < 0 ? "text-slate-400" : ""}>
@@ -1194,6 +1291,7 @@ export default function DealsView({ settings, onEdit, only = null }) {
                             <span className="ml-1 text-xs text-slate-400">{TERMINAL.has(d.stage) ? "" : inspectionSub(inspection.days)}</span>
                           </span>
                         ) : <span className="text-slate-400">—</span>}
+                        {!TERMINAL.has(d.stage) && <div><InspectionCallStrip deal={d} compact /></div>}
                       </td>
                       <td className="whitespace-nowrap px-4 py-2.5">
                         {closing ? (
@@ -1235,10 +1333,10 @@ export default function DealsView({ settings, onEdit, only = null }) {
               {showTerminal ? "Hide" : "Show"} closed & fell-through ({closed.length + fell.length})
             </button>
           )}
-          {deals.some((o) => !isSfr(o)) && (
+          {book.some((o) => !isSfr(o)) && (
             <button type="button" onClick={() => setSfrOnly((v) => !v)} aria-pressed={sfrOnly}
               className="ml-4 mt-2 text-xs font-medium text-slate-500 underline decoration-slate-300 underline-offset-2 hover:text-slate-900">
-              {sfrOnly ? "Show every kind of house" : `Single family only (${(showTerminal ? deals : active).filter(isSfr).length})`}
+              {sfrOnly ? "Show every kind of house" : `Single family only (${(showTerminal ? book : active).filter(isSfr).length})`}
             </button>
           )}
         </>
