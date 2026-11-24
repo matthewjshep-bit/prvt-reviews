@@ -516,13 +516,16 @@ export function lessonsContextText(digest = "") {
     d.split(/(?<=[.!?])\s+/).filter(Boolean).map((l) => `- ${l.trim()}`).join("\n");
 }
 
+// `numberByHand` (default: mattPrices) feeds only the reply gate's "no number
+// yet" check, so a lane with its own prompt (a lot owner) can be priced by hand
+// without the agent-worded MATT_PRICES_LINE landing in that prompt.
 export async function loadAgentContext({ store, locationId, contactId, custom = {}, now = Date.now(), showMath = false, transcript = "", focusKinds = undefined, highStakes = null, mattPrices = false,
-  engineMode = false }) {
+  engineMode = false, numberByHand = mattPrices }) {
   const rows = await store.listOffers(locationId, { contactId, limit: 25, lean: true }).catch(() => []);
   const { facts, events } = await loadRecord(store, locationId, contactId);
   return { ...buildAgentContext({ offers: rows, custom, now, showMath, facts, events, transcript, highStakes, mattPrices, engineMode }), pricedOutsideFocus: pricedOutsideFocus(rows, focusKinds),
     // What went out and which calls happened, for the reply gates (shared/reply-claims.js).
-    claims: claimFacts({ offers: rows, events, mattPrices, now }) };
+    claims: claimFacts({ offers: rows, events, mattPrices: numberByHand, now }) };
 }
 
 // Zillow's word for the house: the kind a person set on the offer first, then

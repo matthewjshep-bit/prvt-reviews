@@ -2715,9 +2715,12 @@ export async function assembleConversation({
     /* an opt-out needs the party and nothing else */
   } else if (party === "agent") {
     context = await loadAgentContext({ store, locationId, contactId, custom, now, showMath: Boolean(config.parties.agent?.showMath), transcript: real, focusKinds: saved?.focusKinds,
-      // An owner on a lot: no range-only float, no "a person prices it" line — the
-      // first text already named the band, and the lot offer is the number.
+      // An owner on a lot: Matt prices every luxury lot by hand (2026-11-23), so
+      // the reply gate holds a draft that names or promises a number
+      // (numberByHand). No range-only float, and the agent-worded "a person
+      // prices it" line stays out: OWNER_PLAYBOOK says it to the owner.
       highStakes: lotOwner ? null : config.parties.agent?.realmCheck?.highStakes, mattPrices: lotOwner ? false : underwriteMode(saved) !== "full",
+      numberByHand: lotOwner ? true : underwriteMode(saved) !== "full",
       engineMode: underwriteMode(saved) === "engine" });
     if (lotOwner) context = { ...context, lane: "owner" };
     // The write-up terms' earnest money is a number the bot may say.

@@ -9766,3 +9766,27 @@ test("the bot never recites the saved answer to are you a bot", () => {
   assert.match(p, /IDENTITY: if they ask whether you are a bot.*return an EMPTY reply, needsHuman true, humanReason "they asked if this is a bot"/);
   assert.match(p, /Never claim to be a person, never claim to be a bot/);
 });
+
+// Luxury lots (Matt, 2026-11-23: "don't price these, we will handle all
+// underwriting on luxury stuff"). A homeowner the lot finder texted has no
+// offer row, and the reply gate read "no row" as "the machine prices it", so a
+// draft promising a number later today went through clean. The owner's prompt
+// keeps the owner playbook and never takes the agent-worded pricing line.
+import { MATT_PRICES_LINE } from "./conversation-context.js";
+test("a lot owner's reply that promises a number is held", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["lot-owner", "lot-pocket-hillcrest"]);
+  const store = fakeStore();
+  let seen;
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: { ...SAVED, lotFinder: { bot: "draft" } }, store, contactId: "c1", message: "What would you pay for it?", channel: "sms",
+    deps: { draft: async (args) => { seen = args; return { ...DRAFT, intent: "question", propertyAddress: "",
+      reply: "Good question, I'll have a number for you later today." }; } },
+  });
+  await settle(); await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.autoSendable, false);
+  assert.match(d.flags.join(" · "), /no number yet/);
+  assert.equal(JSON.stringify(seen).includes(MATT_PRICES_LINE), false, "the agent-worded pricing line stays out of an owner's prompt");
+});
