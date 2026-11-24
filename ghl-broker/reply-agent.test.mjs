@@ -9542,11 +9542,29 @@ test("what the seller owes on a house we never priced is not filed as their numb
 });
 
 test("the too-far-apart goodbye ends by asking for their next fixer", async () => {
-  const { d, statuses } = await farCounterAt({ message: "Seller says 450k is where they are on 12 Elm.", counterAmount: 450000 });
+  const { d, statuses } = await farCounterAt({ message: "Seller says 450k is the lowest she'll go on 12 Elm.", counterAmount: 450000 });
   assert.match(d.reply, /too far apart on this one, so I'll pass/);
   assert.match(d.reply, /Got anything else that needs work or would be a good flip\?$/, "the voice branch's closing ask, the NEXT ONE question in its words");
   assert.doesNotMatch(d.reply, /keep me in mind|I'm here/i);
   assert.doesNotMatch(d.reply, /[—–!]/, "no dashes, no exclamation marks");
+  assert.ok(statuses.includes("passed"));
+});
+
+// The 2026-11-23 audit (neg-3): the goodbye went out within minutes to
+// agents who had only told us where the seller was, not that it was final.
+// Our number stands (the counter hold) or the draft waits for Matt; the
+// goodbye is for a final no, or a number out of reach (Matt, 2026-09-16).
+test("an agent who names the seller's number without saying it's final doesn't get the goodbye", async () => {
+  const { d, statuses } = await farCounterAt({ message: "Seller says 420k is where they'd like to be on 12 Elm.", counterAmount: 420000 });
+  assert.doesNotMatch(d.reply, /too far apart/);
+  assert.ok(!statuses.includes("passed"), `nothing filed as a pass: ${statuses}`);
+  assert.notEqual(d.intent, "rejection", d.summary);
+  assert.ok(d.counterHold || d.needsHuman || d.status === "draft", `our number holds, or it waits for Matt: ${d.status} ${d.autoSend?.reason}`);
+});
+
+test("an agent who says the seller won't go any lower still gets the goodbye", async () => {
+  const { d, statuses } = await farCounterAt({ message: "Seller won't go any lower than 420k on 12 Elm.", counterAmount: 420000 });
+  assert.match(d.reply, /too far apart on this one, so I'll pass/);
   assert.ok(statuses.includes("passed"));
 });
 

@@ -697,6 +697,19 @@ export function floorFirmness(message = "") {
 }
 
 /**
+ * saysFinal(message) → true when their words close the door on the number:
+ * the seller's lowest, bottom, final or best, "won't budge", "not coming
+ * down", "take it or leave it". floorFirmness's "firm" reads the rest. The
+ * far-counter goodbye needs one of them, or a number out of reach (the
+ * 2026-11-23 audit, neg-3).
+ */
+export function saysFinal(message = "") {
+  const t = String(message || "");
+  return /\b(?:lowest|bottom(?:\s+dollar)?|rock[\s-]bottom|final\s+(?:number|price|answer|offer|counter)|(?:their|his|her|the\s+sellers?'?s?)\s+(?:best|final)|best\s+(?:they|he|she)\s+(?:can|will|could)\s+do|least\s+(?:they|he|she)(?:'ll|\s+will|\s+would|'d)?\s+(?:take|accept|do)|take\s+it\s+or\s+leave\s+it)\b/i.test(t)
+    || /\b(?:won['’]?t|will\s+not|not\s+going\s+to|isn['’]?t\s+going\s+to|can['’]?t|cannot)\s+(?:budge|move|come\s+down|go\s+down|drop|negotiate)\b|\bnot\s+(?:budging|moving|coming\s+down|negotiating)\b/i.test(t);
+}
+
+/**
  * passHeldWhy({ offer, message }) → "" | why the far-counter goodbye waits
  *
  * The canned "too far apart" goodbye is for a text about one house that asks
@@ -5485,6 +5498,14 @@ async function runReply(job, ctx) {
             // A row with only the ceiling behind it has no number of ours to float.
             humanReason: ours > 0 ? `their ${kText(theirs)} vs our unsent ${kText(ours)} on ${where}: float ours or pass`
               : `their ${kText(theirs)} on ${where}, and no number of ours went out: price it or pass` };
+        } else if (reference > 0 && theirs > passLine && !weMovedOnPrice && !beyondReach && firmness !== "firm" && !saysFinal(job.originalMessage || job.message)) {
+          // Their number, not a final no (the 2026-11-23 audit, neg-3): the
+          // goodbye went out within minutes to agents who had only said where
+          // the seller was. It stays a counter: the counter hold texts our
+          // number back once, or it waits for a person. Nothing is filed.
+          // After we already came back, their number again is their answer;
+          // past WALK_AWAY_GAP it is out of reach (Matt, 2026-09-16).
+          draft = { ...draft, notFinal: { offerId: full.id, theirs } };
         } else if (reference > 0 && theirs > passLine) {
           // It ends on the NEXT ONE question (Matt, 2026-10-21), unless that
           // already went to them today.
