@@ -36,5 +36,7 @@ export function jobSwitches(saved = {}) {
     // conversation-audit.js and coach.js.
     conversationAudit: Boolean(ai.nightlyAudit?.enabled),
     coach: Boolean(ai.coach?.enabled) && hasKey,
+    // lane-breaker.js: on unless switched off.
+    laneBreaker: Boolean(ai.laneBreaker?.enabled),
   };
 }

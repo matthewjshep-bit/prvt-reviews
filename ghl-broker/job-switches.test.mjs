@@ -10,6 +10,8 @@ test("with nothing saved, the switched-off jobs read off and can never be called
   for (const name of ["needsMatt", "cardSync", "ghlCalls", "priceScorecard", "threadReads", "slack", "coach"]) assert.equal(s[name], false, name);
   assert.equal(s.handReplies, true, "the hand-reply read runs unless the Conversation AI is off");
   assert.equal(s.conversationAudit, true, "the nightly audit is on by default");
+  assert.equal(s.laneBreaker, true, "the lane breaker is on by default: it only stops sends");
+  assert.equal(jobSwitches({ conversationAi: { laneBreaker: { enabled: false } } }).laneBreaker, false);
 });
 
 test("each switch follows its job's own setting", () => {
@@ -19,7 +21,7 @@ test("each switch follows its job's own setting", () => {
     slack: { enabled: true }, slackBotToken: "xoxb-test",
     conversationAi: { enabled: false, coach: { enabled: true }, nightlyAudit: { enabled: false } },
   });
-  assert.deepEqual(s, { needsMatt: true, cardSync: true, ghlCalls: true, priceScorecard: true, threadReads: true, handReplies: false, slack: true, conversationAudit: false, coach: true });
+  assert.deepEqual(s, { needsMatt: true, cardSync: true, ghlCalls: true, priceScorecard: true, threadReads: true, handReplies: false, slack: true, conversationAudit: false, coach: true, laneBreaker: true });
   assert.equal(jobSwitches({ pricingV2: { reads: true } }).threadReads, false, "no key, the reads don't run");
   assert.equal(jobSwitches({ desk: { ghlCalls: { enabled: true } } }).ghlCalls, false, "no workflow, no calls");
 });

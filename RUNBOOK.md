@@ -6182,6 +6182,111 @@ come back dead. `ghl-broker/delivery-watch.js` reads it back. Pure rules:
   undelivered, so when the audit redrafts a thread it reads every text under
   a blocked send (one of Matt's typed in GHL too), not only the newest.
 
+### A lane that gets blocked pauses itself (2026-11-23, ON by default)
+
+The 11-23 audit (AH-4): every machine lane texts from the one business
+number, and nothing stopped a lane when the carrier started blocking it. The
+first 49 lot-owner texts on 11-23 had 15 carrier blocks (30007) before the
+wording changed, and the delivery check above only reads sends 2 to 26 hours
+old, so on a 6-hour spread most of a day had gone before anyone saw it. A
+number the carriers keep blocking, or a STOP rate that jumps, puts every lane
+on that number at risk, agents' answers included.
+`ghl-broker/lane-breaker.js` is the breaker. Pure rules:
+`shared/lane-breaker.js`.
+
+- **ON by default. This is a choice for Matt.** CLAUDE.md says new
+  automation ships off. This ships on because it only stops sends: it turns
+  queued texts back into drafts and never schedules or sends one, the same
+  kind of carrier protection as the burst guard and the spread (memory
+  no-caps keeps those). It is not a volume cap. To switch it off:
+  `conversationAi.laneBreaker.enabled: false` (Settings → Conversation AI →
+  More settings → Lane breaker). Off, nothing is read, nothing is held, and a
+  lane it had stopped is no longer held.
+- **What it watches:** each kind on its own (`laneBreaker.kinds`, default all
+  of them): `lot_owner_open`, `lot_owner_follow`, `outreach_open`,
+  `outreach_nudge`, `agent_pulse`, `buyer_pulse`, `blast_open`,
+  `blast_nudge`, `gatekeeper_text`. Sent texts only. An answer to their own
+  text (`answersInbound`) and an email are never a lane send.
+- **When:** every 15-minute tick (cursor `laneBreaker` in `job_cursors`,
+  written before the run; a run a deploy killed is retried once it is 10
+  minutes stale, a failed one after 5; at most 110 tries a Pacific day). The
+  Line lists it as "Lane breaker".
+- **What it reads:** for each kind, today's first 20 sends (Pacific day) and
+  its last 50 (within 14 days), one light query each (`store.listLaneSends`,
+  both backends, trimmed to id, contact, time, message id and verdict). A send
+  with no verdict that is 5 minutes to 26 hours old is read from GHL the way
+  the delivery check reads it (`getMessage`), at most 60 a run, 300 ms apart,
+  today's first sends first. GHL's "sent" (handed to the carrier, no answer
+  yet) is read again while the send is under an hour old. The verdict goes on the draft as `laneRead`, not
+  `delivery`, so the delivery check still reads it later and does its own
+  work (the `send_failed` event, the lot owner's one retry, a dead number).
+  STOPs are the `unsubscribed` events in the window. A STOP counts against
+  the newest guarded text we sent that person in the 72 hours before it: a
+  STOP the day after a nudge is the nudge's, not the first text's. A STOP the
+  opt-out backfill wrote, or an email unsubscribe, counts against nothing.
+  Only 30007 counts as a block: a dead number or a landline is the list, not
+  the carrier's view of us, and the delivery check already stops those.
+- **When it trips** (settings in `conversationAi.laneBreaker`, defaults):
+  - early, today's first 20 of a kind: 4 carrier-blocked (`earlyBlocked`),
+    or 4 STOPs (`earlyStops`). It trips as soon as the count is reached,
+    not after the 20th send. A send is read 5 to 20 minutes after it goes
+    (the 5-minute wait, then the next tick), so at 11-23's rate (about 3 in
+    10 blocked) and a 6-hour spread of 469 texts, about the first 30 to 50
+    go before the lane stops, not all 469;
+  - rolling, the last 50 of a kind once 20 have a verdict (`rollingMin`):
+    10% of those read blocked (`rollingBlockedPct`), or a STOP within 72
+    hours on 8% of those sent (`rollingStopPct`);
+  - never on fewer than 4 of either (`minCount`).
+
+  Why these numbers: healthy agent texts run about 0.6% 30007 and 2.3% STOP
+  (stats.json, Oct–Nov); the bad days ran 30% blocked (lot owners 11-23) and
+  11% STOP (recent-lister first texts). By chance alone, a healthy lane shows
+  4 blocks in 20 under 1 time in 100,000, 4 STOPs in 20 about 1 in 1,000, 4
+  STOPs in 50 about 1 in 35, and 5 blocks in 50 about 1 in 75,000. A lane
+  blocking 30% shows 4 in its first 20 about 9 times in 10, and an 11% STOP
+  lane shows 4 in 50 about 8 in 10. The brief's 4% STOP over 50 would be 2
+  STOPs, which a healthy 2.3% lane shows about 1 time in 3, so it would pause
+  good lanes every week; the floor of 4 is why. These are guesses from one
+  month of numbers. Matt's own rule for a lane's economics (memory
+  pierce-volume: over 3% opt-outs, that part goes off) is measured over
+  hundreds of texts and is still his to apply. The breaker doesn't replace it.
+- **On a trip:** the trip goes on the cursor first (`trips.<kind>`: when,
+  which rule, why in counts, how many held). From then:
+  - every text of that kind still `scheduled` goes back to `draft`
+    (`heldDraft`: no `sendAt`, `laneHold { kind, at, rule }`, the reason in
+    `autoSend.reason`, and the flag "held: the lane breaker stopped lot owner
+    first texts — 4 of the first 8 … were blocked by the carrier (30007).
+    Nothing sent; clear it on the Offers page…"). The write only lands while
+    the row is still scheduled (`store.updateReplyDraftIf`, both backends),
+    so a text the send loop already claimed is never touched. Nothing is
+    deleted;
+  - each later run holds anything of that kind scheduled since, and the send
+    loop (`sendDueDrafts` `heldKindsFor`) turns one that comes due back into
+    a draft instead of sending it. New texts of that kind may still be
+    drafted by their lane; none goes by itself;
+  - one Slack line @Matt to #needs-matt (or #machine if that's the only
+    stream on), claimed on the cursor so it posts once: "Lane breaker: lot
+    owner first texts are stopped. 4 of the first 8 … were blocked by the
+    carrier (30007). 212 queued texts went back to drafts and nothing more
+    of that kind sends by itself. Nothing was sent." Counts only, no one's
+    name or number.
+- **Clearing it:** the Offers and Deals pages show a strip for each stopped
+  lane with **Let it send again** (`POST /api/lane-breaker/clear { kind }`,
+  status at `GET /api/lane-breaker`). The kind may go by itself again and is
+  judged afresh from that moment: the sends that tripped it no longer count.
+  The drafts it held lose the breaker's flag and stay drafts (`laneCleared`
+  on them says when). Nothing is scheduled or sent by the click. The lot
+  finder's next run rewrites an unsent owner first text in the current words
+  and schedules it again by itself (its own rule for a first text that hasn't
+  gone); any other held text waits in the outbox for your Send or a dismiss.
+  The cleared trip is kept on the cursor (`history`, last 20).
+- **Not built, Matt's call:** whether to slow the lot lane's day-1 follow-up,
+  or spread a big Monday (469 owner first texts) over two days.
+- **Check:** `GET /api/lane-breaker`; the run's counts per kind (early and
+  rolling sent, read, blocked, stops) are `last.kinds` on the `laneBreaker`
+  cursor; the Outbox's Draft rows with the flag; `GET /api/dashboard/line`
+  for when it last ran.
+
 ### Matt's contact card (2026-10-09)
 
 Matt: share my contact card "when people ask or if an initial deal doesn't work,
