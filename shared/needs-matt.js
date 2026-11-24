@@ -47,6 +47,7 @@ import { hasHouseNumber } from "./mentioned-houses.js";
 import { isOffMarket } from "./off-market.js";
 import { workingHoursBetween, addWorkingHours, WORK_TZ } from "./paper-follows.js";
 import { LANE_HOLD_RX, CLOSE_OUT_RX } from "./lane-holds.js";
+import { asksOurNumber } from "./conversation-ai.js";
 
 export const NEEDS_MATT_STAGE_RX = /^needs\s+matt\b/i;
 export const NEEDS_MATT_STAGE_NAME = "Needs Matt";
@@ -130,6 +131,12 @@ export function needsMattReason(row, { draftsById = new Map(), offersById = new 
       const at = ms(waitedFrom(d));
       return at != null && now - at >= PRICE_WAIT_HOURS * HOUR_MS ? { kind: "price", reason: "their_number" } : null;
     }
+    // They asked what we'd pay and the answer sat held (the 2026-11-23
+    // audit, R1): a day on, the number is his to give, or the pass.
+    if (d.status === "draft" && asksOurNumber(d.inbound || "")) {
+      const at = ms(waitedFrom(d));
+      return at != null && now - at >= PRICE_WAIT_HOURS * HOUR_MS ? { kind: "price", reason: "asked_our_number" } : null;
+    }
     return null;
   }
   // The bot answered their terms with "calling you shortly" (2026-11-09: a
@@ -146,8 +153,15 @@ function needsMattPlainKind(kind, row, now) {
     if (owner === "ping") return "paper";
     if (owner !== "price") return null;
     const at = ms(row.owedAt);
-    return at != null && now - at >= PRICE_WAIT_HOURS * HOUR_MS ? "price" : null;
+    if (at == null) return null;
+    // The time the promise named ("today": 5pm), when that's sooner (2026-11-23).
+    const named = ms(row.dueAt);
+    return now - at >= PRICE_WAIT_HOURS * HOUR_MS || (named != null && now >= named) ? "price" : null;
   }
+  // A number we promised (promise-owed.js owedPromises): due at the time it
+  // named, or a day after the first promise, and his from then (the
+  // 2026-11-23 audit). A second "still working on it" text never pushes it back.
+  if (kind === "number_owed" && ms(row.dueAt) != null) return now >= ms(row.dueAt) ? "price" : null;
   if (PRICE_KINDS.has(kind)) {
     const at = ms(row.readyAt || row.promisedAt);
     return at != null && now - at >= PRICE_WAIT_HOURS * HOUR_MS ? "price" : null;
@@ -181,6 +195,7 @@ export function needsMattWhy(x = {}) {
   if (x.kind === "paper") return clip(`${x.title || "Something only you can do"}${x.title && on && !String(x.title).includes(on) ? ` (${on})` : ""}`, 300);
   if (x.kind === "price" && x.theirs && x.ours) return clip(`They named ${k$(x.theirs)}${at}, over our ${k$(x.ours)} that never went out: float ours or pass`, 300);
   if (x.kind === "price" && x.theirs) return clip(`They named ${k$(x.theirs)}${at}: price it or pass`, 300);
+  if (x.kind === "price" && x.reason === "asked_our_number") return clip(`They asked what we'd pay${at}: price it or pass`, 300);
   if (x.kind === "price") {
     const hours = Math.max(1, Math.round(((x.now ?? Date.now()) - (ms(x.since) ?? Date.now())) / HOUR_MS));
     const waited = hours >= 48 ? `${Math.round(hours / 24)} days` : `${hours} hours`;

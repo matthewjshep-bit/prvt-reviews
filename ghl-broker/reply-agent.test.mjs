@@ -9875,3 +9875,27 @@ test("no machine number goes minutes after we asked about the house's condition"
   assert.match(String(r.skipped), /asked about its condition/);
   assert.equal(drafted, false);
 });
+
+/* ---------- they asked our number, and the reply didn't give one (2026-11-23 audit, R1) ---------- */
+
+import { owedPromises } from "./shared/promise-owed.js";
+import { openPromises } from "./shared/promise-resolver.js";
+
+test("an agent who asks what we'd pay and gets an answer with no number is owed one, and Matt hears about it", async () => {
+  const asked = { ...openDraft(), party: "agent", inbound: "Seller is at 400. What would you offer on 12 Elm?", reply: "Thanks for the details. How soon is the seller hoping to close?", propertyAddress: "12 Elm St, Renton, WA" };
+  const priced = { ...openDraft(), id: "d2", contactId: "c2", party: "agent", inbound: "What would you offer on 9 Oak?", reply: "We'd be around 310k as-is on 9 Oak.", propertyAddress: "9 Oak Ave, Kent, WA" };
+  const store = fakeStore([asked, priced]);
+  const client = { call: async () => ({ messageId: "m1" }) };
+  await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true });
+  const made = await store.listContactEvents("LOC", "c1", { types: ["promise_made"] });
+  assert.equal(made.length, 1, "their ask is a number we owe");
+  assert.equal(made[0].data.what, "number");
+  assert.equal(made[0].data.by, "their_ask");
+  const events = made.map((e) => ({ ...e, contactId: "c1" }));
+  assert.equal(owedPromises({ events, now: Date.now() + 25 * 3600000 }).length, 1, "a day on, a number owed (Needs Matt)");
+  // Never the machine's "still working on it" text: we never said we would.
+  assert.equal(openPromises(events, { now: Date.now() + 5 * 3600000 }).length, 0);
+  // Our number in the answer: nothing owed.
+  await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d2", live: true });
+  assert.equal((await store.listContactEvents("LOC", "c2", { types: ["promise_made"] })).length, 0);
+});

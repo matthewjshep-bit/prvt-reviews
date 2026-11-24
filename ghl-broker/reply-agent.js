@@ -8603,7 +8603,19 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
   }
   if (d.party === "agent" && !["realm_check", "take_check", "promise_due"].includes(d.outbound?.kind || d.intent)) {
     const what = detectPromise(body);
-    if (what) {
+    // They named the house or the seller's number and asked what we'd pay,
+    // and this answer gave no number and no pass (the 2026-11-23 audit, R1):
+    // we owe them one all the same. `by: "their_ask"` keeps it off the
+    // machine's "still working on it" text (openPromises); the owed row and
+    // Needs Matt carry it to Matt. The machine never sends a number for it.
+    if (!keeps && (!what || what === "answer") && !d.outbound?.kind && asksOurNumber(d.inbound || "")) {
+      await recordEvent({
+        store, locationId, contactId: d.contactId, party: "agent", type: "promise_made", at: ts,
+        address: d.propertyAddress || "", source: "conversation", ref: d.id,
+        dedupeKey: `promise_made:${d.id}`,
+        data: { what: "number", by: "their_ask", draftId: d.id, dueAt: new Date(Date.parse(ts) + PROMISE_DUE_HOURS * 3600000).toISOString(), text: body.slice(0, 200), asksThem: false },
+      }).catch(() => {});
+    } else if (what) {
       await recordEvent({
         store, locationId, contactId: d.contactId, party: "agent", type: "promise_made", at: ts,
         address: d.propertyAddress || d.outbound?.address || "", source: "conversation", ref: d.id,
