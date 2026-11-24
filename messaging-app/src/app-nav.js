@@ -95,6 +95,28 @@ export function urlFor({ lane, view }, search = "") {
   return `${pathForLane(lane)}?${p}`;
 }
 
+// The companion window beside GHL (CompanionView.jsx) is its own page at
+// /contact. The extension finds its tab by that path, so the shell never
+// rewrites it.
+export const isCompanionPath = (pathname = "") => /^\/contact(\/|$)/.test(pathname);
+
+// The Offers table's slice in the URL (offers-split.js): ?filter= and ?q=.
+// They belong to one lane's table.
+export const TABLE_PARAMS = ["filter", "q"];
+
+/**
+ * historyUrl(route, { pathname, search }, from) → the URL to put in history
+ * for this page, or null to leave history alone (the companion window).
+ * Moving to another lane leaves the table's slice off the new URL only; the
+ * entry being left keeps it, so Back lands on the same slice.
+ */
+export function historyUrl(route, { pathname = "/", search = "" } = {}, from = null) {
+  if (isCompanionPath(pathname)) return null;
+  const p = new URLSearchParams(search);
+  if (from && from.lane !== route.lane) for (const k of TABLE_PARAMS) p.delete(k);
+  return urlFor(route, `?${p}`);
+}
+
 /** Which pill lights for a page; null for a More page. */
 export function activePill({ lane, view }) {
   if (lane === "luxury") return "luxury";

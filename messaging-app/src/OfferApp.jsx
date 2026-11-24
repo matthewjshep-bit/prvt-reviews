@@ -46,7 +46,7 @@ import { COMPANION_WINDOW } from "./companion.js";
 import { appHref, movedTo } from "./links.js";
 import { ContactDrawerContext } from "./ContactLink.jsx";
 import { getLocationId, getNeedsMatt, getOffer, getSettings } from "./api.js";
-import { LUXURY_TABS, MORE, PILLS, activePill, laneFilter, moreLabel, resolveView, routeOf, urlFor } from "./app-nav.js";
+import { LUXURY_TABS, MORE, PILLS, activePill, historyUrl, isCompanionPath, laneFilter, moreLabel, resolveView, routeOf } from "./app-nav.js";
 import { useLightPoll } from "./light-poll.js";
 import { Menu, NeedsChip } from "./ui.jsx";
 
@@ -63,7 +63,7 @@ const FORCED = (() => { try { return import.meta.env.VITE_APP_MODE || ""; } catc
 })();
 
 // The companion window beside GHL (CompanionView.jsx) is its own page.
-const IS_COMPANION = (() => { try { return /^\/contact(\/|$)/.test(window.location.pathname); } catch { return false; } })();
+const IS_COMPANION = (() => { try { return isCompanionPath(window.location.pathname); } catch { return false; } })();
 
 // VITE_APP_MODE can still force one product onto a dedicated-domain deploy
 // (RUNBOOK "Step 3"). Outreach and Dispositions keep their old tabs there;
@@ -138,12 +138,14 @@ export default function OfferApp() {
   const [formNonce, setFormNonce] = useState(0); // bump to remount NewOffer blank
   const go = (next) => {
     // Another lane is another book: the Offers table's tab and search
-    // (?tab=, ?q=) belong to the one being left.
-    if (next.lane && next.lane !== route.lane) {
+    // (?filter=, ?q=) belong to the one being left. Push the new lane's URL
+    // without them before its page mounts and reads the URL; the entry being
+    // left keeps them, so Back lands on the same slice (app-nav historyUrl).
+    if (!LEGACY_NAV && next.lane && next.lane !== route.lane) {
+      const r = resolveView(next.lane, next.view);
       try {
-        const p = new URLSearchParams(window.location.search);
-        p.delete("tab"); p.delete("q");
-        window.history.replaceState(window.history.state, "", `${window.location.pathname}?${p}`);
+        const url = historyUrl(r, window.location, route);
+        if (url) window.history.pushState({ ...r }, "", url);
       } catch { /* the GHL iframe can refuse history calls */ }
     }
     setRouteState((cur) => {
@@ -200,11 +202,14 @@ export default function OfferApp() {
   // the lane is the path (/, /luxury, /deals), the page is ?view=.
   // replaceState on the first render (there's nothing to go back to yet);
   // pushState after, and popstate restores whatever the user came from.
+  // The companion window (/contact) is left alone: the extension finds its
+  // tab by that path, and a reload must bring the companion back.
   const firstRender = React.useRef(true);
   useEffect(() => {
+    if (IS_COMPANION) return;
     try {
       const p = new URLSearchParams(window.location.search);
-      const url = LEGACY_NAV ? (p.set("view", view), `${window.location.pathname}?${p}`) : urlFor(route, window.location.search);
+      const url = LEGACY_NAV ? (p.set("view", view), `${window.location.pathname}?${p}`) : historyUrl(route, window.location);
       if (firstRender.current) window.history.replaceState({ ...route }, "", url);
       else if (!sameRoute(window.history.state, route)) window.history.pushState({ ...route }, "", url);
     } catch { /* iframe history can be restricted — the app still works */ }
@@ -212,6 +217,7 @@ export default function OfferApp() {
   }, [lane, view]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
+    if (IS_COMPANION) return undefined;
     const onPop = (e) => {
       if (LEGACY_NAV) { const v = e.state?.view || readParam("view"); if (LEGACY_NAV.some((n) => n.view === v)) setRouteState({ lane: "agents", view: v }); return; }
       setRouteState(e.state?.view ? resolveView(e.state.lane, e.state.view) : routeOf(window.location.pathname, window.location.search));

@@ -3,7 +3,7 @@
 import { test, expect } from "vitest";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { MORE, PILLS, activePill, laneFilter, moreLabel, resolveView, routeOf, urlFor } from "../app-nav.js";
+import { MORE, PILLS, activePill, historyUrl, isCompanionPath, laneFilter, moreLabel, resolveView, routeOf, urlFor } from "../app-nav.js";
 import { NeedsChip } from "../ui.jsx";
 
 test("the header has three pages, and every other page is one More menu away", () => {
@@ -60,4 +60,29 @@ test("the Needs you chip shows a count and nothing when nobody is waiting", () =
   const html = renderToStaticMarkup(<NeedsChip count={3} page="Offers" />);
   expect(html).toContain("Needs you · ");
   expect(html).toContain("3");
+});
+
+// Review 2026-11-23: the shell rewrote the companion window's /contact URL
+// to /?view=history on its first render, so the extension stopped finding
+// the companion tab and a reload opened the whole console.
+test("the companion window keeps its own address", () => {
+  const loc = { pathname: "/contact", search: "?location_id=L1&key=K1" };
+  expect(isCompanionPath("/contact")).toBe(true);
+  expect(isCompanionPath("/contact/")).toBe(true);
+  expect(isCompanionPath("/contacts")).toBe(false);
+  expect(historyUrl(routeOf(loc.pathname, loc.search), loc)).toBe(null);
+  expect(historyUrl({ lane: "agents", view: "history" }, loc, { lane: "luxury", view: "history" })).toBe(null);
+  expect(historyUrl({ lane: "agents", view: "flow" }, { pathname: "/", search: "?location_id=L1" })).toBe("/?location_id=L1&view=flow");
+});
+
+// Review 2026-11-23: switching lanes wiped the Offers tab and search off the
+// page being left, so Back from Luxury came back to a blank table.
+test("going to another lane leaves the table's slice behind, and Back still has it", () => {
+  const offers = { pathname: "/", search: "?location_id=L1&view=history&filter=sent&q=elm" };
+  const from = { lane: "agents", view: "history" };
+  expect(historyUrl({ lane: "luxury", view: "history" }, offers, from)).toBe("/luxury?location_id=L1&view=history");
+  // Within a lane (Offers → a More page and back) the slice rides along.
+  expect(historyUrl({ lane: "agents", view: "flow" }, offers, from)).toBe("/?location_id=L1&view=flow&filter=sent&q=elm");
+  // The entry being left is never rewritten: only the new URL drops them.
+  expect(offers.search).toContain("filter=sent");
 });

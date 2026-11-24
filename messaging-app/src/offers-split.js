@@ -4,6 +4,9 @@
 // separate pages"). Pure, so the stand-in row and the keys are pinned.
 
 import { keyIntent } from "./work-queue.js";
+import { TABLE_PARAMS } from "./app-nav.js";
+
+const [FILTER_PARAM, SEARCH_PARAM] = TABLE_PARAMS;
 
 /**
  * offerPaneItem(offer) → a Today-row stand-in the pane's parts read
@@ -64,9 +67,10 @@ export const writeOfferParam = (id) => {
 
 /**
  * The table's slice, kept in the URL (2026-11-23 audit, edit-leaves-the-
- * table): `?tab=` the filter, `?q=` the search. A reload, or Back from a
+ * table): `?filter=` the tab, `?q=` the search. A reload, or Back from a
  * page under More, lands on the same slice. An unknown tab reads as none
- * (the page's own default).
+ * (the page's own default). Not `?tab=`: the deal window keeps its own tab
+ * there (DealsView.jsx).
  *
  * readTableParams(search, validTabs) → { tab, q }
  * tableParamsSearch(search, { tab, q }) → the search string with them set
@@ -74,13 +78,13 @@ export const writeOfferParam = (id) => {
 export function readTableParams(search = "", validTabs = null) {
   let p;
   try { p = new URLSearchParams(search); } catch { return { tab: null, q: "" }; }
-  const tab = p.get("tab") || null;
-  return { tab: tab && (!validTabs || validTabs.has(tab)) ? tab : null, q: (p.get("q") || "").slice(0, 200) };
+  const tab = p.get(FILTER_PARAM) || null;
+  return { tab: tab && (!validTabs || validTabs.has(tab)) ? tab : null, q: (p.get(SEARCH_PARAM) || "").slice(0, 200) };
 }
 export function tableParamsSearch(search = "", { tab = null, q = "" } = {}) {
   const p = new URLSearchParams(search);
-  if (tab) p.set("tab", tab); else p.delete("tab");
-  if (q && q.trim()) p.set("q", q); else p.delete("q");
+  if (tab) p.set(FILTER_PARAM, tab); else p.delete(FILTER_PARAM);
+  if (q && q.trim()) p.set(SEARCH_PARAM, q); else p.delete(SEARCH_PARAM);
   return `?${p}`;
 }
 export const writeTableParams = (state) => {

@@ -572,8 +572,11 @@ reports (Flow, Line, Follow-up, Lessons) and the Companion window.
 - The Offers table: an agent with one house is one row (no fold); a folded
   agent shows "a send failed"; documents, AI enrichment and Delete sit
   behind each row's ⋯; Edit opens the offer in a sheet over the table, and
-  the tab and search ride in the URL (`?tab=`, `?q=`). On a phone the
-  table is a list of cards.
+  the tab and search ride in the URL (`?filter=`, `?q=`; not `?tab=`, which
+  is the deal window's). Another lane starts without them; Back brings them
+  back. On a phone the table is a list of cards.
+- The companion window keeps its `/contact` address: the shell never
+  rewrites it (the extension finds the companion tab by that path).
 - It re-reads itself every three minutes while the tab shows (and on coming
   back to the tab): only the light `GET /api/offers?lean=1`, never the
   activity read, then What's next for at most five agents whose rows moved,

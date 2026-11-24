@@ -86,8 +86,18 @@ test("a reload keeps the tab and the search Matt was on", async () => {
   const { readTableParams, tableParamsSearch } = await import("../offers-split.js");
   const tabs = new Set(["draft", "sent", "needs"]);
   const s = tableParamsSearch("?location_id=L1&view=history", { tab: "sent", q: "elm" });
-  expect(s).toBe("?location_id=L1&view=history&tab=sent&q=elm");
+  expect(s).toBe("?location_id=L1&view=history&filter=sent&q=elm");
   expect(readTableParams(s, tabs)).toEqual({ tab: "sent", q: "elm" });
-  expect(readTableParams("?tab=bogus", tabs)).toEqual({ tab: null, q: "" });
+  expect(readTableParams("?filter=bogus", tabs)).toEqual({ tab: null, q: "" });
   expect(tableParamsSearch(s, { tab: null, q: "" })).toBe("?location_id=L1&view=history");
+});
+
+// Review 2026-11-23: the table kept its tab in ?tab=, which the deal window
+// also uses for its own tabs, so one could open the other's.
+test("the deal window's tab and the table's tab don't read each other's", async () => {
+  const { readTableParams, tableParamsSearch } = await import("../offers-split.js");
+  const tabs = new Set(["draft", "sent", "paper"]);
+  expect(readTableParams("?tab=paper", tabs)).toEqual({ tab: null, q: "" });
+  expect(tableParamsSearch("?tab=buyers", { tab: "sent", q: "" })).toBe("?tab=buyers&filter=sent");
+  expect(tableParamsSearch("?tab=buyers&filter=sent", { tab: null, q: "" })).toBe("?tab=buyers");
 });
