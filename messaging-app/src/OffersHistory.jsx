@@ -54,7 +54,7 @@ import NextFollowUp, { groupNext, nextSortKey } from "./NextFollowUp.jsx";
 import { TABS, SUBS, OTHER, ALL_VIEWS, viewFor, defaultTab, tabOf, notSentAge, waitingSince } from "./offer-tabs.js";
 import PipelineStrip from "./PipelineStrip.jsx";
 import { attachNeeds, needsCounts } from "./needs-view.js";
-import { MAX_CONTACT_REREADS, mergeLean } from "./offers-refresh.js";
+import { MAX_CONTACT_REREADS, applyLean } from "./offers-refresh.js";
 import { useLightPoll } from "./light-poll.js";
 import {
   ActivityStamp, AiPill, AttachWarning, BTN, BTN_ICON, BTN_PRIMARY, EmptyState, ErrorBar, FilterChips, KpiRow, Menu, NeedsPill,
@@ -312,10 +312,14 @@ export default function OffersHistory({ onNew = null, onDeal, settings: appSetti
   const offersRef = useRef(null);
   offersRef.current = offers;
   useLightPoll(async () => {
-    if (!offersRef.current) return;
+    const base = offersRef.current;
+    if (!base) return;
     const fresh = await listOffers({ limit: 2000, lean: true });
-    if (!Array.isArray(fresh) || !offersRef.current) return;
-    const { rows, contacts } = mergeLean(offersRef.current, fresh);
+    if (!Array.isArray(fresh)) return;
+    // Matt changed something while it was out: this read is older (applyLean).
+    const merged = applyLean(base, offersRef.current, fresh);
+    if (!merged) return;
+    const { rows, contacts } = merged;
     setOffers(rows);
     for (const c of contacts.slice(0, MAX_CONTACT_REREADS)) await refreshRef.current(c);
   }, { enabled: offers !== null });

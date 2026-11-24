@@ -2,7 +2,7 @@
 // open (2026-11-23 audit): what the bot changed shows without a reload, and
 // nothing the first load worked out is thrown away.
 import { test, expect } from "vitest";
-import { mergeLean } from "../offers-refresh.js";
+import { applyLean, mergeLean } from "../offers-refresh.js";
 import { pollDue } from "../light-poll.js";
 
 const row = (over = {}) => ({ id: "o1", contactId: "c1", status: "sent", statusAt: "2026-11-20T18:00:00Z", sends: [{ ts: "2026-11-20T18:00:00Z" }], ...over });
@@ -36,4 +36,16 @@ test("the re-read never runs while the tab is hidden, twice at once, or sooner t
   expect(pollDue({ busy: true, lastAt: 0, now })).toBe(false);
   expect(pollDue({ lastAt: now - 30_000, now, minGapMs: 60_000 })).toBe(false);
   expect(pollDue({ lastAt: now - 90_000, now, minGapMs: 60_000 })).toBe(true);
+});
+
+// Review 2026-11-23: a re-read that left before Matt marked a row and came
+// back after put the old status back on it until the next re-read.
+test("a re-read that was out while Matt changed a row doesn't put the old status back", () => {
+  const base = [loaded()];
+  const fresh = [row()];   // read before his change reached the server
+  const afterHisChange = [loaded({ status: "dead", statusAt: "2026-11-23T18:00:00Z" })];
+  expect(applyLean(base, afterHisChange, fresh)).toBe(null);
+  // Nothing changed on the page while it was out: it applies as usual.
+  const { rows } = applyLean(base, base, [row({ status: "countered" })]);
+  expect(rows[0].status).toBe("countered");
 });

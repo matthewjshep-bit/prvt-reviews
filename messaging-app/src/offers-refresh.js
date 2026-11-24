@@ -47,3 +47,17 @@ export function mergeLean(prev = [], fresh = []) {
   for (const gone of before.values()) if (gone.contactId) contacts.add(gone.contactId);
   return { rows, contacts: [...contacts] };
 }
+
+/**
+ * applyLean(base, current, fresh) → mergeLean's result, or null to drop it.
+ *   base     the table's rows when the re-read left
+ *   current  the table's rows now
+ * Null when the table changed while the read was out (a status, a send, a
+ * delete from this page): that read is older than what Matt just did, so it
+ * is dropped instead of putting the old row back, and the next one brings
+ * whatever the bot changed.
+ */
+export function applyLean(base, current, fresh) {
+  if (!current || current !== base) return null;
+  return mergeLean(current, fresh);
+}
