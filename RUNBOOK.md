@@ -6200,8 +6200,15 @@ on that number at risk, agents' answers included.
   kind of carrier protection as the burst guard and the spread (memory
   no-caps keeps those). It is not a volume cap. To switch it off:
   `conversationAi.laneBreaker.enabled: false` (Settings → Conversation AI →
-  More settings → Lane breaker). Off, nothing is read, nothing is held, and a
-  lane it had stopped is no longer held.
+  More settings → Lane breaker). Off, nothing is read and nothing new is
+  held; a trip that was standing still shows on the strip (with a note that
+  the breaker is off) so its held texts aren't stranded. Switched back on, it
+  starts every kind afresh (`offAt` on the cursor), so the gap is never judged.
+- **It starts from its own first run.** On the first run, and for any kind
+  added later, it stamps `since.<kind>` = now on the cursor before judging
+  (`baselineDoc`), and counts only sends after `max(since, cleared)`. So the
+  11-23 lot-owner 30007s and older STOPs (from wording since fixed) can't trip
+  it on deploy day.
 - **What it watches:** each kind on its own (`laneBreaker.kinds`, default all
   of them): `lot_owner_open`, `lot_owner_follow`, `outreach_open`,
   `outreach_nudge`, `agent_pulse`, `buyer_pulse`, `blast_open`,
@@ -6218,7 +6225,9 @@ on that number at risk, agents' answers included.
   the delivery check reads it (`getMessage`), at most 60 a run, 300 ms apart,
   today's first sends first. GHL's "sent" (handed to the carrier, no answer
   yet) is read again while the send is under an hour old. The verdict goes on the draft as `laneRead`, not
-  `delivery`, so the delivery check still reads it later and does its own
+  `delivery` (`store.setLaneRead`, both backends: one merge that lands only
+  while the draft is sent and has neither verdict, so it never writes over the
+  delivery check's), so the delivery check still reads it later and does its own
   work (the `send_failed` event, the lot owner's one retry, a dead number).
   STOPs are the `unsubscribed` events in the window. A STOP counts against
   the newest guarded text we sent that person in the 72 hours before it: a
@@ -6235,7 +6244,10 @@ on that number at risk, agents' answers included.
     go before the lane stops, not all 469;
   - rolling, the last 50 of a kind once 20 have a verdict (`rollingMin`):
     10% of those read blocked (`rollingBlockedPct`), or a STOP within 72
-    hours on 8% of those sent (`rollingStopPct`);
+    hours on 8% of those sent (`rollingStopPct`). STOPs are judged on the
+    newest 50 sends that are at least `stopSettleHours` old (default 3,
+    0–72), so a big day's STOPs are counted once they've had time to come
+    (`store.listLaneSends` takes `untilIso`, both backends);
   - never on fewer than 4 of either (`minCount`).
 
   Why these numbers: healthy agent texts run about 0.6% 30007 and 2.3% STOP
@@ -6271,17 +6283,25 @@ on that number at risk, agents' answers included.
     of that kind sends by itself. Nothing was sent." Counts only, no one's
     name or number.
 - **Clearing it:** the Offers and Deals pages show a strip for each stopped
-  lane with **Let it send again** (`POST /api/lane-breaker/clear { kind }`,
-  status at `GET /api/lane-breaker`). The kind may go by itself again and is
-  judged afresh from that moment: the sends that tripped it no longer count.
-  The drafts it held lose the breaker's flag and stay drafts (`laneCleared`
-  on them says when). Nothing is scheduled or sent by the click. The lot
-  finder's next run rewrites an unsent owner first text in the current words
-  and schedules it again by itself (its own rule for a first text that hasn't
-  gone); any other held text waits in the outbox for your Send or a dismiss.
+  lane with **Let it send again** (`POST /api/lane-breaker/clear { kind,
+  backOnClock }`, status at `GET /api/lane-breaker`). The kind may go by
+  itself again and is judged afresh from that moment: the sends that tripped
+  it no longer count. The strip's button passes `backOnClock: true`: each text
+  it held in the last 4 days (`LANE_BACK_ON_CLOCK_MS`) goes back to scheduled
+  at a time from `spreadAcrossDay` (the machine's hours, nudgeSpreadHours,
+  weekends and days off, as the dial's release-held does), and the send loop
+  runs its own checks when each comes due. Older held texts lose the flag and
+  stay drafts (`laneCleared` says when). The route defaults `backOnClock` to
+  false. The click itself sends nothing; the strip then says how many went
+  back on the clock and how many wait for a hand Send. The lot finder's next
+  run also rewrites an unsent owner first text in the current words and
+  schedules it by itself.
   The cleared trip is kept on the cursor (`history`, last 20).
 - **Not built, Matt's call:** whether to slow the lot lane's day-1 follow-up,
   or spread a big Monday (469 owner first texts) over two days.
+- **Index:** `reply_drafts_lane_sends_idx` on `(location_id,
+  outbound.kind, sentAt) where status = 'sent'` (schema.pg.sql, additive, built
+  on boot without CONCURRENTLY, so it briefly blocks writes the first time).
 - **Check:** `GET /api/lane-breaker`; the run's counts per kind (early and
   rolling sent, read, blocked, stops) are `last.kinds` on the `laneBreaker`
   cursor; the Outbox's Draft rows with the flag; `GET /api/dashboard/line`

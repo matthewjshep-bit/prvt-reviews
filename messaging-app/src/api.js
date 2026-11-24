@@ -911,7 +911,7 @@ export const getLotFinder = () => fetch(`${API_BASE}/api/lot-finder?${locq()}`).
 // stopped because their texts were carrier-blocked or STOPped, and Matt's
 // one click to let one go again. Clearing schedules and sends nothing.
 export const getLaneBreaker = () => fetch(`${API_BASE}/api/lane-breaker?${locq()}`).then(j);
-export const clearLaneBreaker = (kind) => post(`/api/lane-breaker/clear`, { kind });
+export const clearLaneBreaker = (kind, { backOnClock = false } = {}) => post(`/api/lane-breaker/clear`, { kind, backOnClock: backOnClock === true });
 export const getLotOwners = ({ pocketId = "", status = "", limit = 500 } = {}) =>
   fetch(`${API_BASE}/api/lot-finder/owners?${locq()}${pocketId ? `&pocketId=${encodeURIComponent(pocketId)}` : ""}${status ? `&status=${encodeURIComponent(status)}` : ""}&limit=${limit}`).then(j);
 export const setLotOwnerStatus = (ownerKey, status) => post(`/api/lot-finder/owners/${encodeURIComponent(ownerKey)}/status`, { status });

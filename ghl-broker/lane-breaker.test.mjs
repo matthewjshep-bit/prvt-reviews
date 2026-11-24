@@ -17,7 +17,7 @@ const DIR = fs.mkdtempSync(path.join(os.tmpdir(), "lane-breaker-test-"));
 process.env.DATA_DIR = DIR;
 delete process.env.DATABASE_URL;
 
-const { store, laneSendsQuery, laneSendInWindow, updateReplyDraftIfQuery } = await import("./store.js");
+const { store, laneSendsQuery, laneSendInWindow, updateReplyDraftIfQuery, setLaneReadQuery } = await import("./store.js");
 await store.init();
 const { runLaneBreaker, maybeRunLaneBreaker, clearLane, laneHoldsFor, laneBreakerStatus, _resetLaneBreaker, CURSOR_NAME } = await import("./lane-breaker.js");
 const { sendDueDrafts } = await import("./conversation-scheduler.js");
@@ -61,6 +61,9 @@ const queued = (L, i, kind, over = {}) => store.createReplyDraft({
   locationId: L, contactId: `${L}-q${i}`, contactName: "Pat Lindqvist", status: "scheduled", channel: "sms", party: "lot_owner", inbound: "",
   reply: "Hi Pat, a quick question about the lot on Larch.", autoSent: false, outbound: { kind }, flags: [], sendAt: minsOn(30 + i), ...over,
 });
+// The breaker has been watching this location for three days: its first run
+// (on an empty location) stamped when it started.
+const goLive = (L) => runLaneBreaker({ client: ghlStub({}), locationId: L, saved: {}, store, now: NOW - 3 * 86400000, pace: 0 });
 
 /* ---------- the store's read ---------- */
 
@@ -91,16 +94,99 @@ test("one kind's sends are listed the same by the file store and Postgres, witho
   assert.match(q.text, /order by \(doc->>'sentAt'\) asc limit \$4/);
   const u = updateReplyDraftIfQuery({ id: "x", from: "scheduled", doc: { status: "draft" }, at: minsAgo(0) });
   assert.match(u.text, /where id = \$1 and status = \$2/);
+  // The STOP window: only sends up to a time.
+  assert.deepEqual((await store.listLaneSends(L, "lot_owner_open", { sinceIso: since, untilIso: minsAgo(60), order: "desc", limit: 50 })).map((d) => d.id), ["ls-a"]);
+  const qu = laneSendsQuery({ locationId: L, kind: "lot_owner_open", sinceIso: since, untilIso: minsAgo(60), order: "desc", limit: 50 });
+  assert.deepEqual([...new Set(placeholders(qu.text))].sort((a, b) => a - b), qu.params.map((_, i) => i + 1));
+  assert.match(qu.text, /\(doc->>'sentAt'\) <= \$5/);
+  // Its index is the query's own expressions.
+  const schema = fs.readFileSync(new URL("./schema.pg.sql", import.meta.url), "utf8");
+  assert.match(schema, /create index if not exists reply_drafts_lane_sends_idx on reply_drafts \(location_id, \(doc #>> '\{outbound,kind\}'\), \(doc->>'sentAt'\)\) where status = 'sent';/);
   // The file store's conditional write.
   const d = await queued(L, 1, "lot_owner_open");
   assert.equal(await store.updateReplyDraftIf(d.id, "draft", { ...d, status: "dismissed" }), false, "not written: it isn't a draft");
   assert.equal((await store.getReplyDraft(d.id)).status, "scheduled");
 });
 
+test("the breaker's own read never writes over the delivery check's verdict on the same text", async () => {
+  const L = "loc-race";
+  const mine = await sentText(L, 1, "lot_owner_open", { sentAt: minsAgo(20) });
+  const theirs = await sentText(L, 2, "lot_owner_open", { sentAt: minsAgo(20), delivery: { status: "failed", code: "30007" } });
+  const v = { status: "delivered", code: null, checkedAt: minsAgo(0) };
+  assert.equal(await store.setLaneRead(theirs.id, v), false, "the delivery check got there first");
+  assert.deepEqual((await store.getReplyDraft(theirs.id)).delivery, { status: "failed", code: "30007" });
+  assert.equal((await store.getReplyDraft(theirs.id)).laneRead, undefined);
+  assert.equal(await store.setLaneRead(mine.id, v), true);
+  assert.equal(await store.setLaneRead(mine.id, { ...v, status: "failed" }), false, "one verdict, never replaced");
+  assert.equal((await store.getReplyDraft(mine.id)).laneRead.status, "delivered");
+  const q = setLaneReadQuery({ id: "x", verdict: v });
+  assert.match(q.text, /doc = doc \|\| jsonb_build_object\('laneRead', \$2::jsonb\)/, "merged in the one statement, not a read-modify-write");
+  assert.match(q.text, /jsonb_typeof\(doc->'delivery'\)/);
+  assert.equal(q.params[1], JSON.stringify(v));
+});
+
 /* ---------- the runner ---------- */
+
+test("fourteen days of blocked and STOPped sends from before the breaker existed don't trip it on its first run", async () => {
+  const L = "loc-deploy";
+  // Last week, and this morning before the deploy: the bad wording's blocks.
+  for (let i = 0; i < 49; i++) {
+    await sentText(L, `w${i}`, "lot_owner_open", { sentAt: minsAgo(60 * 24 * 5 + i), delivery: i % 3 === 0 ? { status: "failed", code: "30007" } : { status: "delivered", code: null } });
+  }
+  for (let i = 0; i < 20; i++) {
+    await sentText(L, `t${i}`, "lot_owner_open", { sentAt: minsAgo(120 - i), ghlMessageId: null, delivery: i < 8 ? { status: "failed", code: "30007" } : { status: "delivered", code: null } });
+  }
+  for (let i = 0; i < 6; i++) {
+    await sentText(L, `s${i}`, "outreach_open", { contactId: `${L}-a${i}`, party: "agent", sentAt: minsAgo(60 * 30 + i), delivery: { status: "delivered", code: null } });
+    await recordEvent({ store, locationId: L, contactId: `${L}-a${i}`, party: "agent", type: "unsubscribed", at: minsAgo(60 * 29), address: "", source: "conversation", dedupeKey: `unsubscribed:${L}-a${i}`, data: { via: "sms_keyword", channel: "sms" } });
+  }
+  const monday = [];
+  for (let i = 0; i < 25; i++) monday.push(await queued(L, i, "lot_owner_open"));
+  const ghl = ghlStub({});
+  const posts = [];
+  const r = await runLaneBreaker({ client: ghl, locationId: L, saved: SLACK, store, now: NOW, pace: 0, deps: { slackApi: async (...a) => { posts.push(a); return { ok: true }; } } });
+  assert.deepEqual(r.tripped, [], JSON.stringify(r.kinds.lot_owner_open));
+  assert.equal(r.baselined, true);
+  assert.deepEqual(r.held, {});
+  assert.equal(posts.length, 0, "no ping on deploy day");
+  for (const d of monday) assert.equal((await store.getReplyDraft(d.id)).status, "scheduled", "Monday's owner texts keep their clock");
+  const doc = (await store.getJobCursor(L, CURSOR_NAME)).doc;
+  assert.equal(doc.since.lot_owner_open, minsAgo(0), "it watches from its first run");
+  assert.equal(Object.keys(doc.since).length, 9, "every kind");
+
+  // What goes after it started watching does count.
+  const statuses = {};
+  for (let i = 0; i < 6; i++) {
+    await sentText(L, `n${i}`, "lot_owner_open", { sentAt: new Date(NOW + (5 + i) * 60000).toISOString() });
+    statuses[`${L}-mn${i}`] = BLOCKED;
+  }
+  const r2 = await runLaneBreaker({ client: ghlStub(statuses), locationId: L, saved: {}, store, now: NOW + 30 * 60000, pace: 0 });
+  assert.deepEqual(r2.tripped, [{ kind: "lot_owner_open", rule: "early_blocked" }]);
+  assert.equal(r2.kinds.lot_owner_open.early.sent, 6, "only the six since it went live");
+  assert.equal(r2.baselined, undefined, "stamped once");
+});
+
+test("a STOP spike across the middle of a big day is counted once those texts are a few hours old", async () => {
+  const L = "loc-bigday";
+  await goLive(L);
+  const ok = { status: "delivered", code: null };
+  // 8am: the first twenty, no STOPs. 1pm-ish (five hours ago): fifty, six of
+  // them STOPped since. The last hour: fifty more, too new for a STOP.
+  for (let i = 0; i < 20; i++) await sentText(L, `e${i}`, "lot_owner_open", { sentAt: minsAgo(600 - i), delivery: ok });
+  for (let i = 0; i < 50; i++) await sentText(L, `m${i}`, "lot_owner_open", { contactId: `${L}-mid${i}`, sentAt: minsAgo(300 - i), delivery: ok });
+  for (let i = 0; i < 50; i++) await sentText(L, `l${i}`, "lot_owner_open", { sentAt: minsAgo(55 - i), delivery: ok });
+  for (const i of [3, 11, 19, 27, 35, 43]) {
+    await recordEvent({ store, locationId: L, contactId: `${L}-mid${i}`, party: "agent", type: "unsubscribed", at: minsAgo(200), address: "", source: "conversation", dedupeKey: `unsubscribed:${L}-mid${i}`, data: { via: "sms_keyword", channel: "sms" } });
+  }
+  const r = await runLaneBreaker({ client: ghlStub({}), locationId: L, saved: {}, store, now: NOW, pace: 0 });
+  assert.deepEqual(r.tripped, [{ kind: "lot_owner_open", rule: "rolling_stops" }], JSON.stringify(r.kinds.lot_owner_open));
+  assert.equal(r.kinds.lot_owner_open.rolling.sent, 50);
+  assert.equal(r.kinds.lot_owner_open.rolling.stopSent, 50);
+});
 
 test("a text GHL only says it handed to the carrier is read again next run, not taken as arrived", async () => {
   const L = "loc-handed";
+  await goLive(L);
   const d = await sentText(L, 1, "outreach_open", { sentAt: minsAgo(20) });
   const r = await runLaneBreaker({ client: ghlStub({ [`${L}-m1`]: { status: "sent" } }), locationId: L, saved: {}, store, now: NOW, pace: 0 });
   assert.equal(r.reads, 1);
@@ -111,6 +197,7 @@ test("a text GHL only says it handed to the carrier is read again next run, not 
 
 test("a lane whose first twenty owner texts are carrier-blocked holds the rest of the day's texts", async () => {
   const L = "loc-owners";
+  await goLive(L);
   const statuses = {};
   for (let i = 0; i < 8; i++) {
     await sentText(L, i, "lot_owner_open", { sentAt: minsAgo(60 - i * 5) });
@@ -163,6 +250,7 @@ test("a lane whose first twenty owner texts are carrier-blocked holds the rest o
 
 test("a STOP spike on day-two nudges holds the nudges, not the replies", async () => {
   const L = "loc-nudges";
+  await goLive(L);
   const statuses = {};
   for (let i = 0; i < 20; i++) {
     // Yesterday's first text, today's nudge, same agent.
@@ -186,6 +274,7 @@ test("a STOP spike on day-two nudges holds the nudges, not the replies", async (
 
 test("the breaker never sends anything, and the send loop holds a stopped kind instead of sending it", async () => {
   const L = "loc-never";
+  await goLive(L);
   for (let i = 0; i < 6; i++) await sentText(L, i, "buyer_pulse", { party: "investor", sentAt: minsAgo(40 + i) });
   const statuses = Object.fromEntries(Array.from({ length: 6 }, (_, i) => [`${L}-m${i}`, i < 4 ? BLOCKED : OK]));
   const ghl = ghlStub(statuses);
@@ -215,6 +304,7 @@ test("the breaker never sends anything, and the send loop holds a stopped kind i
 
 test("a lane stays stopped until Matt clears it, and clearing sends nothing and judges it afresh", async () => {
   const L = "loc-clear";
+  await goLive(L);
   for (let i = 0; i < 5; i++) await sentText(L, i, "agent_pulse", { party: "agent", sentAt: minsAgo(50 + i) });
   const statuses = Object.fromEntries(Array.from({ length: 5 }, (_, i) => [`${L}-m${i}`, BLOCKED]));
   const ghl = ghlStub(statuses);
@@ -225,7 +315,7 @@ test("a lane stays stopped until Matt clears it, and clearing sends nothing and 
   assert.deepEqual(st.trips.map((t) => [t.kind, t.label, t.held]), [["agent_pulse", "agent check-ins", 1]]);
 
   const c = await clearLane({ store, locationId: L, kind: "agent_pulse", now: NOW + 60000 });
-  assert.deepEqual(c, { cleared: true, kind: "agent_pulse", released: 1 });
+  assert.deepEqual(c, { cleared: true, kind: "agent_pulse", released: 1, rescheduled: 0 });
   const after = await store.getReplyDraft(q.id);
   assert.equal(after.status, "draft", "still a draft: clearing schedules nothing");
   assert.equal(after.laneHold, undefined);
@@ -242,6 +332,7 @@ test("a lane stays stopped until Matt clears it, and clearing sends nothing and 
 
 test("switched off, the breaker reads nothing and holds nothing", async () => {
   const L = "loc-off";
+  await goLive(L);
   for (let i = 0; i < 5; i++) await sentText(L, i, "outreach_open", { sentAt: minsAgo(30 + i) });
   const ghl = ghlStub(Object.fromEntries(Array.from({ length: 5 }, (_, i) => [`${L}-m${i}`, BLOCKED])));
   const q = await queued(L, 1, "outreach_open");
@@ -251,6 +342,67 @@ test("switched off, the breaker reads nothing and holds nothing", async () => {
   assert.equal(r.off, true);
   assert.equal(ghl.calls.length, 0);
   assert.equal((await store.getReplyDraft(q.id)).status, "scheduled");
+
+  // Switched back on, it starts afresh: what went while it was off doesn't count.
+  _resetLaneBreaker();
+  const on = await maybeRunLaneBreaker({ client: ghl, locationId: L, saved: {}, store, now: NOW + 15 * 60000, pace: 0 });
+  const back = await on.done;
+  assert.deepEqual(back.tripped, [], "the blocks it didn't watch don't stop the lane");
+  assert.equal(back.baselined, true);
+  const doc = (await store.getJobCursor(L, CURSOR_NAME)).doc;
+  assert.equal(doc.offAt, undefined);
+  assert.equal(doc.since.outreach_open, minsOn(15));
+  assert.equal((await store.getReplyDraft(q.id)).status, "scheduled");
+});
+
+test("a lane stopped before the breaker was switched off still shows on the strip, so its held texts aren't stranded", async () => {
+  const L = "loc-off-trip";
+  await goLive(L);
+  for (let i = 0; i < 4; i++) await sentText(L, i, "gatekeeper_text", { sentAt: minsAgo(30 + i) });
+  const ghl = ghlStub(Object.fromEntries(Array.from({ length: 4 }, (_, i) => [`${L}-m${i}`, BLOCKED])));
+  const q = await queued(L, 1, "gatekeeper_text");
+  await runLaneBreaker({ client: ghl, locationId: L, saved: {}, store, now: NOW, pace: 0 });
+  assert.equal((await store.getReplyDraft(q.id)).status, "draft");
+  const off = { conversationAi: { laneBreaker: { enabled: false } } };
+  const st = await laneBreakerStatus({ store, locationId: L, saved: off });
+  assert.equal(st.enabled, false);
+  assert.deepEqual(st.trips.map((t) => [t.kind, t.held]), [["gatekeeper_text", 1]], "still listed for Matt to clear");
+  assert.equal((await laneHoldsFor({ store, locationId: L, saved: off })).size, 0, "off, the send loop holds nothing");
+  const c = await clearLane({ store, locationId: L, kind: "gatekeeper_text", now: NOW + 60000, backOnClock: true, saved: off, random: () => 0 });
+  assert.equal(c.rescheduled, 1);
+  assert.equal((await store.getReplyDraft(q.id)).status, "scheduled");
+});
+
+test("letting a lane send again puts its held texts back on their clock across the machine's day, and sends nothing", async () => {
+  const L = "loc-clock";
+  await goLive(L);
+  for (let i = 0; i < 5; i++) await sentText(L, i, "outreach_nudge", { party: "agent", sentAt: minsAgo(50 + i) });
+  const ghl = ghlStub(Object.fromEntries(Array.from({ length: 5 }, (_, i) => [`${L}-m${i}`, BLOCKED])));
+  const held = [];
+  for (let i = 0; i < 3; i++) held.push(await queued(L, i, "outreach_nudge", { party: "agent" }));
+  await runLaneBreaker({ client: ghl, locationId: L, saved: {}, store, now: NOW, pace: 0 });
+  // One held long ago (a trip that stood over a week): it stays a draft for Matt.
+  const old = await queued(L, 9, "outreach_nudge", { party: "agent" });
+  const stale = await store.getReplyDraft(old.id);
+  await store.updateReplyDraft(old.id, { ...stale, status: "draft", sendAt: null, heldAt: minsAgo(60 * 24 * 6), laneHold: { kind: "outreach_nudge", at: minsAgo(60 * 24 * 6), rule: "early_blocked" }, flags: ["held: the lane breaker stopped agent nudges. Nothing sent"] });
+
+  // 11am Pacific Monday, a 9-to-5 machine day.
+  const saved = { conversationAi: { autoSend: { quietHours: { start: "09:00", end: "19:00", timeZone: "America/Los_Angeles" }, machineUntil: "17:00", nudgeSpreadHours: 8 } } };
+  const c = await clearLane({ store, locationId: L, kind: "outreach_nudge", now: NOW + 60000, backOnClock: true, saved, random: () => 0.5 });
+  assert.deepEqual(c, { cleared: true, kind: "outreach_nudge", released: 4, rescheduled: 3 });
+  for (const d of held) {
+    const h = await store.getReplyDraft(d.id);
+    assert.equal(h.status, "scheduled");
+    assert.equal(h.laneHold, undefined);
+    assert.ok(!h.flags.some((f) => /lane breaker stopped/.test(f)));
+    assert.equal(h.autoSend.reason, "back on its clock: you let the lane send again");
+    const at = Date.parse(h.sendAt);
+    assert.ok(at > NOW && at <= Date.parse("2026-11-25T01:00:00Z"), `inside today's machine hours: ${h.sendAt}`);
+  }
+  const o = await store.getReplyDraft(old.id);
+  assert.equal(o.status, "draft", "held six days ago: it waits for Matt");
+  assert.ok(!o.flags.some((f) => /lane breaker stopped/.test(f)));
+  assert.equal(ghl.sends().length, 0, "nothing sent by the click");
 });
 
 test("the tick writes the cursor before the run and doesn't run twice in fifteen minutes", async () => {
@@ -275,9 +427,12 @@ test("the tick writes the cursor before the run and doesn't run twice in fifteen
 
 test("the Offers strip lists a stopped lane and Matt's click clears it without sending", async () => {
   const L = "loc-route";
+  await goLive(L);
   for (let i = 0; i < 4; i++) await sentText(L, i, "lot_owner_follow", { sentAt: minsAgo(30 + i) });
   const ghl = ghlStub(Object.fromEntries(Array.from({ length: 4 }, (_, i) => [`${L}-m${i}`, BLOCKED])));
+  const q = await queued(L, 1, "lot_owner_follow");
   await runLaneBreaker({ client: ghl, locationId: L, saved: {}, store, now: NOW, pace: 0 });
+  assert.equal((await store.getReplyDraft(q.id)).status, "draft");
 
   const app = express();
   app.use(express.json());
@@ -291,9 +446,11 @@ test("the Offers strip lists a stopped lane and Matt's click clears it without s
     assert.match(s.trips[0].why, /blocked by the carrier/);
     const bad = await fetch(`${B}/api/lane-breaker/clear`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: "anything" }) });
     assert.equal(bad.status, 400);
-    const ok = await (await fetch(`${B}/api/lane-breaker/clear`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: "lot_owner_follow" }) })).json();
+    const ok = await (await fetch(`${B}/api/lane-breaker/clear`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: "lot_owner_follow", backOnClock: true }) })).json();
     assert.equal(ok.ok, true);
     assert.equal(ok.cleared, true);
+    assert.equal(ok.rescheduled, 1, "the held follow-up is back on its clock");
+    assert.equal((await store.getReplyDraft(q.id)).status, "scheduled");
     assert.deepEqual((await (await fetch(`${B}/api/lane-breaker`)).json()).trips, []);
     assert.equal(ghl.sends().length, 0);
   } finally { server.close(); }

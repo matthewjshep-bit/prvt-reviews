@@ -400,6 +400,10 @@ create index if not exists reply_drafts_contact_idx on reply_drafts (location_id
 -- sent drafts by when they went, so its two-hourly window doesn't open every
 -- sent draft's doc to find the last day's.
 create index if not exists reply_drafts_sent_at_idx on reply_drafts (location_id, (doc->>'sentAt')) where status = 'sent';
+-- The lane breaker's read (store.js laneSendsQuery, 2026-11-23): one kind's
+-- sent texts by when they went, every tick, so a rare kind's "last fifty"
+-- doesn't walk two weeks of every sent draft to find its own.
+create index if not exists reply_drafts_lane_sends_idx on reply_drafts (location_id, (doc #>> '{outbound,kind}'), (doc->>'sentAt')) where status = 'sent';
 
 -- Contact record: the app's own memory of every agent and investor — what
 -- they like, what they buy, every deal and offer worked, why they said no.

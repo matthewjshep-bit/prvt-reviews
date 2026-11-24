@@ -7,7 +7,11 @@
 // agent first texts and nudges, agent and buyer check-ins, deal texts,
 // gatekeeper texts):
 //
-//   - today's first sends and the last fifty, from the store;
+//   - today's first sends, the last fifty, and the last fifty old enough for
+//     a STOP to have come, from the store; only what went since the breaker
+//     started watching the kind (`since`, stamped on its first run, so the
+//     blocks from before it existed never trip it on deploy day) and since
+//     Matt last cleared it;
 //   - how the young ones went, read from GHL the way the delivery check reads
 //     them (ghl.js getMessage), at most LANE_MAX_READS a run, ~300 ms apart,
 //     from 5 minutes after the send. The verdict goes on the draft as
@@ -26,8 +30,11 @@
 // nothing is ever sent from here.
 //
 // On by default (conversationAi.laneBreaker.enabled): it only stops sends.
-// Off, nothing is read and nothing is held. Counts, kinds and ids in the
-// cursor and the logs; never a name, a number or what was said.
+// Off, nothing is read from GHL and nothing new is held; the tick only marks
+// the cursor (`offAt`) so that, switched back on, it starts watching afresh.
+// A trip that stood when it was switched off stays on the strip for Matt to
+// clear. Counts, kinds and ids in the cursor and the logs; never a name, a
+// number or what was said.
 
 import { store as defaultStore } from "./store.js";
 import { getMessage as defaultGetMessage } from "./ghl.js";
@@ -37,9 +44,11 @@ import { normalizeConversationAi } from "./shared/conversation-ai.js";
 import { normalizeSlack, slackOn, streamOn } from "./shared/slack-notify.js";
 import { deliveryVerdict } from "./shared/delivery.js";
 import { answersInbound } from "./shared/follow-up.js";
+import { spreadAcrossDay, machineHours } from "./conversation-scheduler.js";
 import {
   LANE_BREAKER_CURSOR, LANE_MAX_READS, LANE_MIN_AGE_MS, LANE_MAX_AGE_MS,
   laneVerdict, laneSince, laneRunGate, stoppedSends, sendRead, heldKinds, heldDraft, releasedDraft, slackTripLine, laneLabel,
+  baselineDoc, goesBackOnClock, backOnClockDraft,
 } from "./shared/lane-breaker.js";
 
 export const CURSOR_NAME = LANE_BREAKER_CURSOR;
@@ -139,9 +148,15 @@ async function readYoung({ client, store, locationId, lanes, now, read, pace, ou
       verdict = { status: "unknown", code: null, checkedAt: iso(now) };
     }
     for (const c of copies.get(s.id) || []) c.laneRead = verdict;
-    // On a fresh read, without touching updatedAt: the verdict is not an edit.
-    const fresh = await store.getReplyDraft(s.id).catch(() => null);
-    if (fresh && !fresh.delivery && !fresh.laneRead) await store.updateReplyDraft(s.id, { ...fresh, laneRead: verdict }).catch(() => {});
+    // Merged in one write, only while no verdict is on it (store.setLaneRead),
+    // without touching updatedAt: the verdict is not an edit, and the delivery
+    // check writing the same draft on its own tick never loses its own.
+    if (typeof store.setLaneRead === "function") {
+      await store.setLaneRead(s.id, verdict).catch(() => {});
+    } else {
+      const fresh = await store.getReplyDraft(s.id).catch(() => null);
+      if (fresh && !fresh.delivery && !fresh.laneRead) await store.updateReplyDraft(s.id, { ...fresh, laneRead: verdict }).catch(() => {});
+    }
   }
 }
 
@@ -156,15 +171,25 @@ export async function runLaneBreaker({ client, locationId, saved = {}, store = d
   const out = { kinds: {}, reads: 0, readErrors: 0, tripped: [], held: {}, posted: 0, finishedAt: null };
   if (!cfg.enabled) return { ...out, off: true, finishedAt: iso(Date.now()) };
   const read = deps.getMessage || defaultGetMessage;
-  const start = await readDoc(store, locationId);
+  // 0. What it watches starts from when it started watching: the first run
+  // stamps `since` on every kind before judging any (and a kind added later,
+  // or every kind after it was switched back on).
+  let start = await readDoc(store, locationId);
+  if (baselineDoc(start, cfg.kinds, now)) {
+    start = await patchDoc(store, locationId, (d) => baselineDoc(d, cfg.kinds, now) || d, now);
+    out.baselined = true;
+  }
 
-  // 1. Each kind's sends: today's first, and the last ones.
+  // 1. Each kind's sends: today's first, the last ones, and the last ones a
+  // STOP has had time to come for.
   const lanes = [];
   for (const kind of cfg.kinds) {
     const since = laneSince(start, kind, { now, cfg });
     const recent = await store.listLaneSends(locationId, kind, { sinceIso: since.rollingFrom, order: "desc", limit: cfg.rollingSends });
     const early = await store.listLaneSends(locationId, kind, { sinceIso: since.earlyFrom, order: "asc", limit: cfg.earlySends });
-    lanes.push({ kind, recent, early });
+    const settled = since.settledBefore < since.rollingFrom ? []
+      : await store.listLaneSends(locationId, kind, { sinceIso: since.rollingFrom, untilIso: since.settledBefore, order: "desc", limit: cfg.rollingSends });
+    lanes.push({ kind, recent, early, settled });
   }
 
   // 2. How the young ones went.
@@ -172,7 +197,7 @@ export async function runLaneBreaker({ client, locationId, saved = {}, store = d
 
   // 3. The STOPs, each against the newest guarded text before it.
   const all = new Map();
-  for (const l of lanes) for (const s of [...l.recent, ...l.early]) all.set(s.id, s);
+  for (const l of lanes) for (const s of [...l.recent, ...l.early, ...l.settled]) all.set(s.id, s);
   const oldest = [...all.values()].reduce((m, s) => (String(s.sentAt) < m ? String(s.sentAt) : m), iso(now));
   const stops = all.size && typeof store.listContactEventsSince === "function"
     ? await store.listContactEventsSince(locationId, oldest, { types: ["unsubscribed"], limit: 5000 }).catch(() => []) : [];
@@ -181,7 +206,7 @@ export async function runLaneBreaker({ client, locationId, saved = {}, store = d
   // 4. The verdict on each kind not already stopped.
   const fresh = [];
   for (const l of lanes) {
-    const v = laneVerdict({ kind: l.kind, early: l.early, recent: l.recent, stopped, cfg });
+    const v = laneVerdict({ kind: l.kind, early: l.early, recent: l.recent, settled: l.settled, stopped, cfg });
     out.kinds[l.kind] = { ...v.counts, trip: v.trip ? v.rule : "" };
     if (v.trip && !start.trips?.[l.kind]) fresh.push({ kind: l.kind, rule: v.rule, why: v.why, counts: v.counts });
   }
@@ -255,15 +280,20 @@ async function postTrips({ store, locationId, saved, doc, tripped, now, deps }) 
 }
 
 /**
- * clearLane({ store, locationId, kind, now }) → { cleared, kind, released }
+ * clearLane({ store, locationId, kind, now, backOnClock, saved, random }) → { cleared, kind, released, rescheduled }
  *
- * Matt's one click: the kind may send by itself again, and it is judged
- * afresh from now (the sends that tripped it no longer count). The drafts it
- * held lose the breaker's flag and stay drafts: nothing is scheduled and
- * nothing is sent. A lane that redrafts its own unsent texts (the lot
- * finder's first text) picks them up on its next run.
+ * Matt's click: the kind may send by itself again, and it is judged afresh
+ * from now (the sends that tripped it no longer count). The drafts it held
+ * lose the breaker's flag. With `backOnClock` (the strip's "Let it send
+ * again"), each one held in the last four days goes back to "scheduled",
+ * spread across the machine's day the way the dial's undo spreads them
+ * (spreadAcrossDay, its hours, weekends and days off): the send loop still
+ * runs every check of its own when each comes due. Older ones, and every one
+ * without `backOnClock` (the strip's "keep them as drafts"), stay drafts. A
+ * lane that redrafts its own unsent texts (the lot finder's first text)
+ * picks a draft up on its next run. Nothing is sent from here.
  */
-export async function clearLane({ store = defaultStore, locationId, kind, now = Date.now() }) {
+export async function clearLane({ store = defaultStore, locationId, kind, now = Date.now(), backOnClock = false, saved = null, random = Math.random }) {
   let was = null;
   await patchDoc(store, locationId, (d) => {
     const trips = { ...(d.trips || {}) };
@@ -273,20 +303,33 @@ export async function clearLane({ store = defaultStore, locationId, kind, now = 
     return { ...d, trips, cleared: { ...(d.cleared || {}), [kind]: { at: iso(now) } }, history };
   }, now);
   let released = 0;
+  let rescheduled = 0;
+  let a = null;
+  if (backOnClock) {
+    const s = saved || (await store.getOfferSettings?.(locationId).catch(() => null)) || {};
+    a = normalizeConversationAi(s?.conversationAi).autoSend || {};
+  }
   const drafts = await store.listReplyDrafts(locationId, { status: "draft", limit: 5000 }).catch(() => []);
   for (const d of drafts) {
     if (d?.laneHold?.kind !== kind) continue;
-    const next = releasedDraft(d, now);
+    const clock = a && goesBackOnClock(d, now);
+    const next = clock
+      ? backOnClockDraft(d, spreadAcrossDay({ now, quietHours: machineHours(a), hours: a.nudgeSpreadHours ?? 8, random, weekends: a.weekends || "all", offDays: a.offDays || [] }), now)
+      : releasedDraft(d, now);
     const wrote = typeof store.updateReplyDraftIf === "function"
       ? await store.updateReplyDraftIf(d.id, "draft", next).catch(() => false)
       : await store.updateReplyDraft(d.id, next).catch(() => false);
-    if (wrote) released++;
+    if (wrote) { released++; if (clock) rescheduled++; }
   }
-  return { cleared: Boolean(was), kind, released };
+  return { cleared: Boolean(was), kind, released, rescheduled };
 }
 
 /**
  * laneBreakerStatus({ store, locationId, saved }) → { enabled, trips: [{ kind, label, at, rule, why, held, counts }], last, history }
+ *
+ * A trip that stood when the breaker was switched off is still listed (and
+ * `enabled` says it's off): its texts are still drafts with the flag on, and
+ * the strip is where Matt clears them.
  */
 export async function laneBreakerStatus({ store = defaultStore, locationId, saved = {} }) {
   const cfg = breakerConfig(saved);
@@ -294,7 +337,7 @@ export async function laneBreakerStatus({ store = defaultStore, locationId, save
   const trips = Object.entries(doc.trips || {}).filter(([, t]) => t?.at)
     .map(([kind, t]) => ({ kind, label: laneLabel(kind), at: t.at, rule: t.rule || "", why: t.why || "", held: Number(t.held) || 0, counts: t.counts || null }))
     .sort((a, b) => String(a.at).localeCompare(String(b.at)));
-  return { enabled: cfg.enabled, trips: cfg.enabled ? trips : [], standing: trips.length, last: doc.last || null, history: (doc.history || []).slice(0, 5) };
+  return { enabled: cfg.enabled, trips, standing: trips.length, last: doc.last || null, history: (doc.history || []).slice(0, 5) };
 }
 
 /* ---------- the tick ---------- */
@@ -312,11 +355,18 @@ export const summarizeLaneBreaker = (r) => ({
 /**
  * maybeRunLaneBreaker({ client, locationId, saved, store, now, deps }) → null | { started: true, tries, done }
  *
- * Off when conversationAi.laneBreaker.enabled is false: nothing is read.
+ * Off when conversationAi.laneBreaker.enabled is false: nothing is read
+ * from GHL or the drafts. The tick only marks the cursor once (`offAt`), so
+ * the first run after it is switched back on starts every kind afresh
+ * (baselineDoc) instead of judging what went while it wasn't watching.
  * The run goes on in the background (`done` settles when it's over).
  */
 export async function maybeRunLaneBreaker({ client, locationId, saved = {}, store = defaultStore, now = Date.now(), deps = {}, pace = PACE_MS }) {
-  if (!breakerConfig(saved).enabled) return null;
+  if (!breakerConfig(saved).enabled) {
+    const doc = await readDoc(store, locationId);
+    if (doc.since && !doc.offAt) await patchDoc(store, locationId, (d) => (d.offAt ? d : { ...d, offAt: iso(now) }), now);
+    return null;
+  }
   if (running.has(locationId)) return null;
   const doc = await readDoc(store, locationId);
   const gate = laneRunGate(doc, now);

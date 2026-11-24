@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import {
   normalizeLaneBreaker, laneVerdict, stoppedSends, carrierBlocked, sendRead, heldKinds, holdFlag, isHoldFlag, slackTripLine,
   laneRunGate, laneSince, pacificDayStart, pacificDay, LANE_BREAKER_DEFAULTS, LANE_MAX_DAILY_TRIES, LANE_STALE_RUN_MS, LANE_KINDS,
+  baselineDoc, goesBackOnClock, backOnClockDraft, heldDraft,
 } from "./lane-breaker.js";
 import { normalizeConversationAi } from "./conversation-ai.js";
 
@@ -31,6 +32,9 @@ test("the lane breaker ships on, a save that switches it off keeps it off, and n
   assert.equal(silly.minCount, 1);
   assert.deepEqual(silly.kinds, ["lot_owner_open"]);
   assert.equal(normalizeLaneBreaker({ earlyBlocked: "" }).earlyBlocked, LANE_BREAKER_DEFAULTS.earlyBlocked);
+  assert.equal(normalizeConversationAi({}).laneBreaker.stopSettleHours, 3);
+  assert.equal(normalizeConversationAi({ laneBreaker: { stopSettleHours: 6 } }).laneBreaker.stopSettleHours, 6, "kept on save");
+  assert.equal(normalizeLaneBreaker({ stopSettleHours: 500 }).stopSettleHours, 72);
 });
 
 test("a lane whose first owner texts come back carrier-blocked trips at the fourth block, without waiting for twenty", () => {
@@ -121,4 +125,44 @@ test("today starts at midnight Pacific, and a lane Matt cleared is judged only o
   assert.equal(s.rollingFrom, minsAgo(30));
   const t = laneSince({}, "lot_owner_open", { now: NOW });
   assert.equal(t.earlyFrom, "2026-11-24T08:00:00.000Z");
+});
+
+test("the breaker watches from its first run, not the two weeks before it existed", () => {
+  const first = baselineDoc({}, LANE_KINDS, NOW);
+  assert.deepEqual(Object.keys(first.since).sort(), [...LANE_KINDS].sort());
+  assert.ok(Object.values(first.since).every((t) => t === minsAgo(0)));
+  assert.equal(baselineDoc(first, LANE_KINDS, NOW + 60000), null, "stamped once");
+  const s = laneSince(first, "lot_owner_open", { now: NOW + 60 * 60000 });
+  assert.equal(s.rollingFrom, minsAgo(0), "nothing from before it started counts");
+  assert.equal(s.earlyFrom, minsAgo(0), "nor this morning's sends before it started");
+  // A kind cleared by hand needs no stamp; one added later gets its own.
+  const later = baselineDoc({ since: { lot_owner_open: minsAgo(600) }, cleared: { agent_pulse: { at: minsAgo(30) } } }, ["lot_owner_open", "agent_pulse", "blast_open"], NOW);
+  assert.deepEqual(later.since, { lot_owner_open: minsAgo(600), blast_open: minsAgo(0) });
+  // Switched back on after being off: every kind starts again.
+  const back = baselineDoc({ since: { lot_owner_open: minsAgo(6000) }, offAt: minsAgo(3000) }, ["lot_owner_open"], NOW);
+  assert.deepEqual(back.since, { lot_owner_open: minsAgo(0) });
+  assert.equal("offAt" in back, false);
+});
+
+test("STOPs are judged on texts old enough for a STOP to have come", () => {
+  const recent = Array.from({ length: 50 }, (_, i) => send(i, ok));
+  const settled = Array.from({ length: 50 }, (_, i) => send(100 + i, ok));
+  const stopped = new Set(["s101", "s111", "s121", "s131"]);
+  const v = laneVerdict({ kind: "lot_owner_open", recent, settled, stopped });
+  assert.equal(v.rule, "rolling_stops");
+  assert.equal(v.counts.rolling.stopSent, 50);
+  assert.equal(laneVerdict({ kind: "lot_owner_open", recent, settled: [], stopped }).trip, false, "nothing settled yet: no STOP verdict");
+  assert.equal(laneSince({}, "lot_owner_open", { now: NOW }).settledBefore, minsAgo(180));
+});
+
+test("a held text goes back on its clock when the lane is cleared, unless it has waited more than four days", () => {
+  const h = heldDraft({ id: "d1", status: "scheduled", sendAt: minsAgo(-30), flags: ["reads fine"], outbound: { kind: "outreach_nudge" } }, "outreach_nudge", { at: minsAgo(60), why: "4 of 8" }, NOW - 60 * 60000);
+  assert.equal(goesBackOnClock(h, NOW), true);
+  assert.equal(goesBackOnClock({ ...h, heldAt: minsAgo(60 * 24 * 5) }, NOW), false);
+  const b = backOnClockDraft(h, minsAgo(-120), NOW);
+  assert.equal(b.status, "scheduled");
+  assert.equal(b.sendAt, minsAgo(-120));
+  assert.equal(b.laneHold, undefined);
+  assert.deepEqual(b.flags, ["reads fine"], "only the breaker's flag comes off");
+  assert.equal(b.autoSend.decided, true);
 });

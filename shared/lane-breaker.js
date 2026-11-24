@@ -17,9 +17,16 @@
 //     the count is reached, so a bad morning trips by the fourth block, not
 //     after the twentieth send;
 //   - rolling: the last `rollingSends` (50), once `rollingMin` (20) have a
-//     verdict. 30007 on `rollingBlockedPct` (10%) of those read, or a STOP
-//     within `stopHours` (72) after `rollingStopPct` (8%) of those sent,
-//     trips it. Never on fewer than `minCount` (4) of either.
+//     verdict, 30007 on `rollingBlockedPct` (10%) of those read trips it;
+//     and of the last `rollingSends` sent at least `stopSettleHours` (3) ago
+//     (a STOP takes a while to come, and on a 469-text day the newest fifty
+//     are the last hour's), a STOP within `stopHours` (72) after
+//     `rollingStopPct` (8%) of them trips it. Never on fewer than `minCount`
+//     (4) of either.
+//
+// Only sends since the breaker went live count (`since` on the cursor,
+// written on its first run: 2026-11-23's blocks under wording since fixed
+// must not stop a lane on deploy day), and since Matt last cleared the kind.
 //
 // A STOP counts against the newest text of a guarded kind we sent them in
 // the `stopHours` before it: a STOP the day after a nudge is the nudge's,
@@ -75,6 +82,8 @@ export const LANE_BREAKER_DEFAULTS = Object.freeze({
   rollingStopPct: 8,
   minCount: 4,
   stopHours: 72,
+  // A send is judged for STOPs once it is this old.
+  stopSettleHours: 3,
   // How far back the rolling window reaches.
   rollingDays: 14,
 });
@@ -86,7 +95,7 @@ const int = (v, def, lo, hi) => {
 
 /**
  * normalizeLaneBreaker(v) → { enabled, kinds, earlySends, earlyBlocked, earlyStops,
- *   rollingSends, rollingMin, rollingBlockedPct, rollingStopPct, minCount, stopHours, rollingDays }
+ *   rollingSends, rollingMin, rollingBlockedPct, rollingStopPct, minCount, stopHours, stopSettleHours, rollingDays }
  *
  * On unless it says `enabled: false`. A threshold can be made stricter or
  * looser by a save, but never off: each has a floor.
@@ -111,6 +120,7 @@ export function normalizeLaneBreaker(v = {}) {
     rollingStopPct: int(o.rollingStopPct, D.rollingStopPct, 1, 100),
     minCount: int(o.minCount, D.minCount, 1, 50),
     stopHours: int(o.stopHours, D.stopHours, 1, 24 * 14),
+    stopSettleHours: int(o.stopSettleHours, D.stopSettleHours, 0, 72),
     rollingDays: int(o.rollingDays, D.rollingDays, 1, 60),
   };
 }
@@ -160,27 +170,30 @@ export function stoppedSends(sends = [], stops = [], { stopHours = LANE_BREAKER_
 const pct = (n, d) => (d ? Math.round((n / d) * 1000) / 10 : 0);
 
 /**
- * laneVerdict({ kind, early, recent, stopped, cfg }) → { trip, rule, why, counts }
+ * laneVerdict({ kind, early, recent, settled, stopped, cfg }) → { trip, rule, why, counts }
  *
  * `early`: today's first sends of the kind, oldest first (only the first
  * `earlySends` are read). `recent`: its last sends, newest first (only the
- * first `rollingSends`). Both only since Matt last cleared the kind.
+ * first `rollingSends`), for blocks. `settled`: its last sends at least
+ * `stopSettleHours` old, newest first, for STOPs (`recent` when not given).
+ * All only since the breaker went live and since Matt last cleared the kind.
  * `stopped`: stoppedSends' Set. `rule` is early_blocked | early_stops |
  * rolling_blocked | rolling_stops, or "" with no trip.
  */
-export function laneVerdict({ kind, early = [], recent = [], stopped = new Set(), cfg = LANE_BREAKER_DEFAULTS } = {}) {
+export function laneVerdict({ kind, early = [], recent = [], settled = null, stopped = new Set(), cfg = LANE_BREAKER_DEFAULTS } = {}) {
   const c = normalizeLaneBreaker(cfg);
   const e = (early || []).slice(0, c.earlySends);
   const r = (recent || []).slice(0, c.rollingSends);
+  const st = (settled || recent || []).slice(0, c.rollingSends);
   const eRead = e.filter(sendRead).length;
   const eBlocked = e.filter(carrierBlocked).length;
   const eStops = e.filter((s) => stopped.has(s.id)).length;
   const rRead = r.filter(sendRead).length;
   const rBlocked = r.filter(carrierBlocked).length;
-  const rStops = r.filter((s) => stopped.has(s.id)).length;
+  const rStops = st.filter((s) => stopped.has(s.id)).length;
   const counts = {
     early: { sent: e.length, read: eRead, blocked: eBlocked, stops: eStops },
-    rolling: { sent: r.length, read: rRead, blocked: rBlocked, stops: rStops, blockedPct: pct(rBlocked, rRead), stopPct: pct(rStops, r.length) },
+    rolling: { sent: r.length, read: rRead, blocked: rBlocked, stopSent: st.length, stops: rStops, blockedPct: pct(rBlocked, rRead), stopPct: pct(rStops, st.length) },
   };
   const label = laneLabel(kind);
   const trip = (rule, why) => ({ trip: true, rule, why, counts });
@@ -188,8 +201,8 @@ export function laneVerdict({ kind, early = [], recent = [], stopped = new Set()
   if (eStops >= c.earlyStops) return trip("early_stops", `${eStops} of the first ${e.length} ${label} today got a STOP`);
   const needBlocked = Math.max(c.minCount, Math.ceil((c.rollingBlockedPct * rRead) / 100));
   if (rRead >= c.rollingMin && rBlocked >= needBlocked) return trip("rolling_blocked", `${rBlocked} of the last ${rRead} ${label} we could read were blocked by the carrier (30007)`);
-  const needStops = Math.max(c.minCount, Math.ceil((c.rollingStopPct * r.length) / 100));
-  if (r.length >= c.rollingMin && rStops >= needStops) return trip("rolling_stops", `${rStops} of the last ${r.length} ${label} got a STOP within ${c.stopHours} hours`);
+  const needStops = Math.max(c.minCount, Math.ceil((c.rollingStopPct * st.length) / 100));
+  if (st.length >= c.rollingMin && rStops >= needStops) return trip("rolling_stops", `${rStops} of the last ${st.length} ${label} got a STOP within ${c.stopHours} hours`);
   return { trip: false, rule: "", why: "", counts };
 }
 
@@ -234,6 +247,58 @@ export function releasedDraft(d = {}, now = Date.now()) {
     flags: (d.flags || []).filter((f) => !isHoldFlag(f)),
     updatedAt: ts,
   };
+}
+
+// How long a held text may wait and still go back on its clock when Matt
+// lets its lane send again: a long weekend. Older ones stay drafts for him.
+export const LANE_BACK_ON_CLOCK_MS = 4 * DAY_MS;
+export const BACK_ON_CLOCK_FLAG = "back on its clock: you let the lane send again";
+
+/** goesBackOnClock(draft, now) → whether a held draft is young enough to be scheduled again on the clear. */
+export const goesBackOnClock = (d = {}, now = Date.now()) => {
+  const held = ms(d.heldAt) ?? ms(d.laneHold?.at);
+  return held != null && now - held <= LANE_BACK_ON_CLOCK_MS;
+};
+
+/**
+ * backOnClockDraft(draft, sendAt, now) → the held draft put back to go by
+ * itself at `sendAt` (spread across the machine's day by the runner, the way
+ * the dial's undo does), once Matt lets its lane send again. The send loop
+ * still runs every check of its own when it comes due (a live thread, the
+ * kill switch, the machine's hours, a stood-aside); nothing is sent here.
+ */
+export function backOnClockDraft(d = {}, sendAt, now = Date.now()) {
+  const ts = new Date(now).toISOString();
+  const { laneHold, ...rest } = d;
+  return {
+    ...rest,
+    status: "scheduled", sendAt, scheduledAt: ts, heldAt: null,
+    laneCleared: { kind: laneHold?.kind || "", heldAt: laneHold?.at || null, clearedAt: ts, backOnClock: true },
+    autoSend: { ...(d.autoSend || {}), decided: true, reason: BACK_ON_CLOCK_FLAG },
+    flags: (d.flags || []).filter((f) => !isHoldFlag(f)),
+    updatedAt: ts,
+  };
+}
+
+/**
+ * baselineDoc(doc, kinds, now) → the cursor with `since.<kind>` stamped for
+ * every watched kind that has none (and no clear), so the breaker judges only
+ * what went after it started watching. The first run after the deploy, a kind
+ * added to `laneBreaker.kinds` later, and the first run after it was switched
+ * back on (`offAt`, written by the tick while it is off: every kind starts
+ * again) all start from `now`. Returns null when nothing changes.
+ */
+export function baselineDoc(doc = {}, kinds = LANE_KINDS, now = Date.now()) {
+  const d = doc && typeof doc === "object" ? doc : {};
+  const ts = new Date(now).toISOString();
+  const since = { ...(d.since || {}) };
+  let changed = false;
+  for (const k of kinds || []) {
+    if (d.offAt || (!since[k] && !d.cleared?.[k]?.at)) { since[k] = ts; changed = true; }
+  }
+  if (!changed && !d.offAt) return null;
+  const { offAt, ...rest } = d;
+  return { ...rest, since };
 }
 
 /**
@@ -305,14 +370,22 @@ export function laneRunGate(doc = {}, now = Date.now()) {
   return { go: true, why: "", day, tries: triesToday + 1, stale };
 }
 
-/** The window a kind is judged on: since Matt last cleared it, and no further back than `rollingDays`. */
+/**
+ * laneSince(doc, kind, { now, cfg }) → { rollingFrom, earlyFrom, settledBefore }
+ *
+ * The window a kind is judged on: since the breaker started watching it
+ * (`since`, baselineDoc), since Matt last cleared it, and no further back
+ * than `rollingDays`. `settledBefore`: the STOP window takes sends up to
+ * `stopSettleHours` ago.
+ */
 export function laneSince(doc = {}, kind, { now = Date.now(), cfg = LANE_BREAKER_DEFAULTS } = {}) {
   const c = normalizeLaneBreaker(cfg);
-  const cleared = ms(doc?.cleared?.[kind]?.at);
+  const from = Math.max(ms(doc?.cleared?.[kind]?.at) ?? 0, ms(doc?.since?.[kind]) ?? 0);
   const rolling = now - c.rollingDays * DAY_MS;
   const early = pacificDayStart(now);
   return {
-    rollingFrom: new Date(Math.max(rolling, cleared ?? 0)).toISOString(),
-    earlyFrom: new Date(Math.max(early, cleared ?? 0)).toISOString(),
+    rollingFrom: new Date(Math.max(rolling, from)).toISOString(),
+    earlyFrom: new Date(Math.max(early, from)).toISOString(),
+    settledBefore: new Date(now - c.stopSettleHours * HOUR_MS).toISOString(),
   };
 }
