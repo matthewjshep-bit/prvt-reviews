@@ -379,7 +379,7 @@ export default function OfferApp() {
         )}
         {(view === "history" || view === "deals") && <LaneBreakerStrip />}
         {/* Luxury: homeowners who answered a lot text and wait on Matt's call and number. */}
-        {APP_MODE === "luxury" && (view === "history" || view === "lots") && <OwnersAnswered />}
+        {lane === "luxury" && (view === "history" || view === "lots") && <OwnersAnswered />}
         {view === "history" && (
           <OffersHistory key={lane}
             onNew={(contactId) => { setEditing(null); setInitialContactId(contactId); setFormNonce((n) => n + 1); go({ view: "new" }); }}
