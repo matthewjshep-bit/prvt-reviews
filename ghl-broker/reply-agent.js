@@ -8142,8 +8142,10 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
     }
     // A bot-off tag ("stop bot") put on them since their deal text was
     // queued (2026-10-21): it waits for your Send, as it would have if the
-    // tag had been there when it was queued (dispo-autopilot.js).
-    if (d.outbound?.kind === "blast_open") {
+    // tag had been there when it was queued (dispo-autopilot.js). The cold
+    // intro and check-in emails too (2026-11-23 audit, FT-7): they are the
+    // bot's, and the tag holds the bot.
+    if (["blast_open", "outreach_email", "checkin_email"].includes(d.outbound?.kind)) {
       const tag = matchTagPatterns(contact?.tags || [], configNow.routing?.botOffTags || [])[0];
       if (tag) {
         const ts = new Date(now).toISOString();

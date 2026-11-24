@@ -28,6 +28,7 @@ import {
 import { OUTREACH_NUDGE_WINDOW_DAYS } from "./shared/follow-up.js";
 import { optOutTagsOf, optedOutReason } from "./shared/opt-out.js";
 import { optedOutFor } from "./opt-out.js";
+import { matchTagPatterns } from "./conversation-party.js";
 import { voiceFlags, hardVoiceKeys, voiceLine } from "./shared/voice.js";
 
 const DAY_MS = 86400000;
@@ -120,6 +121,11 @@ async function queueEmails({ client, store, locationId, saved, sendsEnabled, now
     if (!contact) { out.rows.push({ ...row, status: "skipped", reason: "couldn't read the contact in GHL" }); continue; }
     if (!String(contact.email || "").trim()) { out.rows.push({ ...row, status: "skipped", reason: "no email in GHL" }); continue; }
     if (emailUnsubscribed(contact)) { out.rows.push({ ...row, status: "skipped", reason: "they opted out of email" }); continue; }
+    // A bot-off tag ("stop bot"): not an opt-out (it's Matt's to take off
+    // again), but these emails are the bot's, so they wait while it's on
+    // (2026-11-23 audit, FT-7).
+    const botOff = matchTagPatterns(contact.tags || [], config.routing?.botOffTags || [])[0];
+    if (botOff) { out.rows.push({ ...row, status: "skipped", reason: `bot is off for this contact (tag: ${botOff})` }); continue; }
     // An opt-out on any channel (Matt, 2026-11-09): a STOP by text, "take me
     // off your list", a do-not-text tag. Until then an agent who texted STOP
     // still got the intro and every check-in email.
