@@ -259,3 +259,42 @@ test("their number on a house we passed on keeps the card out of Needs Matt", as
   assert.equal(r.needs, 1);
   assert.equal((await store.getOffer("o-ek")).status, "we_passed", "our pass stands");
 });
+
+// 2026-11-23 review of the retry hold (AH-2): the pass clock held every
+// stopped-early draft until its retry, but some never get one — too old for
+// the timer, a rejected key nobody can name, the timers or the key check
+// switched off. Those sat on Needs Matt with no pass date for good.
+test("a stopped-early draft no retry will ever reach goes back on the pass clock; one a retry can still reach waits", async () => {
+  const loc = "loc-retry-hold";
+  const ghl = ghlWith(STAGES);
+  const old = 24 + 72 + 1;
+  const APIFY = "stopped early — Zillow comps lookup failed (Apify 401)";
+  const make = async (who, address, held, ageDays) => {
+    await store.createOffer({ id: `o-${who}`, locationId: loc, contactId: who, address, status: "draft", cashAmount: 0, autoUnderwrite: { held: [held] } });
+    const o = await store.getOffer(`o-${who}`);
+    await store.updateOffer(o.id, { ...o, createdAt: new Date(NOW - ageDays * 86400000).toISOString() });
+  };
+  await make("ru", "31 Alder St, Kent, WA", APIFY, 22);                                   // past the retry's 21 days
+  await make("sy", "32 Alder St, Kent, WA", "stopped early — HTTP 401", 5);              // whose key? nobody can say
+  await make("ty", "33 Alder St, Kent, WA", APIFY, 5);                                    // a retry can still come
+  await make("uma", "34 Alder St, Kent, WA", "stopped early — 403 Alder St not found", 5); // a street number, not a key
+  const row = (who) => ({ id: `price_it:o-${who}`, kind: "price_it", contactId: who, offerId: `o-${who}`, address: `x ${who}`, readyAt: hoursAgo(old) });
+  const rows = ["ru", "sy", "ty", "uma"].map(row);
+  const retryOn = { ...ON, conversationAi: { enabled: true, driver: { timers: { enabled: true } } }, keyHealth: { enabled: true } };
+  await runNeedsMatt({ store, locationId: loc, client: ghl, ghl, saved: retryOn, now: NOW - 73 * 3600000,
+    deps: { pipelineFor: pipelineFor(rows.map((x) => ({ ...x, readyAt: new Date(Date.parse(x.readyAt) - 73 * 3600000).toISOString() }))), syncAgentCard: syncStub().fn } });
+  const r = await runNeedsMatt({ store, locationId: loc, client: ghl, ghl, saved: retryOn, now: NOW, deps: { pipelineFor: pipelineFor(rows), syncAgentCard: syncStub().fn } });
+  assert.deepEqual(r.passDue.map((x) => x.offerId).sort(), ["o-ru", "o-sy", "o-uma"]);
+  assert.deepEqual(r.passed.map((x) => x.offerId).sort(), ["o-ru", "o-sy", "o-uma"]);
+  assert.equal((await store.getOffer("o-ty")).status, "draft", "its retry can still come: it waits");
+
+  // The key check switched off: no retry of a rejected key will come, so it goes on the clock.
+  const loc2 = "loc-retry-hold-off";
+  await store.createOffer({ id: "o-vi", locationId: loc2, contactId: "vi", address: "35 Alder St, Kent, WA", status: "draft", cashAmount: 0, autoUnderwrite: { held: [APIFY] } });
+  const vi = [{ ...row("vi") }];
+  const keyOff = { ...retryOn, keyHealth: { enabled: false } };
+  await runNeedsMatt({ store, locationId: loc2, client: ghl, ghl, saved: keyOff, now: NOW - 73 * 3600000,
+    deps: { pipelineFor: pipelineFor(vi.map((x) => ({ ...x, readyAt: new Date(Date.parse(x.readyAt) - 73 * 3600000).toISOString() }))), syncAgentCard: syncStub().fn } });
+  const r2 = await runNeedsMatt({ store, locationId: loc2, client: ghl, ghl, saved: keyOff, now: NOW, deps: { pipelineFor: pipelineFor(vi), syncAgentCard: syncStub().fn } });
+  assert.deepEqual(r2.passed, [{ contactId: "vi", offerId: "o-vi" }]);
+});

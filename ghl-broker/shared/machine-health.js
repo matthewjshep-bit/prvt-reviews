@@ -48,10 +48,25 @@ export const KEY_RECHECK_MS = 60 * 60000;
 export const KEY_RETRY_GAP_MS = 20 * 60000;
 export const KEY_STALE_RUN_MS = 10 * 60000;
 export const KEY_MAX_DAILY_TRIES = 16;
+// A key's read is trusted this long: past it the check has stopped (switched
+// off, or failing to run) and the line is dropped, not kept red forever.
+export const KEY_READ_FRESH_MS = 26 * 60 * 60000;
+
+/**
+ * statusCodeIn(codes) → a regex source matching an HTTP status written the
+ * ways our errors write one: after a provider or HTTP word ("Apify 401",
+ * "HTTP 403", "GHL 502", "-> 429", "status: 500"), or on its own in brackets
+ * or at the start ("(401)", "401 {...}", "429"). A bare number with words
+ * after it, such as a street number ("403 Elm St"), is not one.
+ */
+export function statusCodeIn(codes) {
+  const ctx = String.raw`(?:HTTP|status|code|Apify|API|GHL|Bricked|RentCast|Tracerfy|Anthropic|Claude|Zillow|said|answered|returned|error)\s*:?\s*|->\s*`;
+  return String.raw`(?:${ctx})${codes}\b|(?:^|[(\[])\s*${codes}(?=\s*(?:[)\]:,{(]|$))`;
+}
 
 // A provider saying the key itself is no good (or out of money), not a
 // network wobble. Read from an HTTP status or an error's words.
-export const AUTH_FAILURE = /\b40[123]\b|unauthori[sz]ed|forbidden|authentication[_ ]error|invalid[_ ]?(api[_ ]?)?key|payment required|out of credits/i;
+export const AUTH_FAILURE = new RegExp(String.raw`${statusCodeIn("40[123]")}|unauthori[sz]ed|forbidden|authentication[_ ]error|invalid[_ ]?(api[_ ]?)?key|payment required|out of credits`, "i");
 export const AUTH_STATUSES = new Set([401, 402, 403]);
 
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
@@ -148,13 +163,21 @@ const sinceWord = (since, now) => {
  *
  * What's wrong with the keys, in Matt's words: a key its provider rejects,
  * and Apify's month past APIFY_WARN_PCT of its limit. A read that got no
- * answer isn't a trouble; nor is a key that was never saved.
+ * answer isn't a trouble; nor is a key that was never saved. Only while the
+ * check is switched on (`enabled`, settings.keyHealth) and only from a read
+ * in the last KEY_READ_FRESH_MS, so a key fixed after the check stopped
+ * never stays red.
  */
-export function keyTroubles(doc = {}, { now = Date.now() } = {}) {
+export function keyTroubles(doc = {}, { now = Date.now(), enabled = true } = {}) {
   const out = [];
+  // The check switched off, or a read older than a day (the check stopped):
+  // what it last saw is no longer known, so nothing is said on it.
+  if (!enabled) return out;
   for (const [provider, p] of Object.entries(KEY_PROVIDERS)) {
     const k = doc?.keys?.[provider];
     if (!k) continue;
+    const read = ms(k.checkedAt);
+    if (read == null || now - read > KEY_READ_FRESH_MS) continue;
     if (k.ok === false) {
       const status = k.status ? ` (HTTP ${k.status})` : "";
       out.push({ id: `key:${provider}`, provider, kind: "key", since: k.failingSince || k.checkedAt || null,
@@ -177,31 +200,51 @@ export const STOPPER_AREAS = new Set([
   "underwrite", "tier-one-underwrite", "underwrite-queue", "outreach", "lot-finder", "price-watch", "delivery-watch",
   "follow-up", "agent-pulse", "buyer-pulse", "gatekeepers", "dispo-waves",
 ]);
-export const STOPPER_JOBS = new Set(["outreach", "followUp", "agentPulse", "buyerPulse", "priceWatch", "deliveryWatch", "lotFinder", "gatekeepers", "dispo", "uwQueue"]);
+// Every job here has a switch in ghl-broker/job-switches.js: a stopper is a
+// switched-on job, and one with no switch could never be one.
+export const STOPPER_JOBS = new Set(["outreach", "followUp", "agentPulse", "buyerPulse", "priceWatch", "deliveryWatch", "lotFinder", "gatekeepers", "dispo"]);
 
-/** errorIsStopper(appError) → an auth failure in a revenue lane (a tick job's `tick:<area>` counts). */
-export function errorIsStopper(e = {}) {
+/** stopperKindOfError(appError) → an auth failure in a revenue lane, whenever it happened. */
+export function stopperKindOfError(e = {}) {
   const area = String(e?.area || "").replace(/^tick:/, "");
   return STOPPER_AREAS.has(area) && AUTH_FAILURE.test(String(e?.message || ""));
 }
 
 /**
- * jobIsStopper(job, switches) → a switched-on revenue job (shared/line.js
- * lineJobs row) that stopped running, or failed on a rejected key, or failed
- * twice today.
+ * errorIsStopper(appError, { now }) → an auth failure in a revenue lane (a
+ * tick job's `tick:<area>` counts) that happened today, Pacific: one that
+ * happened yesterday and never came back is not told again after midnight.
  */
-export function jobIsStopper(j = {}, switches = {}) {
-  if (!STOPPER_JOBS.has(j?.name) || switches?.[j.name] !== true) return false;
-  if (j.late) return true;
-  return Boolean(j.failed) && (Number(j.tries) >= 2 || AUTH_FAILURE.test(String(j.error || "")));
+export function errorIsStopper(e = {}, { now = Date.now() } = {}) {
+  if (!stopperKindOfError(e)) return false;
+  const last = ms(e?.lastAt) ?? ms(e?.firstAt);
+  return last != null && ptDay(last) === ptDay(now);
 }
 
-/** stopperText(kind, row) → the one line for the strip: a job or an error, no contact. */
-export function stopperText(kind, r = {}) {
+/** triesToday(job, now) → the job's tries when its last run was today, Pacific; else 0 (yesterday's count). */
+export function triesToday(j = {}, now = Date.now()) {
+  const last = ms(j?.lastRunAt);
+  return last != null && ptDay(last) === ptDay(now) ? Number(j.tries) || 0 : 0;
+}
+
+/**
+ * jobIsStopper(job, switches, { now }) → a switched-on revenue job
+ * (shared/line.js lineJobs row) that stopped running, or failed on a rejected
+ * key, or failed twice today.
+ */
+export function jobIsStopper(j = {}, switches = {}, { now = Date.now() } = {}) {
+  if (!STOPPER_JOBS.has(j?.name) || switches?.[j.name] !== true) return false;
+  if (j.late) return true;
+  return Boolean(j.failed) && (triesToday(j, now) >= 2 || AUTH_FAILURE.test(String(j.error || "")));
+}
+
+/** stopperText(kind, row, { now }) → the one line for the strip: a job or an error, no contact. */
+export function stopperText(kind, r = {}, { now = Date.now() } = {}) {
   if (kind === "job") {
+    const n = triesToday(r, now);
     return r.late
       ? `${r.label || r.name} hasn't run${r.hoursAgo != null ? ` in ${r.hoursAgo}h` : ""}.`
-      : `${r.label || r.name} failed${Number(r.tries) > 1 ? ` ${r.tries} times today` : ""}${r.error ? `: ${String(r.error).slice(0, 120)}` : "."}`;
+      : `${r.label || r.name} failed${n > 1 ? ` ${n} times today` : ""}${r.error ? `: ${String(r.error).slice(0, 120)}` : "."}`;
   }
   return `Errors in ${String(r.area || "the app").replace(/^tick:/, "")}: ${String(r.message || "").slice(0, 120)}`;
 }
@@ -209,12 +252,13 @@ export function stopperText(kind, r = {}) {
 /**
  * machineTrouble({ keyHealth, stoppers, now }) → [{ id, text, since }]
  *
- * The strip's lines: the keys first, then the stoppers the Slack runner last
+ * The strip's lines: the keys first (only while the check is on,
+ * `keyCheckOn`), then the stoppers the Slack runner last
  * saw — dropped once that read is over an hour old (Slack off, or stopped),
  * so a stale line never sits there.
  */
-export function machineTrouble({ keyHealth = null, stoppers = null, now = Date.now() } = {}) {
-  const keys = keyTroubles(keyHealth?.doc || keyHealth || {}, { now }).map(({ id, text, since }) => ({ id, text, since }));
+export function machineTrouble({ keyHealth = null, stoppers = null, keyCheckOn = true, now = Date.now() } = {}) {
+  const keys = keyTroubles(keyHealth?.doc || keyHealth || {}, { now, enabled: keyCheckOn }).map(({ id, text, since }) => ({ id, text, since }));
   const s = stoppers?.doc || stoppers || {};
   const fresh = ms(s.at) != null && now - ms(s.at) <= 60 * 60000;
   const more = fresh ? (s.stoppers || []).filter((x) => x?.id && x.text).map(({ id, text, since }) => ({ id, text: String(text).slice(0, 200), since: since || null })) : [];

@@ -96,13 +96,23 @@ test("a provider that doesn't answer isn't called a rejected key", async () => {
 
 test("the strip on Offers and Deals shows the key lines and fresh stoppers only", () => {
   const now = TUE(12);
-  const keyHealth = { doc: { keys: { apify: { ok: false, status: 403, failingSince: new Date(TUE(7) - 86400000).toISOString() } } } };
+  const keyHealth = { doc: { keys: { apify: { ok: false, status: 403, failingSince: new Date(TUE(7) - 86400000).toISOString(), checkedAt: new Date(TUE(11)).toISOString() } } } };
   const fresh = { doc: { at: new Date(now - 10 * 60000).toISOString(), stoppers: [{ id: "job:outreach", text: "Outreach autopilot (county pull) hasn't run in 30h." }] } };
   const lines = machineTrouble({ keyHealth, stoppers: fresh, now });
   assert.equal(lines.length, 2);
   assert.match(lines[0].text, /rejected since Mon \(HTTP 403\)/);
   const stale = { doc: { ...fresh.doc, at: new Date(now - 3 * 3600000).toISOString() } };
   assert.equal(machineTrouble({ keyHealth: null, stoppers: stale, now }).length, 0, "a stopper list nobody refreshed in hours is not shown");
+});
+
+// Review, 2026-11-23: a key rejected and then the check switched off (or
+// stopped running) kept the strip red, and #machine @Matt, every day for good.
+test("a key line goes once the key check is switched off or its last read is over a day old", () => {
+  const now = TUE(12);
+  const read = (at) => ({ doc: { keys: { apify: { ok: false, status: 401, failingSince: new Date(at).toISOString(), checkedAt: new Date(at).toISOString() } } } });
+  assert.equal(machineTrouble({ keyHealth: read(TUE(11)), now }).length, 1);
+  assert.equal(machineTrouble({ keyHealth: read(TUE(11)), keyCheckOn: false, now }).length, 0, "switched off: what it last read is not known any more");
+  assert.equal(machineTrouble({ keyHealth: read(now - 27 * 3600000), now }).length, 0, "a read the check never followed up");
 });
 
 test("the key check's gate retries a run that died, and stops at its daily cap", () => {

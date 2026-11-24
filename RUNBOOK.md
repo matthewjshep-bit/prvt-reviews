@@ -6965,16 +6965,22 @@ were a #machine line nobody was tagged on and Reports → Line. Now:
   again every hour until it works. Kept on the `keyHealth` cursor; on the
   Line as "Key check".
 - **#machine**: a rejected key is an @Matt line the first day and every day
-  it lasts; Apify past 80% of its monthly limit is its own line. Failures that
+  it lasts; Apify past 80% of its monthly limit is its own line. Key lines
+  come only while the check is switched on and from a read in the last 26
+  hours, so a key fixed after the check stopped never stays red (the check
+  itself stopping is its own "Key check hasn't run" line). Failures that
   stop the business (`shared/machine-health.js`: an auth failure in a revenue
-  lane, or a switched-on revenue job that stopped, failed twice today, or
-  failed on a rejected key) @mention Matt once a day while they last. Other
+  lane today, Pacific, or a switched-on revenue job that stopped, failed
+  twice today, or failed on a rejected key) @mention Matt once a day while
+  they last. The @Matt lines wait for 7am Pacific; the strip shows them at
+  once. A status code counts only beside a provider or HTTP word ("Apify
+  401", "HTTP 403", "GHL 502") or on its own, never a street number. Other
   errors are told as before, untagged.
 - **The red line** on Offers and Deals (`MachineTrouble.jsx`) reads
   `GET /api/dashboard/machine`: two small cursors (`keyHealth`, and
-  `machineTrouble`, which the Slack runner writes each tick). Hidden when all
-  is well; stoppers older than an hour are dropped, so with Slack off only
-  the key lines show.
+  `machineTrouble`, which the Slack runner writes each tick) and the
+  settings row (is the key check on). Hidden when all is well; stoppers
+  older than an hour are dropped, so with Slack off only the key lines show.
 - **The outreach listing check** asks Apify whether the token works before
   the day's pull, so a rejected token stops the day before any RentCast
   request is spent.
@@ -6989,10 +6995,14 @@ were a #machine line nobody was tagged on and Reports → Line. Now:
   provider's error once — a network failure any time, a rejected key once the
   key check reads that key good — stamped `autoUnderwrite.retriedAt`. Never
   on a house with a hand-priced or priced row, a later row, a sent number or
-  a pass, on either spelling. Rows over 21 days old are left; five a pass at
-  most, through the same daily cap and dry-run switch as every conversation
-  underwrite. Until its retry the Needs Matt clock never passes the card;
-  after it, the clock counts from the retry.
+  a pass or a house gone from the market, on either spelling. Rows over 21
+  days old are left; five a pass at most, through the same daily cap and
+  dry-run switch as every conversation underwrite. The Needs Matt clock
+  holds the card only while a retry can still come (`waitsOnRetry`: the
+  timers on, the row 21 days old or younger, not retried, nobody's number on
+  the house, and for a rejected key the key check on and the provider named
+  in the error). A card no retry will reach is on the normal clock; after a
+  retry, the clock counts from the retry.
 
 ## Follow-up (Reports → Follow-up, 2026-10-17)
 

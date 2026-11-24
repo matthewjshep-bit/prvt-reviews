@@ -28,7 +28,7 @@ import { latestRowFeedback, publicRowFeedback, ROW_FEEDBACK_EVENT, ROW_FEEDBACK_
 import { addDismissal, removeDismissal, applyDismissals, TODAY_DISMISS_CURSOR } from "../shared/today-dismiss.js";
 import { answerPartnerQuestion, forgetAnswer } from "../partner-answer.js";
 import express from "express";
-import { machineTrouble, KEY_HEALTH_CURSOR, MACHINE_TROUBLE_CURSOR } from "../shared/machine-health.js";
+import { machineTrouble, normalizeKeyHealth, KEY_HEALTH_CURSOR, MACHINE_TROUBLE_CURSOR } from "../shared/machine-health.js";
 import { store } from "../store.js";
 import {
   countContactsByTag, searchConversations, listConversationMessages, searchContactsCreatedSince,
@@ -1015,16 +1015,19 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
   // Machine trouble (2026-11-23 audit, AH-1 and AH-6): the one red line on
   // Offers and Deals. A paid key its provider rejects, Apify's month near
   // its limit, and the business-stopping failures #machine last told Matt.
-  // Two small cursors and nothing else, so it stays light (the 11-09 crash
+  // Two small cursors and the settings row, so it stays light (the 11-09 crash
   // came from heavy reads): words and counts, never a contact.
   router.get("/machine", async (req, res) => {
     try {
       const { locationId } = resolveLocation(req);
-      const [keyHealth, stoppers] = await Promise.all([
+      const [keyHealth, stoppers, saved] = await Promise.all([
         store.getJobCursor?.(locationId, KEY_HEALTH_CURSOR).catch(() => null),
         store.getJobCursor?.(locationId, MACHINE_TROUBLE_CURSOR).catch(() => null),
+        store.getOfferSettings(locationId).catch(() => null),
       ]);
-      res.json({ ok: true, trouble: machineTrouble({ keyHealth, stoppers, now: Date.now() }) });
+      // The key lines only while the check is on: switched off, what it last read is no longer known.
+      const keyCheckOn = normalizeKeyHealth(saved?.keyHealth).enabled;
+      res.json({ ok: true, trouble: machineTrouble({ keyHealth, stoppers, keyCheckOn, now: Date.now() }) });
     } catch (err) { fail(res, err); }
   });
 

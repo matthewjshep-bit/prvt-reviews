@@ -33,8 +33,8 @@ import { pingReasons } from "./shared/hand-off.js";
 import { pingClaimKey } from "./shared/ghl-pings.js";
 import { buildDigest } from "./shared/digest.js";
 import { lineJobs, errorsByArea, passedUnpriced } from "./shared/line.js";
-import { waitsOnRetry } from "./shared/underwrite-retry.js";
-import { errorIsStopper, jobIsStopper, stopperText, keyTroubles, KEY_HEALTH_CURSOR, MACHINE_TROUBLE_CURSOR } from "./shared/machine-health.js";
+import { waitsOnRetry, retryHoldFrom } from "./shared/underwrite-retry.js";
+import { errorIsStopper, stopperKindOfError, jobIsStopper, stopperText, keyTroubles, normalizeKeyHealth, KEY_HEALTH_CURSOR, KEY_HEALTH_HOUR, MACHINE_TROUBLE_CURSOR } from "./shared/machine-health.js";
 import { jobSwitches } from "./job-switches.js";
 import { readYesterdaySpend } from "./ai-spend.js";
 import { addressKey, sameStreetLoose, parseUsAddress } from "./shared/us-address.js";
@@ -561,18 +561,23 @@ export async function runSlackPings({ store = defaultStore, locationId, saved = 
     // AH-6) @mention Matt, once a Pacific day while they last; the strip on
     // Offers and Deals reads the same list off its own small cursor.
     const mention = { mention: true, mattUserId: cfg.mattUserId };
+    // The @Matt lines wait for his morning (the key check's first hour): one
+    // that turns up overnight is posted at 7, not at 2am. The strip has it now.
+    const mattAwake = pacificHour(now) >= KEY_HEALTH_HOUR;
     const stoppers = [];
     const errors = await store.listAppErrorsSince?.(locationId, iso(now - 86400000), { limit: 100 }).catch(() => []) || [];
     for (const e of errors) {
       // A Slack error told to Slack goes nowhere useful; it's on the switchboard.
       if (e?.area === "slack" || !e?.fingerprint) continue;
-      if (errorIsStopper(e)) {
+      if (errorIsStopper(e, { now })) {
         stoppers.push({ id: `err:${e.fingerprint}`, text: stopperText("error", e), since: e.firstAt || e.lastAt || null });
         const key = slackClaimKey("stop", `err:${e.fingerprint}:${today}`);
         const isNew = (ms(e.firstAt) ?? 0) >= now - 86400000;
-        if (!claimed[key]) owed.push({ key, stream: "machine", kind: "error", msg: renderError({ ...e, reopenedAt: null }, { ...mention, stillFailing: !isNew }) });
+        if (mattAwake && !claimed[key]) owed.push({ key, stream: "machine", kind: "error", msg: renderError({ ...e, reopenedAt: null }, { ...mention, stillFailing: !isNew }) });
         continue;
       }
+      // A stopper's kind that didn't happen today was told on its day: not again as a plain error.
+      if (stopperKindOfError(e)) continue;
       // New today, or back today after three quiet days (store.js reopened_at):
       // the comeback is its own claim, so it is told once more.
       const isNew = (ms(e.firstAt) ?? 0) >= now - 86400000;
@@ -586,10 +591,10 @@ export async function runSlackPings({ store = defaultStore, locationId, saved = 
     for (const j of lineJobs(cursors, { now, switches })) {
       // Slack's own job told to Slack goes nowhere useful; the evening post and the Line list it.
       if (j.name === "slack" || !j.lastRunAt) continue;
-      if (jobIsStopper(j, switches)) {
-        stoppers.push({ id: `job:${j.name}`, text: stopperText("job", j), since: j.lastRunAt });
+      if (jobIsStopper(j, switches, { now })) {
+        stoppers.push({ id: `job:${j.name}`, text: stopperText("job", j, { now }), since: j.lastRunAt });
         const key = slackClaimKey("stop", `job:${j.name}:${today}`);
-        if (!claimed[key]) owed.push({ key, stream: "machine", kind: j.late ? "late" : "job", msg: j.late ? renderJobLate(j, mention) : renderJobFailed(j, mention) });
+        if (mattAwake && !claimed[key]) owed.push({ key, stream: "machine", kind: j.late ? "late" : "job", msg: j.late ? renderJobLate(j, mention) : renderJobFailed(j, mention) });
         continue;
       }
       if (j.failed) {
@@ -607,10 +612,12 @@ export async function runSlackPings({ store = defaultStore, locationId, saved = 
     }
     // A paid key its provider rejects, or Apify's month near its limit
     // (key-health.js, AH-1): @Matt the first day and every day it lasts.
+    // Only while the check is on, and from a read in the last day: a key
+    // fixed after the check was switched off never @s him again.
     const keys = await store.getJobCursor?.(locationId, KEY_HEALTH_CURSOR).catch(() => null);
-    for (const t of keyTroubles(keys?.doc || {}, { now })) {
+    for (const t of keyTroubles(keys?.doc || {}, { now, enabled: normalizeKeyHealth(saved?.keyHealth).enabled })) {
       const key = slackClaimKey("key", `${t.id}:${today}`);
-      if (!claimed[key]) owed.push({ key, stream: "machine", kind: t.kind === "usage" ? "key_usage" : "key", msg: renderKeyTrouble(t, cfg) });
+      if (mattAwake && !claimed[key]) owed.push({ key, stream: "machine", kind: t.kind === "usage" ? "key_usage" : "key", msg: renderKeyTrouble(t, cfg) });
     }
     if (!dryRun) await writeTrouble(store, locationId, stoppers, now);
     // A sending day whose outreach sweep opened fewer new agents than
@@ -737,6 +744,9 @@ export async function passesTodayFor({ store = defaultStore, locationId, saved =
   const due = passesToday(doc.needs, { now, offDays });
   if (!due.length) return null;
   const read = async (f) => { try { return await f(); } catch { return null; } };
+  // The runner's own retry hold (needs-matt.js): the same switches, so a
+  // card it will pass is listed and one it holds isn't.
+  const hold = { ...retryHoldFrom(saved), now };
   const still = [];
   for (const d of due.slice(0, PASSES_READ_MAX)) {
     const offer = await read(() => store.getOffer?.(d.offerId));
@@ -745,7 +755,7 @@ export async function passesTodayFor({ store = defaultStore, locationId, saved =
     const engine = await read(() => engineNumberFor({ store, locationId, offer }));
     if (engineKeeps(engine)) continue;
     // Its underwrite died on a provider's error and waits for its retry (2026-11-23).
-    if (waitsOnRetry(offer)) continue;
+    if (waitsOnRetry(offer, hold)) continue;
     still.push({ offer, engine });
   }
   if (!still.length) return null;

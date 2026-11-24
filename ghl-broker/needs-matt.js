@@ -43,7 +43,7 @@ import { syncAgentCard } from "./tier-check.js";
 import { fieldId } from "./ghl-pings.js";
 import { normalizeGhlStages, stageKeys } from "./shared/ghl-stages.js";
 import { needsMattByContact, needsMattFromCursor, needsMattPassDue, botTakesHouse, engineKeeps, NEEDS_MATT_CURSOR, NEEDS_MATT_EVENT } from "./shared/needs-matt.js";
-import { waitsOnRetry, stoppedEarlyOn } from "./shared/underwrite-retry.js";
+import { waitsOnRetry, stoppedEarlyOn, retryHoldFrom } from "./shared/underwrite-retry.js";
 import { engineNumberFor } from "./price-v2.js";
 import { effectiveStatus } from "./shared/offer-status.js";
 import { reopensOnTheirNumbers } from "./shared/held-underwrites.js";
@@ -178,13 +178,17 @@ export async function runNeedsMatt({ store = defaultStore, locationId, client, s
   // The pass clock starts when the thing first landed, kept across reads.
   for (const [id, v] of needs) v.landedAt = prev.get(id)?.key === v.key && prev.get(id)?.landedAt ? prev.get(id).landedAt : iso(now);
   // A house whose underwrite died on a provider's error waits for its retry
-  // (2026-11-23 audit, AH-2): the key was dead, not the house.
+  // (2026-11-23 audit, AH-2): the key was dead, not the house. Only while a
+  // retry can come (the timers on, the row young enough, a rejected key's
+  // provider named and the key check on, nobody's number on the house):
+  // otherwise the card is on the normal clock.
+  const hold = { ...retryHoldFrom(saved), now, offers: read.offers || [] };
   for (const v of needs.values()) {
     delete v.waitsRetry; delete v.retriedAt;
     if (v.kind !== "price" || !v.offerId) continue;
     const o = await offerOf(v.offerId);
     if (!o || o.locationId !== locationId) continue;
-    if (waitsOnRetry(o)) v.waitsRetry = true;
+    if (waitsOnRetry(o, hold)) v.waitsRetry = true;
     else if (stoppedEarlyOn(o) && o.autoUnderwrite?.retriedAt) v.retriedAt = o.autoUnderwrite.retriedAt;
   }
   out.needs = needs.size;
@@ -210,7 +214,7 @@ export async function runNeedsMatt({ store = defaultStore, locationId, client, s
     ...out.screened.filter((x) => x.pass && x.contactId).map((x) => ({ contactId: x.contactId, offerId: x.offerId, reason: x.pass }))];
   for (const { contactId, offerId, reason } of toPass) {
     try {
-      if (await passUnpriced({ store, locationId, client, contactId, offerId, reason, now })) out.passed.push({ contactId, offerId });
+      if (await passUnpriced({ store, locationId, client, contactId, offerId, reason, now, hold })) out.passed.push({ contactId, offerId });
     } catch (e) {
       await recordError(store, { locationId, area: "needs-matt", err: e, context: { contactId, offerId, stage: "pass" } });
       out.errors.push(`${contactId}: ${scrubMessage(e).slice(0, 120)}`);
@@ -259,7 +263,7 @@ const PASS_WHY = {
   quiet: { note: "it waited three working days in Needs Matt with no price", retired: "no price three working days after it landed in Needs Matt" },
   turnkey: { note: "the agent called it cosmetic or done", retired: "the agent's own words: not a flip" },
 };
-async function passUnpriced({ store, locationId, client, contactId, offerId, reason = "quiet", now }) {
+async function passUnpriced({ store, locationId, client, contactId, offerId, reason = "quiet", now, hold = null }) {
   const why = PASS_WHY[reason] || PASS_WHY.quiet;
   const full = await store.getOffer?.(offerId).catch(() => null);
   if (!full || full.locationId !== locationId || full.deal || effectiveStatus(full) !== "draft") return false;
@@ -268,7 +272,7 @@ async function passUnpriced({ store, locationId, client, contactId, offerId, rea
   // priced since the read. A grade-C number doesn't keep it.
   if (reason === "quiet" && engineKeeps(await engineNumberFor({ store, locationId, offer: full }))) return false;
   // Nor one whose underwrite died on a provider's error and hasn't had its retry (2026-11-23).
-  if (reason === "quiet" && waitsOnRetry(full)) return false;
+  if (reason === "quiet" && waitsOnRetry(full, hold || { now })) return false;
   const ts = iso(now);
   const street = String(full.address || "").split(",")[0].trim() || "the house";
   const note = `We passed on ${street}: ${why.note}. The bot's pass note tells the agent.`;
