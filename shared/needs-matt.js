@@ -40,7 +40,7 @@
 // Pure. The runner is ghl-broker/needs-matt.js; the stage move is
 // shared/ghl-stages.js planCard's `needsMatt`.
 
-import { ownerOf, closeSignalFor, termsCallOwed } from "./hand-off.js";
+import { ownerOf, closeSignalFor, termsCallOwed, offerIsOut } from "./hand-off.js";
 import { isCounterDraft } from "./desk.js";
 import { saysTurnkey, saysCosmeticOnly, workBudgetIn } from "./flip-read.js";
 import { hasHouseNumber } from "./mentioned-houses.js";
@@ -133,7 +133,7 @@ export function needsMattReason(row, { draftsById = new Map(), offersById = new 
     }
     // They asked what we'd pay and the answer sat held (the 2026-11-23
     // audit, R1): a day on, the number is his to give, or the pass.
-    if (d.status === "draft" && asksOurNumber(d.inbound || "")) {
+    if (d.status === "draft" && asksOurNumber(d.inbound || "") && !offerIsOut(offersById.get(row.offerId))) {
       const at = ms(waitedFrom(d));
       return at != null && now - at >= PRICE_WAIT_HOURS * HOUR_MS ? { kind: "price", reason: "asked_our_number" } : null;
     }

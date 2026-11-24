@@ -9899,3 +9899,11 @@ test("an agent who asks what we'd pay and gets an answer with no number is owed 
   await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d2", live: true });
   assert.equal((await store.listContactEvents("LOC", "c2", { types: ["promise_made"] })).length, 0);
 });
+
+test("an agent who asks our best after our offer went out on that house isn't logged as owed a new number", async () => {
+  const asked = { ...openDraft(), party: "agent", inbound: "What's your best offer on 12 Elm?", reply: "We're holding where we are on it for now.", propertyAddress: "12 Elm St, Renton, WA" };
+  const store = fakeStore([asked]);
+  store.listOffers = async () => [{ id: "o-elm", contactId: "c1", address: "12 Elm St, Renton, WA", cashAmount: 300000, status: "sent", sends: [{ ts: new Date(Date.now() - 86400000).toISOString() }] }];
+  await sendReplyDraft({ client: { call: async () => ({ messageId: "m1" }) }, store, locationId: "LOC", draftId: "d1", live: true });
+  assert.equal((await store.listContactEvents("LOC", "c1", { types: ["promise_made"] })).length, 0, "our number is already out there: the counter hold's business");
+});

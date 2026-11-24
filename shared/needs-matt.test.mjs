@@ -456,3 +456,10 @@ test("an agent who asked what we'd pay and whose answer sat held a day lands in 
   assert.equal(needsMattKind(row, { draftsById: new Map([[d.id, { ...d, createdAt: hoursAgo(2) }]]), now: NOW }), null, "not before the day's wait");
   assert.equal(needsMattKind(row, { draftsById: new Map([[d.id, { ...d, inbound: "Thanks, talk soon." }]]), now: NOW }), null, "no ask, nothing to price");
 });
+
+test("a held answer to 'what's your best' on a house our number already went out on is not a price card", () => {
+  const d = { id: "d-best", party: "agent", status: "draft", intent: "question", inbound: "What's your best offer on 5 Birch Ln?", createdAt: hoursAgo(PRICE_WAIT_HOURS + 1), propertyAddress: "5 Birch Ln, Kent, WA 98031" };
+  const offer = { id: "o-birch", contactId: "c-best", address: d.propertyAddress, status: "sent", cashAmount: 250000 };
+  const row = { kind: "draft_waiting", contactId: "c-best", draftId: d.id, offerId: offer.id, address: d.propertyAddress };
+  assert.equal(needsMattKind(row, { draftsById: new Map([[d.id, d]]), offersById: new Map([[offer.id, offer]]), now: NOW }), null);
+});

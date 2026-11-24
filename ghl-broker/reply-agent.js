@@ -147,7 +147,7 @@ import { followWithCard, defaultCardBaseUrl, mintCardToken } from "./contact-car
 import { quoteGateFlags, awaitingReprice, otherAgentsNumber, typedAboveBook } from "./shared/current-offer.js";
 import { sellerOwnNumber, workAfterPricing } from "./shared/number-stance.js";
 import { repriceStaleRow } from "./price-v2.js";
-import { numberTimeFlags, callPromiseFlags, inventedPeopleFlags, contactClaimFlags, sentOfferFlags, claimGateInputs, CALL_OWED_FLAG, CLAIMS_EMAIL_RX } from "./shared/reply-claims.js";
+import { numberTimeFlags, callPromiseFlags, inventedPeopleFlags, contactClaimFlags, sentOfferFlags, claimGateInputs, CALL_OWED_FLAG, CLAIMS_EMAIL_RX, numberWentOut as offerNumberOut } from "./shared/reply-claims.js";
 import { laneHoldFlags, closeOutFlags, LANE_HOLD_RX, CLOSE_OUT_RX } from "./shared/lane-holds.js";
 import { floatHold } from "./shared/float-hold.js";
 // Passes, goodbyes and what the bot says about us (the 2026-11-09 audit).
@@ -8608,7 +8608,13 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
     // we owe them one all the same. `by: "their_ask"` keeps it off the
     // machine's "still working on it" text (openPromises); the owed row and
     // Needs Matt carry it to Matt. The machine never sends a number for it.
-    if (!keeps && (!what || what === "answer") && !d.outbound?.kind && asksOurNumber(d.inbound || "")) {
+    // Not when our number is already out on that house (sent, floated, the
+    // engine's live number): what they ask then is a counter's business.
+    const ourNumberOut = !keeps && (!what || what === "answer") && !d.outbound?.kind && asksOurNumber(d.inbound || "")
+      ? ((await Promise.resolve().then(() => store.listOffers?.(locationId, { contactId: d.contactId, limit: 50, lean: true })).catch(() => null)) || [])
+        .some((o) => offerNumberOut(o) && (!d.propertyAddress || !o?.address || sameHouse(o.address, d.propertyAddress)))
+      : true;
+    if (!ourNumberOut) {
       await recordEvent({
         store, locationId, contactId: d.contactId, party: "agent", type: "promise_made", at: ts,
         address: d.propertyAddress || "", source: "conversation", ref: d.id,
