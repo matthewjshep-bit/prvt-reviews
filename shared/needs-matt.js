@@ -18,7 +18,10 @@
 //   paper      paper to sign, a pre-contract warning, a hand-off only he
 //              can do, an answer only he has; since 2026-11-09 also proof
 //              of funds asked, the terms asked on a house where our number
-//              is out, and a call we owe after they sent terms
+//              is out, and a call we owe after they sent terms; since
+//              2026-11-23 a reply held for turning down land, a lot, a
+//              teardown or a multi-unit, or for a canned close-out on a
+//              house they handed us (shared/lane-holds.js)
 //   price      a house an agent surfaced that has waited PRICE_WAIT_HOURS
 //              for his number, or their number on a house we never priced.
 //              PASS_AFTER_HOURS working hours after it landed (weekdays,
@@ -37,12 +40,14 @@
 // Pure. The runner is ghl-broker/needs-matt.js; the stage move is
 // shared/ghl-stages.js planCard's `needsMatt`.
 
-import { ownerOf, closeSignalFor, termsCallOwed } from "./hand-off.js";
+import { ownerOf, closeSignalFor, termsCallOwed, offerIsOut } from "./hand-off.js";
 import { isCounterDraft } from "./desk.js";
 import { saysTurnkey, saysCosmeticOnly, workBudgetIn } from "./flip-read.js";
 import { hasHouseNumber } from "./mentioned-houses.js";
 import { isOffMarket } from "./off-market.js";
 import { workingHoursBetween, addWorkingHours, WORK_TZ } from "./paper-follows.js";
+import { LANE_HOLD_RX, CLOSE_OUT_RX } from "./lane-holds.js";
+import { asksOurNumber } from "./conversation-ai.js";
 
 export const NEEDS_MATT_STAGE_RX = /^needs\s+matt\b/i;
 export const NEEDS_MATT_STAGE_NAME = "Needs Matt";
@@ -113,6 +118,11 @@ export function needsMattReason(row, { draftsById = new Map(), offersById = new 
     const close = closeSignalFor(row, d, { offersById });
     if (row.yesAfterPass || d.yesAfterPass?.offerId || d.intent === "acceptance") return { kind: "yes", reason: close?.kind === "yes" ? close.reason : "accepted" };
     if (close) return close;
+    // A pass the gates held for him (shared/lane-holds.js, the 2026-11-23
+    // audit): land, a lot, a teardown or a multi-unit the bot would have
+    // turned down, or a canned close-out on a house they handed us.
+    const held = (d.flags || []).some((f) => LANE_HOLD_RX.test(f)) ? "lane" : (d.flags || []).some((f) => CLOSE_OUT_RX.test(f)) ? "close_out" : "";
+    if (held && d.status === "draft") return { kind: "paper", reason: held };
     // A counter is the bot's: it holds our number (reply-agent.js). Only
     // their number on a house with no offer of ours to hold is his to price,
     // or one far over ours that never went out (`unsentCounter`, the
@@ -120,6 +130,12 @@ export function needsMattReason(row, { draftsById = new Map(), offersById = new 
     if (isCounterDraft(d) && (noNumberOfOurs(d) || d.unsentCounter?.offerId)) {
       const at = ms(waitedFrom(d));
       return at != null && now - at >= PRICE_WAIT_HOURS * HOUR_MS ? { kind: "price", reason: "their_number" } : null;
+    }
+    // They asked what we'd pay and the answer sat held (the 2026-11-23
+    // audit, R1): a day on, the number is his to give, or the pass.
+    if (d.status === "draft" && asksOurNumber(d.inbound || "") && !offerIsOut(offersById.get(row.offerId))) {
+      const at = ms(waitedFrom(d));
+      return at != null && now - at >= PRICE_WAIT_HOURS * HOUR_MS ? { kind: "price", reason: "asked_our_number" } : null;
     }
     return null;
   }
@@ -137,8 +153,15 @@ function needsMattPlainKind(kind, row, now) {
     if (owner === "ping") return "paper";
     if (owner !== "price") return null;
     const at = ms(row.owedAt);
-    return at != null && now - at >= PRICE_WAIT_HOURS * HOUR_MS ? "price" : null;
+    if (at == null) return null;
+    // The time the promise named ("today": 5pm), when that's sooner (2026-11-23).
+    const named = ms(row.dueAt);
+    return now - at >= PRICE_WAIT_HOURS * HOUR_MS || (named != null && now >= named) ? "price" : null;
   }
+  // A number we promised (promise-owed.js owedPromises): due at the time it
+  // named, or a day after the first promise, and his from then (the
+  // 2026-11-23 audit). A second "still working on it" text never pushes it back.
+  if (kind === "number_owed" && ms(row.dueAt) != null) return now >= ms(row.dueAt) ? "price" : null;
   if (PRICE_KINDS.has(kind)) {
     const at = ms(row.readyAt || row.promisedAt);
     return at != null && now - at >= PRICE_WAIT_HOURS * HOUR_MS ? "price" : null;
@@ -155,6 +178,8 @@ const PAPER_WHY = {
   proof_of_funds: (at) => `They asked for proof of funds${at}`,
   paper_ask: (at) => `They asked about the paper${at}: send the terms`,
   terms_call: (at) => `They sent terms${at} and we said we'd call: call them or send the terms`,
+  lane: (at) => `They offered land, a lot, a teardown or a multi-unit${at}: the bot's no is held, it's yours to look at`,
+  close_out: (at) => `They handed us a house${at} and the bot's canned pass is held: ask for the details, price it or pass`,
 };
 
 /** needsMattWhy(item) → the card's one line: what it is and what to do. */
@@ -170,6 +195,7 @@ export function needsMattWhy(x = {}) {
   if (x.kind === "paper") return clip(`${x.title || "Something only you can do"}${x.title && on && !String(x.title).includes(on) ? ` (${on})` : ""}`, 300);
   if (x.kind === "price" && x.theirs && x.ours) return clip(`They named ${k$(x.theirs)}${at}, over our ${k$(x.ours)} that never went out: float ours or pass`, 300);
   if (x.kind === "price" && x.theirs) return clip(`They named ${k$(x.theirs)}${at}: price it or pass`, 300);
+  if (x.kind === "price" && x.reason === "asked_our_number") return clip(`They asked what we'd pay${at}: price it or pass`, 300);
   if (x.kind === "price") {
     const hours = Math.max(1, Math.round(((x.now ?? Date.now()) - (ms(x.since) ?? Date.now())) / HOUR_MS));
     const waited = hours >= 48 ? `${Math.round(hours / 24)} days` : `${hours} hours`;

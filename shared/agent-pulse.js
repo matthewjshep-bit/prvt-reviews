@@ -50,7 +50,7 @@ import { botHold, paceOf, paceScale } from "./bot-hold.js";
 import { cadenceDays, requestStands, isAutoReply } from "./brush-offs.js";
 import { optOutInTranscript, CONVERSATION_AI_DEFAULTS } from "./conversation-ai.js";
 import { CHECK_IN_GAP_DAYS } from "./agent-focus.js";
-import { callOwedWait } from "./promise-owed.js";
+import { callOwedWait, owedPromises } from "./promise-owed.js";
 import { worksOn, runDaysFrom, pacificParts } from "./follow-up-engine.js";
 import { BLOCK_TAG_RX } from "./opt-out.js";
 import { checkInWait, LEAD_WAIT_DAYS, LEAD_HOOK_DAYS } from "./check-in.js";
@@ -671,6 +671,13 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
   // (shared/promise-owed.js callOwedWait; agent-focus.js asks it at the door).
   const owedCall = callOwedWait({ events, now });
   if (owedCall) return out("not_due", `${owedCall.reason}: the call goes first`, { segment, dueAt: owedCall.until });
+  // A number or the written offer we promised them goes first too (the
+  // 2026-11-23 audit, agent-focus.js numberOwedHolds asks it at the door):
+  // no generic check-in while it's open. Their offers and our kept promises
+  // say whether it went.
+  const owedNumber = owedPromises({ events: events.filter((e) => e?.type === "promise_made" || e?.type === "promise_kept").map((e) => ({ ...e, contactId: agent.contactId })),
+    sentDrafts: drafts.filter((d) => d?.status === "sent").map((d) => ({ ...d, contactId: agent.contactId })), offers: (agent.offers || []).map((o) => ({ ...o, contactId: agent.contactId })), now, afterHours: 0 })[0];
+  if (owedNumber) return out("not_due", `we owe them ${owedNumber.what === "paper" ? "the written offer" : "a number"}: it goes first`, { segment });
   // A check-in that read the thread and waited (shared/check-in.js, 2026-11-09:
   // their plain no, their "after the holidays", our "I'll check back in a
   // couple months", an auto-reply-only number, "are you a bot?"): not due

@@ -996,3 +996,14 @@ test("a lead whose house came in afterwards is never asked about", async () => {
   // Our own first text's house is not theirs coming in.
   assert.ok(undatedLeadFor({ events: [req, { type: "subject_property_set", at: ago(20), address: "12 Wren Ct, Halden, WA", data: { ours: true } }], now: NOW }));
 });
+
+// The 2026-11-23 audit (R1): an agent we'd promised a number got the
+// any-fixers check-in instead. While we owe it, the check-in waits.
+test("no any-fixers check-in goes to an agent we promised a number", () => {
+  const promised = { type: "promise_made", at: ago(5), address: "6 Teal Ct, Olympia, WA 98501", data: { what: "number", text: "Let me run the numbers on it.", asksThem: false } };
+  const v = evaluateAgent(agent({ lastInboundAt: ago(30), events: [promised] }), ctx());
+  assert.equal(v.status, "not_due");
+  assert.match(v.reason, /we owe them a number: it goes first/);
+  const kept = { type: "promise_kept", at: ago(4), data: { by: "our_number" } };
+  assert.equal(evaluateAgent(agent({ lastInboundAt: ago(30), events: [promised, kept] }), ctx()).status, "due", "the number went: the check-in goes");
+});

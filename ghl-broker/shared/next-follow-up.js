@@ -162,7 +162,7 @@ export function nextFollowUp({ offer, drafts = [], events = [], config = {}, now
     .sort((a, b) => String(a.at).localeCompare(String(b.at)));
   const keptAt = pr.filter((e) => e.type === "promise_kept").at(-1)?.at || "";
   // A call, a time to walk it, the earnest money are a person's (PERSON_PROMISES).
-  const made = pr.filter((e) => e.type === "promise_made" && e.data?.by !== "you" && !PERSON_PROMISES.has(e.data?.what) && String(e.at) > keptAt && (e.data?.asksThem !== true || e.data?.what === "paper"));
+  const made = pr.filter((e) => e.type === "promise_made" && e.data?.by !== "you" && e.data?.by !== "their_ask" && !PERSON_PROMISES.has(e.data?.what) && String(e.at) > keptAt && (e.data?.asksThem !== true || e.data?.what === "paper"));
   if (made.length) {
     const due = ms(made[0].data?.dueAt) ?? (ms(made[0].at) + PROMISE_DUE_HOURS * HOUR_MS);
     const what = made.some((p) => p.data?.what === "number") ? "a number" : made.some((p) => p.data?.what === "paper") ? "the written offer" : "an answer";

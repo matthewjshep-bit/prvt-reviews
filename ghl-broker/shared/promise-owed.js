@@ -10,7 +10,7 @@
 
 import { sameStreet } from "./us-address.js";
 import { effectiveStatus, weDecline } from "./offer-status.js";
-import { detectPromise, isConditionalPromise, PERSON_PROMISES } from "./follow-up.js";
+import { detectPromise, isConditionalPromise, PERSON_PROMISES, promiseDeadline } from "./follow-up.js";
 import { ourReplyPasses } from "./flip-read.js";
 import { callEventConnected } from "./talked-to.js";
 
@@ -91,7 +91,7 @@ const pacificDay = (v) => new Date(v).toLocaleDateString("en-US", { month: "shor
 
 /**
  * owedPromises({ events, sentDrafts, offers, now, afterHours, windowDays })
- *   → [{ contactId, since, lastAt, dates, address, what, text, draftId, by }]
+ *   → [{ contactId, dueAt, since, lastAt, dates, address, what, text, draftId, by }]
  *
  * One per contact: the numbers and written offers we promised that are at
  * least `afterHours` old and that nothing has delivered since. A promise is
@@ -155,10 +155,20 @@ export function owedPromises({ events = [], sentDrafts = [], offers = [], now = 
       if (done) continue;
       open.push(p);
     }
-    if (!open.length || now - (ms(open[0].at) ?? now) < afterHours * HOUR_MS) continue;
+    if (!open.length) continue;
+    // Due a day after the first promise, or at the time one of them named
+    // ("today" is 5pm), whichever is sooner (the 2026-11-23 audit, neg-2). A
+    // second "still working on it" never pushes it back.
+    const dueAt = Math.min(...open.map((p) => {
+      const t = ms(p.at) ?? now;
+      const named = afterHours > 0 ? promiseDeadline(p.data?.text || "", t) : null;
+      return Math.min(t + afterHours * HOUR_MS, named ?? Infinity);
+    }));
+    if (now < dueAt) continue;
     const newest = open.at(-1);
     out.push({
       contactId,
+      dueAt: new Date(dueAt).toISOString(),
       since: open[0].at,
       lastAt: newest.at,
       dates: [...new Set(open.map((p) => pacificDay(ms(p.at))))],

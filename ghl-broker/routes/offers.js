@@ -157,6 +157,7 @@ import { mirrorAgent, followTierStage, tierTagsToDrop, followOfferOut } from "..
 import { normalizeTierOne } from "../shared/tier-one.js";
 import { normalizeGhlStages, cardHeldBy, HELD_DAYS, raisedHouses, HOUSE_EVENT_TYPES, OUR_TEXT_EVENT_TYPES } from "../shared/ghl-stages.js";
 import { ourReplyPasses } from "../shared/flip-read.js";
+import { floatHold } from "../shared/float-hold.js";
 import { syncAgentCard } from "../tier-check.js";
 import { startCallIntake, listCallJobs } from "../call-intake.js";
 import { dealToQuery } from "../dispo.js";
@@ -5482,8 +5483,12 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (stoppedHere?.held) console.log(`clean-underwrite send waiting for ${offer.id}: ${holdLine(stoppedHere)}`);
       else if (so.onClearUnderwrite && !leadWithNumber && !agentNumbers && cfg.enabled && CARD_SENDS_ENABLED && effectiveStatus(offer) === "new" && !offer.deal) {
         const why = await (async () => {
-          const drafts = await store.listReplyDrafts(locationId, { contactId: offer.contactId, limit: 20 }).catch(() => []);
+          const drafts = await store.listReplyDrafts(locationId, { contactId: offer.contactId, limit: 40 }).catch(() => []);
           if (!drafts.some((d) => d.inbound)) return "they have never replied to us";
+          // The float gate (shared/float-hold.js, 2026-11-23): a house they
+          // called done, or our condition question still unanswered.
+          const held = floatHold({ drafts, address: offer.address, now: Date.now() });
+          if (held) return held.why;
           const dueAt = nextSendTime({ now: Date.now(), delayMs: 0, quietHours: machineHours(cfg.autoSend) });
           if (Date.parse(dueAt) - Date.now() > 60000) return `outside the auto-send hours (next window ${dueAt})`;
           if (!machineWorksOn(cfg, Date.now())) return "a weekend or a day off";
@@ -5666,8 +5671,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!cfg.parties.agent.sendOffer.onClearUnderwrite && offer.autoSendPending.by !== "audit") continue;
       const okStatus = offer.autoSendPending.by === "audit" ? ["new", "sent"].includes(effectiveStatus(offer)) : effectiveStatus(offer) === "new";
       if (!okStatus || now - Date.parse(offer.autoSendPending.at) > SEND_RETRY_DAYS * 86400000) { await clear(); continue; }
-      const drafts = await store.listReplyDrafts(locationId, { contactId: offer.contactId, limit: 20 }).catch(() => []);
+      const drafts = await store.listReplyDrafts(locationId, { contactId: offer.contactId, limit: 40 }).catch(() => []);
       if (!drafts.some((d) => d.inbound)) continue;
+      // The float gate (shared/float-hold.js): it stays pending, and its week runs.
+      if (floatHold({ drafts, address: offer.address, now })) continue;
       // Stopped (shared/bot-hold.js): it stays pending, and its week runs.
       if ((await holdFor({ store, locationId, contactId: offer.contactId, offerId: offer.id, now })).held) continue;
       const r = await conversationDeps({ client, locationId, saved: fresh }).sendOfferDocs({ contactId: offer.contactId, addressHint: offer.address, unattended: true });

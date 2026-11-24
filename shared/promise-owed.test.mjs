@@ -127,3 +127,46 @@ test("a call we owe holds the check-ins three days, and a call made since ends t
   assert.equal(callOwedWait({ events: [promised, { type: "promise_kept", contactId: "c9", at: at3(1), data: { by: "dismissed" } }], now: NOW3 }), null, "dismissed");
   assert.equal(callOwedWait({ events: [{ ...promised, data: { what: "number", text: "I'll get you a number tomorrow." } }], now: NOW3 }), null, "a number isn't a call");
 });
+
+/* ---------- the promise clock (the 2026-11-23 audit, R1 / neg-2) ---------- */
+
+import { owedPromises } from "./promise-owed.js";
+import { promiseDeadline } from "./follow-up.js";
+import { needsMattByContact } from "./needs-matt.js";
+
+// Wednesday 2026-11-18, 10:00 Pacific.
+const WED10 = Date.parse("2026-11-18T18:00:00Z");
+const pac = (h, day = 0) => WED10 + (day * 24 + (h - 10)) * 3600000;
+const promised = (at, text, extra = {}) => ({ type: "promise_made", contactId: "c-ivo", at: new Date(at).toISOString(), address: "7 Wren Ct, Kent, WA 98031",
+  data: { what: "number", text, asksThem: false, ...extra } });
+
+test("a number we promised today is due at 5pm that day, not a day later", () => {
+  assert.equal(promiseDeadline("I'll get you a number today.", WED10), pac(17));
+  assert.equal(promiseDeadline("Should have something for you this afternoon.", WED10), pac(17));
+  assert.equal(promiseDeadline("I'll have it to you tomorrow.", WED10), pac(17, 1));
+  assert.equal(promiseDeadline("I'll have our number by 3pm.", WED10), pac(15));
+  assert.equal(promiseDeadline("I'll get back to you by Friday.", WED10), pac(17, 2));
+  assert.equal(promiseDeadline("Let me run the numbers on it.", WED10), null, "no time named: the day's clock");
+  // Said after five: a couple of hours, not already past.
+  assert.equal(promiseDeadline("I'll get you a number today.", pac(18)), pac(20));
+
+  const events = [promised(WED10, "I'll get you a number today.")];
+  assert.equal(owedPromises({ events, now: pac(16) }).length, 0, "not yet");
+  const [owed] = owedPromises({ events, now: pac(17) + 60000 });
+  assert.ok(owed, "owed once the day it named is out");
+  assert.equal(owed.dueAt, new Date(pac(17)).toISOString());
+  // A promise with no time is owed a day on, as before.
+  assert.equal(owedPromises({ events: [promised(WED10, "Let me run the numbers on it.")], now: pac(17) + 60000 }).length, 0);
+  assert.equal(owedPromises({ events: [promised(WED10, "Let me run the numbers on it.")], now: WED10 + 24 * 3600000 + 60000 }).length, 1);
+});
+
+test("a second still-working-on-it text doesn't push back when the number we owe reaches Matt", () => {
+  const events = [promised(WED10, "Let me run the numbers on it."), promised(WED10 + 20 * 3600000, "Still working through the numbers, should have something soon.")];
+  const now = WED10 + 25 * 3600000;
+  const [owed] = owedPromises({ events, now });
+  assert.ok(owed);
+  // The row the pipeline builds from it lands in Needs Matt on the first promise's clock.
+  const row = { id: `number_owed:c-ivo:${owed.since}`, kind: "number_owed", contactId: "c-ivo", address: owed.address, promisedAt: owed.lastAt, dueAt: owed.dueAt };
+  const need = needsMattByContact([row], { now }).get("c-ivo");
+  assert.equal(need?.kind, "price", "Needs Matt has it now, not a day after the second text");
+});

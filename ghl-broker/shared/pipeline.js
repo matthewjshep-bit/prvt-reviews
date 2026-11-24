@@ -915,7 +915,7 @@ export function buildPipeline({
     const ops = [...moveOps,
       ...(stopped ? [{ key: "resume_drive", label: "Resume", intent: "secondary" }] : []),
       ...(group === "machine" && driving ? [{ key: "stop_drive", label: "Stop", intent: "secondary" }] : [])];
-    push({ id: `promise_owed:${p.contactId}:${p.owedAt}`, kind: "promise_owed", severity: "now", owedAt: p.owedAt, contactId: p.contactId, contactName: named,
+    push({ id: `promise_owed:${p.contactId}:${p.owedAt}`, kind: "promise_owed", severity: "now", owedAt: p.owedAt, dueAt: p.dueAt || null, contactId: p.contactId, contactName: named,
       address: p.address || "", offerId: v.offerId || null, move: v.move, why: v.reason || "", askingPrice: v.askingPrice || 0, what: p.what || "",
       draftId: null, fromDraftId: p.draftId || null, ...(question ? { question } : {}), group, ...(next ? { next } : {}),
       title: `${who}: we owe them ${p.what === "number" ? "a number" : p.what === "paper" ? "the written offer" : "an answer"}${p.address ? ` on ${String(p.address).split(",")[0]}` : ""}`,
@@ -946,7 +946,7 @@ export function buildPipeline({
     const days = Math.floor((now - (ms(p.since) ?? now)) / DAY_MS);
     push({ id: `number_owed:${p.contactId}:${p.since}`, kind: "number_owed", severity: "now", contactId: p.contactId, contactName: named,
       address: p.address || "", offerId: v.offerId || null, move: v.move, why: v.reason || "", askingPrice: v.askingPrice || 0,
-      draftId: null, fromDraftId: p.draftId || null, promisedAt: p.lastAt,
+      draftId: null, fromDraftId: p.draftId || null, promisedAt: p.lastAt, dueAt: p.dueAt || null,
       // An underwrite still running is the machine's; everything else waits on you.
       group: v.move === "wait" ? "machine" : "yours", ...(v.move === "wait" ? { next: { what: v.reason || "waiting", at: null } } : {}),
       title: `Owed: ${p.what === "paper" ? "the written offer" : "a number"} to ${first || "an agent"}${street ? ` on ${street}` : ""}`,

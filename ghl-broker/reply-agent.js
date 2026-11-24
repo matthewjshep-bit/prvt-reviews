@@ -147,7 +147,9 @@ import { followWithCard, defaultCardBaseUrl, mintCardToken } from "./contact-car
 import { quoteGateFlags, awaitingReprice, otherAgentsNumber, typedAboveBook } from "./shared/current-offer.js";
 import { sellerOwnNumber, workAfterPricing } from "./shared/number-stance.js";
 import { repriceStaleRow } from "./price-v2.js";
-import { numberTimeFlags, callPromiseFlags, inventedPeopleFlags, contactClaimFlags, sentOfferFlags, claimGateInputs, CALL_OWED_FLAG, CLAIMS_EMAIL_RX } from "./shared/reply-claims.js";
+import { numberTimeFlags, callPromiseFlags, inventedPeopleFlags, contactClaimFlags, sentOfferFlags, claimGateInputs, CALL_OWED_FLAG, CLAIMS_EMAIL_RX, numberWentOut as offerNumberOut } from "./shared/reply-claims.js";
+import { laneHoldFlags, closeOutFlags, LANE_HOLD_RX, CLOSE_OUT_RX } from "./shared/lane-holds.js";
+import { floatHold } from "./shared/float-hold.js";
 // Passes, goodbyes and what the bot says about us (the 2026-11-09 audit).
 import { notTheirNumber, NEXT_ONE_QUESTION, nextOneAskedToday } from "./shared/flip-read.js";
 import { asksIfWholesaler, wholesaleFlags, wholesaleAskLine, formsFlags, formsStateOf, WHOLESALE_ASK_FLAG } from "./shared/partner-terms.js";
@@ -694,6 +696,19 @@ export function floorFirmness(message = "") {
     // 2026-09-14): a number they can deliver is an opening, whatever follows.
     || /\b(?:could|can|might|should|would)\s+(?:probably\s+|likely\s+|maybe\s+)?(?:get|bring|push)\s+(?:them|him|her|the\s+sellers?)\s+(?:down\s+)?to\b/i.test(t)) return "soft";
   return "plain";
+}
+
+/**
+ * saysFinal(message) → true when their words close the door on the number:
+ * the seller's lowest, bottom, final or best, "won't budge", "not coming
+ * down", "take it or leave it". floorFirmness's "firm" reads the rest. The
+ * far-counter goodbye needs one of them, or a number out of reach (the
+ * 2026-11-23 audit, neg-3).
+ */
+export function saysFinal(message = "") {
+  const t = String(message || "");
+  return /\b(?:lowest|bottom(?:\s+dollar)?|rock[\s-]bottom|final\s+(?:number|price|answer|offer|counter)|(?:their|his|her|the\s+sellers?'?s?)\s+(?:best|final)|best\s+(?:they|he|she)\s+(?:can|will|could)\s+do|least\s+(?:they|he|she)(?:'ll|\s+will|\s+would|'d)?\s+(?:take|accept|do)|take\s+it\s+or\s+leave\s+it)\b/i.test(t)
+    || /\b(?:won['’]?t|will\s+not|not\s+going\s+to|isn['’]?t\s+going\s+to|can['’]?t|cannot)\s+(?:budge|move|come\s+down|go\s+down|drop|negotiate)\b|\bnot\s+(?:budging|moving|coming\s+down|negotiating)\b/i.test(t);
 }
 
 /**
@@ -1255,6 +1270,14 @@ export function evaluateReplyGates({
   // Their wholesale question is Matt's, and a reply never denies we wholesale
   // or assign; an Oregon house is written on OREF forms (shared/partner-terms.js).
   flags.push(...wholesaleFlags({ reply: draft.reply, party, asked: draft.asksWholesale }));
+  // The 2026-11-23 audit (shared/lane-holds.js): the bot never turns down
+  // land, a lot, a teardown, a multi-unit or a development site (one became
+  // a ~$4M contract only because Matt overrode it), and never sends a canned
+  // close-out to a text that handed us a house. Only adds a hold.
+  if (party === "agent") {
+    flags.push(...laneHoldFlags({ reply: draft.reply, inbound: inboundMessage }));
+    flags.push(...closeOutFlags({ reply: draft.reply, inbound: inboundMessage, address: draft.propertyAddress }));
+  }
   flags.push(...formsFlags(draft.reply, { state: formsState }));
   // They asked whether this is a bot (shared/check-in.js, 2026-11-09): Matt
   // answers that, never the machine. Only adds a hold.
@@ -1331,6 +1354,9 @@ export async function redraftOnGate({ draft, gate, gateFor, config = null, redra
   // A call we promised and never made (shared/reply-claims.js): the agent is
   // waiting on Matt's call, and a rewrite that drops the promise only hides it.
   if (tripped.includes(CALL_OWED_FLAG)) return { draft, gate };
+  // Land, a lot, a teardown, a multi-unit or a development site we turned
+  // down (shared/lane-holds.js): Matt looks at it; a rewrite only hides it.
+  if (tripped.some((f) => LANE_HOLD_RX.test(f))) return { draft, gate };
   const again = await Promise.resolve().then(() => redraft(tripped)).catch(() => null);
   if (!String(again?.reply || "").trim()) return { draft: { ...draft, redraftHeld: { for: tripped, flags: ["the redraft came back empty"] } }, gate };
   const next = { ...draft, reply: again.reply, redraftedFor: tripped, replyBeforeRedraft: draft.reply };
@@ -3581,6 +3607,15 @@ export async function startProactive({
   // agent on the same house has a number a person gave them that this one
   // isn't. Read off the thread and the books before any job exists.
   const priceFloat = !personAsked && offer?.cashAmount && offer?.address && (NUMBER_FLOATS.has(kind) || (kind === "take_check" && !subject?.askSeller));
+  // The float gate (shared/float-hold.js, the 2026-11-23 audit, neg-5): no
+  // price on a house the agent called turnkey, remodeled or not a flip, and
+  // none within 12 hours of our own condition question they haven't
+  // answered. Not the hot push: that answers their yes.
+  if (priceFloat && kind !== "hot_push") {
+    const theirDrafts = await store.listReplyDrafts(locationId, { contactId, limit: 40 }).catch(() => []);
+    const held = floatHold({ drafts: theirDrafts || [], address: offer.address, now: typeof deps.now === "function" ? deps.now() : Date.now() });
+    if (held) return { skipped: held.why, floatHold: held, job: null };
+  }
   let thread = "";
   let book = null;
   if (priceFloat) {
@@ -5499,6 +5534,14 @@ async function runReply(job, ctx) {
             // A row with only the ceiling behind it has no number of ours to float.
             humanReason: ours > 0 ? `their ${kText(theirs)} vs our unsent ${kText(ours)} on ${where}: float ours or pass`
               : `their ${kText(theirs)} on ${where}, and no number of ours went out: price it or pass` };
+        } else if (reference > 0 && theirs > passLine && !weMovedOnPrice && !beyondReach && firmness !== "firm" && !saysFinal(job.originalMessage || job.message)) {
+          // Their number, not a final no (the 2026-11-23 audit, neg-3): the
+          // goodbye went out within minutes to agents who had only said where
+          // the seller was. It stays a counter: the counter hold texts our
+          // number back once, or it waits for a person. Nothing is filed.
+          // After we already came back, their number again is their answer;
+          // past WALK_AWAY_GAP it is out of reach (Matt, 2026-09-16).
+          draft = { ...draft, notFinal: { offerId: full.id, theirs } };
         } else if (reference > 0 && theirs > passLine) {
           // It ends on the NEXT ONE question (Matt, 2026-10-21), unless that
           // already went to them today.
@@ -6104,7 +6147,10 @@ async function runReply(job, ctx) {
   // underwrite stops (threadPassed), and an unsent offer on it is closed.
   // Never on a yes (2026-10-15): a reply that turns down a house they just
   // said yes on is the bot's mistake, not our decision.
-  const replyPassed = (bankSalePass && !yesAfterPass) || (party === "agent" && !qualifyHeld && !numberFirst && !notOurKind && !yesAfterPass
+  // A pass the gates hold for Matt (land we'd have turned down, a canned
+  // close-out on a house they handed us) closes nothing: he looks first.
+  const passHeldForMatt = (gate.flags || []).some((f) => LANE_HOLD_RX.test(f) || CLOSE_OUT_RX.test(f));
+  const replyPassed = (bankSalePass && !yesAfterPass && !passHeldForMatt) || (party === "agent" && !qualifyHeld && !numberFirst && !notOurKind && !yesAfterPass && !passHeldForMatt
     && ["deal_available", "new_property"].includes(draft.intent) && (photosPass || ourReplyPasses(draft.reply))
     && !saysYes(job.originalMessage || job.message) && !askedAfterPass);
   if (replyPassed) {
@@ -8156,8 +8202,10 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
     }
     // A bot-off tag ("stop bot") put on them since their deal text was
     // queued (2026-10-21): it waits for your Send, as it would have if the
-    // tag had been there when it was queued (dispo-autopilot.js).
-    if (d.outbound?.kind === "blast_open") {
+    // tag had been there when it was queued (dispo-autopilot.js). The cold
+    // intro and check-in emails too (2026-11-23 audit, FT-7): they are the
+    // bot's, and the tag holds the bot.
+    if (["blast_open", "outreach_email", "checkin_email"].includes(d.outbound?.kind)) {
       const tag = matchTagPatterns(contact?.tags || [], configNow.routing?.botOffTags || [])[0];
       if (tag) {
         const ts = new Date(now).toISOString();
@@ -8569,7 +8617,25 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
   }
   if (d.party === "agent" && !["realm_check", "take_check", "promise_due"].includes(d.outbound?.kind || d.intent)) {
     const what = detectPromise(body);
-    if (what) {
+    // They named the house or the seller's number and asked what we'd pay,
+    // and this answer gave no number and no pass (the 2026-11-23 audit, R1):
+    // we owe them one all the same. `by: "their_ask"` keeps it off the
+    // machine's "still working on it" text (openPromises); the owed row and
+    // Needs Matt carry it to Matt. The machine never sends a number for it.
+    // Not when our number is already out on that house (sent, floated, the
+    // engine's live number): what they ask then is a counter's business.
+    const ourNumberOut = !keeps && (!what || what === "answer") && !d.outbound?.kind && asksOurNumber(d.inbound || "")
+      ? ((await Promise.resolve().then(() => store.listOffers?.(locationId, { contactId: d.contactId, limit: 50, lean: true })).catch(() => null)) || [])
+        .some((o) => offerNumberOut(o) && (!d.propertyAddress || !o?.address || sameHouse(o.address, d.propertyAddress)))
+      : true;
+    if (!ourNumberOut) {
+      await recordEvent({
+        store, locationId, contactId: d.contactId, party: "agent", type: "promise_made", at: ts,
+        address: d.propertyAddress || "", source: "conversation", ref: d.id,
+        dedupeKey: `promise_made:${d.id}`,
+        data: { what: "number", by: "their_ask", draftId: d.id, dueAt: new Date(Date.parse(ts) + PROMISE_DUE_HOURS * 3600000).toISOString(), text: body.slice(0, 200), asksThem: false },
+      }).catch(() => {});
+    } else if (what) {
       await recordEvent({
         store, locationId, contactId: d.contactId, party: "agent", type: "promise_made", at: ts,
         address: d.propertyAddress || d.outbound?.address || "", source: "conversation", ref: d.id,
