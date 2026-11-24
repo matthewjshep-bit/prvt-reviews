@@ -2178,8 +2178,8 @@ export function icebreakerHouse(events = []) {
 // The street a lot owner was written about: the newest lot-finder text or
 // import on their timeline (the owner has no offer row to read it from).
 export async function lotOwnerStreet(store, locationId, contactId) {
-  const evs = (await store.listContactEvents?.(locationId, contactId, { types: [LOT_OWNER_EVENTS.queued, "import"], limit: 50 }).catch(() => [])) || [];
-  const hit = evs.filter((e) => e && String(e.address || "").trim() && (e.type === LOT_OWNER_EVENTS.queued || e.source === "lot-finder"))
+  const evs = (await store.listContactEvents?.(locationId, contactId, { types: [LOT_OWNER_EVENTS.queued, LOT_OWNER_EVENTS.sent, "import"], limit: 50 }).catch(() => [])) || [];
+  const hit = evs.filter((e) => e && String(e.address || "").trim() && (e.type !== "import" || e.source === "lot-finder"))
     .sort((x, y) => String(y.at || "").localeCompare(String(x.at || "")))[0];
   return hit ? String(hit.address).trim() : "";
 }
