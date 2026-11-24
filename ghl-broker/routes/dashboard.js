@@ -28,6 +28,7 @@ import { latestRowFeedback, publicRowFeedback, ROW_FEEDBACK_EVENT, ROW_FEEDBACK_
 import { addDismissal, removeDismissal, applyDismissals, TODAY_DISMISS_CURSOR } from "../shared/today-dismiss.js";
 import { answerPartnerQuestion, forgetAnswer } from "../partner-answer.js";
 import express from "express";
+import { machineTrouble, KEY_HEALTH_CURSOR, MACHINE_TROUBLE_CURSOR } from "../shared/machine-health.js";
 import { store } from "../store.js";
 import {
   countContactsByTag, searchConversations, listConversationMessages, searchContactsCreatedSince,
@@ -1008,6 +1009,22 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
         return res.json({ ok: true, ...(await (what === "morning" ? postMorning : postEvening)({ store, locationId, saved, client, deps: { pipelineFor } })) });
       }
       res.status(400).json({ error: "what: events, reconcile, pings, morning or evening" });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Machine trouble (2026-11-23 audit, AH-1 and AH-6): the one red line on
+  // Offers and Deals. A paid key its provider rejects, Apify's month near
+  // its limit, and the business-stopping failures #machine last told Matt.
+  // Two small cursors and nothing else, so it stays light (the 11-09 crash
+  // came from heavy reads): words and counts, never a contact.
+  router.get("/machine", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const [keyHealth, stoppers] = await Promise.all([
+        store.getJobCursor?.(locationId, KEY_HEALTH_CURSOR).catch(() => null),
+        store.getJobCursor?.(locationId, MACHINE_TROUBLE_CURSOR).catch(() => null),
+      ]);
+      res.json({ ok: true, trouble: machineTrouble({ keyHealth, stoppers, now: Date.now() }) });
     } catch (err) { fail(res, err); }
   });
 

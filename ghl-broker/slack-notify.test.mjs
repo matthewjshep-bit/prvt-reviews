@@ -877,3 +877,22 @@ test("a switched-on revenue job that failed twice today @mentions Matt; a switch
   assert.equal(machinePosts(s).length, 2);
   assert.match(said(machinePosts(s)[1]), /<@U012MATT34> \*Follow-up sweep\* failed its last run \(try 2\)/);
 });
+
+// AH-1: a rejected paid key is an @Matt line the first day and every day it lasts.
+test("a rejected Apify key is told to Matt in #machine every day until it's fixed", async () => {
+  const LOC = "loc-key-line";
+  const s = slack();
+  const DAY = 86400000;
+  const since = new Date(TUE(7)).toISOString();
+  await store.setJobCursor(LOC, "keyHealth", { at: since, doc: { keys: { apify: { ok: false, status: 401, failingSince: since, checkedAt: since } } } });
+  await runSlackPings({ store, locationId: LOC, saved: ON, deps: noPipeline, now: TUE(7, 15) });
+  await runSlackPings({ store, locationId: LOC, saved: ON, deps: noPipeline, now: TUE(9) });
+  assert.equal(machinePosts(s).length, 1);
+  assert.match(said(machinePosts(s)[0]), /<@U012MATT34> Zillow comps key \(Apify\) rejected since today \(HTTP 401\)/);
+  await runSlackPings({ store, locationId: LOC, saved: ON, deps: noPipeline, now: TUE(7, 15) + DAY });
+  assert.equal(machinePosts(s).length, 2);
+  assert.match(said(machinePosts(s)[1]), /rejected since Tue/);
+  await store.setJobCursor(LOC, "keyHealth", { at: since, doc: { keys: { apify: { ok: true, checkedAt: since } } } });
+  await runSlackPings({ store, locationId: LOC, saved: ON, deps: noPipeline, now: TUE(7, 15) + 2 * DAY });
+  assert.equal(machinePosts(s).length, 2, "fixed: quiet");
+});

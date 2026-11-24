@@ -406,6 +406,8 @@ export const LINE_JOBS = {
   // both weekday mornings (lot-finder.js, gatekeeper-sweep.js).
   lotFinder: { label: "Lot finder", every: "workday" },
   gatekeepers: { label: "Gatekeeper line", every: "workday" },
+  // The paid keys' daily read (ghl-broker/key-health.js, AH-1).
+  keyHealth: { label: "Key check", every: "day" },
 };
 
 // How often a healthy job runs. Late is more than twice this, counted only

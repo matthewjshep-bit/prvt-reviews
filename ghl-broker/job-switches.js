@@ -26,6 +26,7 @@ import { normalizeBuyerPulse } from "./shared/buyer-pulse.js";
 import { normalizeLotFinder } from "./shared/lot-finder.js";
 import { normalizeGatekeepers } from "./shared/gatekeeper.js";
 import { normalizeOutreachAutopilot } from "./outreach-sweep.js";
+import { normalizeKeyHealth } from "./shared/machine-health.js";
 
 // The follow-up sweep's own test (follow-up-sweep.js maybeStartFollowUpSweep):
 // a key, the Conversation AI on, and a ladder or one of the two emails to run.
@@ -81,5 +82,7 @@ export function jobSwitches(saved = {}) {
     // lot-finder.js and gatekeeper-sweep.js.
     lotFinder: lots.enabled && lots.pockets.some((p) => p.enabled),
     gatekeepers: normalizeGatekeepers(saved?.outreachAutopilot?.gatekeepers).enabled,
+    // key-health.js: settings.keyHealth.enabled.
+    keyHealth: normalizeKeyHealth(saved?.keyHealth).enabled,
   };
 }

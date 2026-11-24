@@ -934,7 +934,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // chart saving one field would otherwise carry its copy of everything
   // else over a Setup form saved in between — or the form over the chart.
   // Arrays replace; objects merge. Only these sections, never conversationAi.
-  const PATCHABLE = ["outreachAutopilot", "dispoAutopilot", "lotFinder"];
+  // keyHealth (2026-11-23): { enabled } for the daily key check (key-health.js).
+  const PATCHABLE = ["outreachAutopilot", "dispoAutopilot", "lotFinder", "keyHealth"];
   const isPlain = (v) => v && typeof v === "object" && !Array.isArray(v);
   const mergeInto = (base, patch) => {
     const out = isPlain(base) ? { ...base } : {};

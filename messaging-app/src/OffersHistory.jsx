@@ -42,6 +42,7 @@ import EnrichModal from "./EnrichModal.jsx";
 import OfferPageModal from "./OfferPageModal.jsx";
 import OfferDetailModal from "./OfferDetailModal.jsx";
 import UnderwriteStrip from "./UnderwriteStrip.jsx";
+import MachineTrouble from "./MachineTrouble.jsx";
 import OfferRail from "./OfferRail.jsx";
 import OfferPane from "./OfferPane.jsx";
 import { railStep, readOfferParam, splitKey, writeOfferParam } from "./offers-split.js";
@@ -643,6 +644,7 @@ export default function OffersHistory({ onEdit, onNew = null, onDeal, settings: 
     const nextId = neighbor(1);
     return (
       <>
+        <MachineTrouble />
         <div className="mb-3 flex flex-wrap items-center gap-2">
           <button type="button" className={BTN} onClick={closeSplit} title="Back to the table (Esc)"><ChevronLeft size={13} aria-hidden="true" /> Table</button>
           {stageChips}
@@ -670,6 +672,8 @@ export default function OffersHistory({ onEdit, onNew = null, onDeal, settings: 
 
   return (
     <>
+      {/* A rejected key or a stopped revenue job (renders nothing when all is well). */}
+      <MachineTrouble />
       {/* Runs kicked off by a GHL workflow when an agent texts in. Renders
           nothing when none are live or waiting on a human. */}
       <UnderwriteStrip onReview={(offerId) => openEdit({ id: offerId })} />
