@@ -477,3 +477,9 @@ test("a buyer whose saved words say hold off or maxed out isn't sent the deal", 
   assert.equal(ranked.find((i) => i.contactId === "hold-off").rankParts.dealbreaker, "they're not buying right now");
   assert.deepEqual(pickDealBuyers(ranked).map((i) => i.contactId), ["buying"]);
 });
+
+test("a buyer who says hold off on condos or maxed out at a price is still buying", () => {
+  assert.equal(buyerDealbreakers("hold off on condos").notBuying, false);
+  assert.equal(buyerDealbreakers("maxed out at 600k").notBuying, false);
+  assert.equal(buyerDealbreakers("hold off for now").notBuying, true);
+});

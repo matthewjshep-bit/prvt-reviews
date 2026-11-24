@@ -2569,10 +2569,11 @@ export async function humanHasThread({ store, client = null, locationId, contact
  * first: not one of our sent drafts, not the offer documents' text, not a
  * GHL template. humanHasThread reads only the last line of ours; a buyer
  * thread reads them all (the 2026-11-23 buyer audit, dispo-11), so Matt's
- * text an hour ago still counts after a machine text since. GHL is not asked
- * who sent each one: holding is the careful default.
+ * text an hour ago still counts after a machine text since. With a client,
+ * GHL is asked who sent the newest three (a workflow or automation such as
+ * the missed-call text-back is not Matt); unreadable counts as his.
  */
-export async function handLines({ store, locationId, contactId, transcript, minutes = BUYER_HAND_LINK_MIN, now = Date.now() }) {
+export async function handLines({ store, client = null, locationId, contactId, transcript, minutes = BUYER_HAND_LINK_MIN, now = Date.now() }) {
   if (!minutes || !contactId) return [];
   const lines = [];
   for (const line of String(transcript || "").split("\n")) {
@@ -2587,11 +2588,16 @@ export async function handLines({ store, locationId, contactId, transcript, minu
   const norm = (t) => String(t || "").replace(/\s+/g, " ").trim().toLowerCase();
   const sent = (ours || []).map((d) => norm(d.sentText || d.reply)).filter(Boolean);
   const out = [];
+  let asked = 0;
   for (const l of recent) {
     const said = norm(l.text);
     if (l.channel !== "call") {
       if (sent.some((t) => t === said || said.startsWith(t))) continue;
       if (OUR_OFFER_TEXT_RX.test(l.text) || OUTREACH_OPEN_RX.test(l.text) || WORKFLOW_FOOTER_RX.test(l.text) || PACKAGE_INVITE_RX.test(l.text)) continue;
+      // A GHL workflow or automation (the missed-call text-back, a drip) is no
+      // person either: GHL says who sent it, as humanHasThread asks. Asked for
+      // the newest few only; unreadable still counts as Matt's.
+      if (client && asked < 3) { asked++; if (await sentByMachine({ client, locationId, contactId, last: l })) continue; }
     }
     out.push({ at: new Date(l.ts).toISOString(), minutesAgo: Math.max(0, Math.round((now - l.ts) / 60000)), text: l.text, channel: l.channel });
   }
@@ -2792,7 +2798,7 @@ export async function assembleConversation({
   // again (shared/buyer-reply.js). Only ever holds.
   let mattSentLink = null;
   if (!light && party === "investor" && contactId) {
-    const hand = await handLines({ store, locationId, contactId, transcript: real, minutes: BUYER_HAND_LINK_MIN, now });
+    const hand = await handLines({ store, client, locationId, contactId, transcript: real, minutes: BUYER_HAND_LINK_MIN, now });
     const link = hand.find((h) => h.channel !== "call" && handSentLink(h.text));
     if (link) mattSentLink = { at: link.at, minutesAgo: link.minutesAgo };
     const live = humanActive ? null : hand.find((h) => h.minutesAgo <= BUYER_HUMAN_ACTIVE_MIN);
@@ -6588,7 +6594,10 @@ async function runReply(job, ctx) {
       const onIt = (context?.deals?.linked || []).includes(deal);
       const action = { id: `a-pkg-${job.id}`, type: "send_dataroom_invite", status: "pending", party, addressHint: deal.address };
       plan.suggested = plan.suggested.filter((x) => x.type !== "suggest_dataroom_invite");
-      if (auto.send && onIt) plan.auto.push({ ...action, mode: "auto", why: `the reply offers the ${pkg} on ${where}: the link goes with it` });
+      // Unattended only under dispoAutopilot.autoInvite (the dial's Full); on
+      // Normal or Cautious the link waits for your Send, and so does the reply.
+      const autoInvite = saved?.dispoAutopilot?.autoInvite === true;
+      if (auto.send && onIt && autoInvite) plan.auto.push({ ...action, mode: "auto", why: `the reply offers the ${pkg} on ${where}: the link goes with it` });
       else plan.suggested.push({ ...action, mode: "ask", why: `the reply offers the ${pkg} on ${where} — send it with your reply` });
     }
   }
@@ -6597,6 +6606,14 @@ async function runReply(job, ctx) {
   if (party === "investor" && a.mattSentLink && plan.auto.some((x) => x.type === "send_dataroom_invite")) {
     plan.auto = plan.auto.filter((x) => x.type !== "send_dataroom_invite");
     warnings.push(`no package link: you sent them photos or a link ${a.mattSentLink.minutesAgo} minutes ago`);
+  }
+  // A reply that says the package is here never goes without it (dispo-6,
+  // 2026-11-23 review): when no link rides along by itself — it waits for
+  // your Send, or was skipped (a link already today, a stranger, Matt's own
+  // link) — the reply waits too.
+  if (party === "investor" && !isCall && auto.send && offersPackage(draft.reply)
+      && !plan.auto.some((x) => x.type === "send_dataroom_invite")) {
+    auto = { send: false, code: "switch_off", reason: "needs a person: the reply offers the package and the link waits for your Send" };
   }
   if (a.stampTag) {
     plan.auto.unshift({ id: `a-route-${job.id}`, type: "add_tags", tags: [a.stampTag], mode: "auto", status: "pending", party, why: "routed by the message" });

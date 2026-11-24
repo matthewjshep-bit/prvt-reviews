@@ -10145,10 +10145,14 @@ The last two aren't rewritten (`SITUATION_FLAG_RX`): no rewrite fixes what
 isn't on file, so no second model call is paid for.
 
 **The link goes with the reply.** A reply that offers the package on a deal
-that has a room gets `send_dataroom_invite` beside it: by itself when the
-reply sends itself and they're already on the deal, otherwise as an ask for
-your Send. Never when Matt sent photos or a link in the last two hours, and
-never a second link on the deal inside a day.
+that has a room gets `send_dataroom_invite` beside it: by itself only when
+the reply sends itself, they're already on the deal, and
+`dispoAutopilot.autoInvite` is on (the dial's Full); otherwise as an ask for
+your Send, and then the reply waits with it ("the reply offers the package
+and the link waits for your Send"), so no text says "here's the package"
+without the package. Never when Matt sent photos or a link in the last two
+hours, and never a second link on the deal inside a day (read off the newest
+invite on the room).
 
 **What the bot is shown.** Each deal line now carries its size ("size: 3bd
 2ba 1,440 sqft, built 1952, 5,000 sqft lot") from the underwrite's subject
@@ -10187,7 +10191,10 @@ Jo (Rory's partner)" with the address. The bot never creates the contact or
 texts them, and a reply that promises to is held. Their address is never
 saved as the buyer's own (`emailOwner` reads it as someone else's).
 
-No switch: all of it only holds, pings, or attaches a link the reply already offered.
+No new switch: all of it only holds or pings, and the one link that can go by
+itself rides the existing `dispoAutopilot.autoInvite` (off unless the dial is
+on Full). The stand-aside asks GHL who sent the newest lines, so a workflow or
+the missed-call text-back is not taken for Matt.
 
 ### Rural: two acres or more (2026-10-08)
 

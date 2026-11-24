@@ -729,7 +729,14 @@ export function buildInvestorContext({ investor = {}, deals = [], invites = [], 
   const buybox = facts && !factsEmpty(facts) ? normalizeBuybox(custom) : (investor.buybox || normalizeBuybox(custom));
   const profile = buildBuyboxProfile({ ...investor, buybox }, { maxChars: 900 });
   const inviteByRoom = new Map();
-  for (const i of invites) if (i?.dataroomId) inviteByRoom.set(i.dataroomId, i);
+  // The newest invite per room: every link sent is its own row, and the
+  // "no second link inside a day" rule reads this one's sentAt.
+  const inviteAt = (i) => Date.parse(i?.sentAt || i?.createdAt || "") || 0;
+  for (const i of invites) {
+    if (!i?.dataroomId) continue;
+    const had = inviteByRoom.get(i.dataroomId);
+    if (!had || inviteAt(i) > inviteAt(had)) inviteByRoom.set(i.dataroomId, i);
+  }
 
   const amounts = new Set();
   const forbidden = new Set();

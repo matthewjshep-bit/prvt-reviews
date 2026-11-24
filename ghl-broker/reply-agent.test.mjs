@@ -9798,11 +9798,13 @@ const BUYER_SAVED = { ...SAVED, conversationAi: { enabled: true, parties: { inve
 
 // "Pulling the package together now" went 23 hours before the link did, on a
 // deal that had a package the whole time.
+// Unattended package links are the dial's Full (dispoAutopilot.autoInvite).
+const BUYER_SAVED_FULL = { ...BUYER_SAVED, dispoAutopilot: { autoInvite: true } };
 test("a buyer reply that offers the package on a deal that has one sends the link with it", async () => {
   _resetJobs();
   const store = buyerStore();
   const invites = [];
-  const { job } = await startReply({ client: buyerClient(), locationId: "LOC", saved: BUYER_SAVED, store, contactId: "c1", message: "got photos on 54th?", channel: "sms", sendsEnabled: true,
+  const { job } = await startReply({ client: buyerClient(), locationId: "LOC", saved: BUYER_SAVED_FULL, store, contactId: "c1", message: "got photos on 54th?", channel: "sms", sendsEnabled: true,
     deps: {
       draft: async () => ({ ...DRAFT, intent: "interested", confidence: "high", reply: "Here are the photos on 54th.", propertyAddress: "2010 NE 54th St", counterAmount: 0 }),
       dataroomInviteGuard: async () => ({ ok: false, reason: "" }),
@@ -9815,6 +9817,67 @@ test("a buyer reply that offers the package on a deal that has one sends the lin
   assert.ok(act, `the link was planned: ${(d.actions || []).map((a) => a.type)} · ${d.flags.join(" · ")}`);
   assert.equal(act.mode, "auto");
   assert.equal(invites[0]?.addressHint, BUYER_DEAL.address);
+});
+
+// What went wrong (2026-11-23 review of the buyer branch): the link went by
+// itself with the dial on Normal, and a "here are the photos" reply could go
+// with the link left waiting for a click.
+test("with package links not set to go by themselves, a reply that says here's the package waits with its link", async () => {
+  _resetJobs();
+  const store = buyerStore();
+  const invites = [];
+  const { job } = await startReply({ client: buyerClient(), locationId: "LOC", saved: BUYER_SAVED, store, contactId: "c1", message: "got photos on 54th?", channel: "sms", sendsEnabled: true,
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "interested", confidence: "high", reply: "Here are the photos on 54th.", propertyAddress: "2010 NE 54th St", counterAmount: 0 }),
+      dataroomInviteGuard: async () => ({ ok: false, reason: "" }),
+      issueDataroomInvite: async (a) => { invites.push(a); return { sent: true }; },
+    } });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(invites.length, 0, "no link went by itself");
+  assert.equal(d.autoSend.decided, false);
+  assert.match(d.autoSend.reason, /offers the package and the link waits for your Send/);
+  assert.notEqual(d.status, "scheduled");
+  assert.ok((d.actions || []).some((a) => a.type === "send_dataroom_invite" && a.mode === "ask"), "the link is one click away");
+});
+
+test("a reply that says here's the package to a buyer not on that deal yet waits for Matt", async () => {
+  _resetJobs();
+  const store = buyerStore();
+  store.listDeals = async () => [{ ...BUYER_DEAL, deal: { ...BUYER_DEAL.deal, investors: [] } }];
+  const invites = [];
+  const { job } = await startReply({ client: buyerClient(), locationId: "LOC", saved: BUYER_SAVED_FULL, store, contactId: "c1", message: "got photos on 54th?", channel: "sms", sendsEnabled: true,
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "interested", confidence: "high", reply: "Here are the photos on 54th.", propertyAddress: "2010 NE 54th St", counterAmount: 0 }),
+      dataroomInviteGuard: async () => ({ ok: false, reason: "" }),
+      issueDataroomInvite: async (a) => { invites.push(a); return { sent: true }; },
+    } });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(invites.length, 0);
+  assert.equal(d.autoSend.decided, false, `held: ${d.autoSend.reason}`);
+  assert.notEqual(d.status, "scheduled");
+});
+
+test("a buyer sent a link an hour ago gets no second one, even with an older link on the same room", async () => {
+  _resetJobs();
+  const store = buyerStore();
+  const hourAgo = new Date(Date.now() - 3600000).toISOString();
+  const tenDays = new Date(Date.now() - 10 * 86400000).toISOString();
+  // Newest first, the way both store backends list them.
+  store.listDataroomInvitesByContact = async () => [
+    { id: "i2", dataroomId: "r1", contactId: "c1", sentAt: hourAgo, createdAt: hourAgo },
+    { id: "i1", dataroomId: "r1", contactId: "c1", sentAt: tenDays, createdAt: tenDays },
+  ];
+  const invites = [];
+  const { job } = await startReply({ client: buyerClient(), locationId: "LOC", saved: BUYER_SAVED_FULL, store, contactId: "c1", message: "photos on 54th again?", channel: "sms", sendsEnabled: true,
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "interested", confidence: "high", reply: "Here are the photos on 54th again.", propertyAddress: "2010 NE 54th St", counterAmount: 0 }),
+      dataroomInviteGuard: async () => ({ ok: false, reason: "" }),
+      issueDataroomInvite: async (a) => { invites.push(a); return { sent: true }; },
+    } });
+  await settle();
+  assert.equal(invites.length, 0, "the link from an hour ago counts, not the one from ten days ago");
 });
 
 test("a buyer reply that promises photos on a deal with no package built waits for Matt", async () => {
